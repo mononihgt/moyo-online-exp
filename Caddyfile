@@ -1,0 +1,36 @@
+# APP_DOMAIN 与 JATOS_DOMAIN 由 Compose 注入，只写主机名。
+# Caddy 自动申请和续期证书，并把 HTTP 重定向到 HTTPS。
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	request_body {
+		max_size 25MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# 普通 HTTP 请求、WebSocket 升级和静态文件都走这里。
+	reverse_proxy app:8000 {
+		# 覆盖客户端自带的 X-Forwarded-For，限流才能拿到真实来源地址。
+		header_up X-Forwarded-For {remote_host}
+	}
+}
+
+{$JATOS_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# JATOS 管理端、问卷页面和结果下载。Caddy 默认转发 WebSocket 升级。
+	reverse_proxy jatos:9000
+}

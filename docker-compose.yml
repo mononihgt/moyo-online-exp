@@ -1,0 +1,165 @@
+name: moyo
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+      jatos:
+        condition: service_started
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required}
+      JATOS_DOMAIN: ${JATOS_DOMAIN:?JATOS_DOMAIN is required}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *default-logging
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_PLATFORM_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+    image: moyo-app:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      PHONE_HMAC_KEY: ${PHONE_HMAC_KEY:?PHONE_HMAC_KEY is required}
+      PHONE_ENCRYPTION_KEY: ${PHONE_ENCRYPTION_KEY:?PHONE_ENCRYPTION_KEY is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:?ADMIN_INITIAL_PASSWORD is required}
+      JATOS_BASE_URL: ${JATOS_BASE_URL:?JATOS_BASE_URL is required}
+      JATOS_STUDY_CODE: ${JATOS_STUDY_CODE:-}
+      JATOS_API_TOKEN: ${JATOS_API_TOKEN:-}
+      MEDIA_DIR: /app/data/media
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TIMEZONE: ${TZ:-Asia/Shanghai}
+      TRUST_PROXY_HEADERS: "true"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - app_data:/app/data
+    logging: *default-logging
+
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MARIADB_ROOT_HOST: "%"
+      MARIADB_DATABASE: moyo
+      MARIADB_USER: moyo
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      JATOS_DB_PASSWORD: ${JATOS_DB_PASSWORD:?JATOS_DB_PASSWORD is required}
+      TZ: ${TZ:-Asia/Shanghai}
+    # 官方镜像只创建一个 database 和一个用户。这里在启动前写入 init 脚本，
+    # 通过 --init-file 在每次启动时确保 jatos 库和用户存在，已有数据卷也会执行。
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        init_file=/docker-entrypoint-initdb.d/10-jatos.sql
+        cat > "$$init_file" <<SQL
+        CREATE DATABASE IF NOT EXISTS jatos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        CREATE USER IF NOT EXISTS 'jatos'@'%' IDENTIFIED BY '$${JATOS_DB_PASSWORD}';
+        ALTER USER 'jatos'@'%' IDENTIFIED BY '$${JATOS_DB_PASSWORD}';
+        GRANT ALL PRIVILEGES ON jatos.* TO 'jatos'@'%';
+        FLUSH PRIVILEGES;
+        SQL
+        chmod 644 "$$init_file"
+        exec docker-entrypoint.sh mariadbd \
+          --init-file="$$init_file" \
+          --character-set-server=utf8mb4 \
+          --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MARIADB_ROOT_PASSWORD}\" mariadb-admin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging: *default-logging
+
+  jatos:
+    image: jatos/jatos:3.11.3
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      JATOS_DB_URL: "jdbc:mysql://db:3306/jatos?characterEncoding=UTF-8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=UTC"
+      JATOS_DB_USERNAME: jatos
+      JATOS_DB_PASSWORD: ${JATOS_DB_PASSWORD:?JATOS_DB_PASSWORD is required}
+      JATOS_DB_DRIVER: com.mysql.cj.jdbc.Driver
+      JATOS_SECRET: ${JATOS_SECRET:?JATOS_SECRET is required}
+      TZ: ${TZ:-Asia/Shanghai}
+    # 日志写入容器标准输出，使用 docker compose logs jatos 查看。
+    command:
+      - "-Djatos.logs.appender=ASYNCSTDOUT"
+    volumes:
+      - jatos_data:/opt/jatos_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *default-logging
+
+  backup:
+    image: mariadb:10.11
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/opt/backup/backup.sh"]
+    command: ["daemon"]
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_ROOT_USER: root
+      DB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      DB_NAMES: "moyo jatos"
+      BACKUP_ROOT: /backups
+      MEDIA_DIR: /srv/app_data
+      JATOS_DATA_DIR: /srv/jatos_data
+      DAILY_RETENTION_DAYS: "7"
+      WEEKLY_RETENTION_DAYS: "28"
+      BACKUP_HOUR: "02"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./scripts/backup.sh:/opt/backup/backup.sh:ro
+      - app_data:/srv/app_data:ro
+      - jatos_data:/srv/jatos_data:ro
+      - backup_data:/backups
+    logging: *default-logging
+
+volumes:
+  db_data:
+  app_data:
+  jatos_data:
+  caddy_data:
+  caddy_config:
+  backup_data:

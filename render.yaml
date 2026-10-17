@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: canvas-duel-game
-    runtime: docker
-    plan: free
-    healthCheckPath: /healthz
-    envVars:
-      - key: ALLOWED_HOSTS
-        value: "*"
