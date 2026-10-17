@@ -1,0 +1,249 @@
+.q-form {
+  margin: 0;
+}
+
+.q-progress > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.q-save-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 28px;
+  padding: 4px 0 8px;
+  background: #ffffff;
+  font-size: 0.875rem;
+  color: var(--participant-muted);
+}
+
+.q-save-state {
+  line-height: 1.5;
+}
+
+.q-save-state-error {
+  color: var(--participant-error);
+}
+
+.q-note {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--participant-border);
+  border-radius: var(--radius-participant-sm);
+  background: var(--participant-surface-strong);
+  color: var(--participant-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.q-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.q-group > .q-question-label {
+  padding: 0;
+}
+
+.q-option {
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.q-option:hover {
+  border-color: rgba(0, 122, 255, 0.6);
+}
+
+.q-option:focus-within {
+  border-color: var(--participant-primary);
+}
+
+.q-option input {
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--participant-primary);
+}
+
+.q-option span {
+  line-height: 1.5;
+}
+
+.q-option-disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.q-likert-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  background: #ffffff;
+  color: var(--participant-text);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.q-likert-option:hover:not(:disabled) {
+  border-color: var(--participant-primary);
+}
+
+.q-likert-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.q-likert-labels {
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.q-text,
+.q-number {
+  display: block;
+  background: var(--participant-surface);
+  color: var(--participant-text);
+}
+
+.q-number {
+  width: 100%;
+  max-width: 220px;
+}
+
+.q-text:focus-visible,
+.q-number:focus-visible {
+  outline: none;
+  border-color: var(--participant-primary);
+  box-shadow: 0 0 0 1px var(--participant-primary);
+}
+
+.q-text[aria-invalid="true"],
+.q-number[aria-invalid="true"] {
+  border-color: var(--participant-error);
+}
+
+.q-text[aria-invalid="true"]:focus-visible,
+.q-number[aria-invalid="true"]:focus-visible {
+  border-color: var(--participant-error);
+  box-shadow: 0 0 0 1px var(--participant-error);
+}
+
+.q-text:disabled,
+.q-number:disabled {
+  background: var(--participant-surface-strong);
+  color: var(--participant-muted);
+  cursor: not-allowed;
+}
+
+.q-card.q-card-error {
+  border-color: var(--participant-error);
+}
+
+.q-question-error {
+  margin: 10px 0 0;
+  color: var(--participant-error);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.q-error-panel {
+  max-width: 560px;
+  margin: 24px auto 0;
+}
+
+.q-error-message {
+  margin: 0;
+  font-weight: 600;
+}
+
+.q-error-detail {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.q-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.q-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: var(--radius-participant-md);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.q-btn:disabled {
+  background: var(--participant-disabled);
+  color: var(--participant-disabled-text);
+  cursor: not-allowed;
+}
+
+.q-btn-primary {
+  background: var(--participant-primary);
+  color: var(--participant-on-primary);
+}
+
+.q-btn-secondary {
+  background: var(--participant-surface);
+  border: 1px solid var(--participant-border);
+  color: var(--participant-primary);
+}
+
+.q-btn-secondary:disabled {
+  border-color: transparent;
+}
+
+.q-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.q-done .q-btn {
+  margin-top: 8px;
+}
+
+.q-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 560px) {
+  .q-page {
+    padding-top: 24px;
+  }
+
+  .q-error-panel {
+    margin-top: 8px;
+  }
+
+  .q-submit-row .q-btn {
+    width: 100%;
+  }
+}

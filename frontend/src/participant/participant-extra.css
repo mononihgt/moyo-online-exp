@@ -1,0 +1,515 @@
+.p-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  color: var(--participant-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.p-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.p-topbar-logout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--participant-muted);
+  font-size: 0.875rem;
+}
+
+.p-muted-icon {
+  color: var(--participant-muted);
+}
+
+.p-login-help {
+  margin: 16px 0 0;
+  text-align: center;
+}
+
+.p-span-loading {
+  min-width: 240px;
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--participant-muted);
+}
+
+.p-load-card {
+  width: min(520px, 100%);
+}
+
+.p-consent-header {
+  margin-bottom: 24px;
+}
+
+.p-consent-header .p-title {
+  margin-bottom: 8px;
+}
+
+.p-consent-actions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.p-consent-note {
+  margin-top: 16px;
+}
+
+.p-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.p-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+}
+
+.p-detail-row dt {
+  color: var(--participant-muted);
+}
+
+.p-detail-row dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.p-current-booking .p-section-title {
+  margin-bottom: 0;
+}
+
+.p-current-booking-note {
+  margin: 12px 0 0;
+}
+
+.p-account-status .p-footer-links {
+  margin-top: 16px;
+}
+
+.p-room-option-selected {
+  border-color: var(--participant-primary);
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.22);
+}
+
+.p-booking-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--participant-border);
+  border-radius: var(--radius-participant-md);
+  background: var(--participant-surface-strong);
+}
+
+.p-booking-confirm p {
+  margin: 4px 0;
+}
+
+.p-subpage-header {
+  margin-bottom: 24px;
+}
+
+.p-subpage-header .p-title {
+  margin: 12px 0 8px;
+}
+
+.p-subpage-header .p-subtitle {
+  margin-bottom: 0;
+}
+
+.exp-root-waiting {
+  background: var(--participant-bg);
+  overflow-y: auto;
+}
+
+.exp-root-waiting.exp-waiting-active,
+.exp-root-waiting:fullscreen {
+  background: #ffffff;
+}
+
+.exp-waiting-stage {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 100dvh;
+  padding: 40px 24px 120px;
+}
+
+.exp-waiting-card {
+  width: min(560px, 100%);
+  padding: 32px;
+  text-align: center;
+  background: #ffffff;
+  border-radius: var(--radius-participant-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+
+.exp-waiting-active .exp-waiting-card,
+.exp-root-waiting:fullscreen .exp-waiting-card {
+  box-shadow: none;
+}
+
+.exp-waiting-card .exp-rest-title {
+  margin-bottom: 8px;
+}
+
+.exp-waiting-count {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.exp-waiting-actions {
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.exp-exit-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  width: min(640px, calc(100% - 32px));
+}
+
+.exp-exit-button {
+  min-height: 44px;
+  padding: 10px 20px;
+  background: var(--participant-disabled);
+  color: #3a3a3c;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.exp-exit-button:hover {
+  background: #dcdce1;
+}
+
+.exp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.exp-modal {
+  width: min(480px, 100%);
+  padding: 24px;
+  background: #ffffff;
+  border-radius: var(--radius-participant-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+}
+
+.exp-modal-actions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.exp-countdown-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.exp-countdown-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--participant-muted);
+}
+
+.exp-hud-result-tag {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--participant-warning);
+}
+
+.exp-hud-role {
+  font-weight: 600;
+}
+
+.exp-hud-partner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.exp-connection-banner {
+  flex: 0 0 auto;
+  z-index: 3;
+  padding: 10px 24px;
+  border-bottom: 1px solid #e5e5ea;
+  background: #fff4e0;
+  color: #6b3f00;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.exp-small-screen.exp-viewport-hint {
+  margin: 8px 24px 0;
+  text-align: center;
+}
+
+.exp-actions-column {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exp-actions-column .exp-hint {
+  margin: 0;
+  text-align: center;
+}
+
+.exp-result-line {
+  margin: 0;
+  color: var(--participant-warning);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.exp-board-stage {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.exp-board-stage .exp-canvas {
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.exp-board-stage .exp-canvas-disabled {
+  cursor: default;
+}
+
+.exp-war-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  pointer-events: none;
+}
+
+.exp-war-cell {
+  border: 2px solid #ff9f0a;
+  animation: exp-war-flash 1s ease-out 1;
+}
+
+@keyframes exp-war-flash {
+  0% {
+    background: rgba(255, 159, 10, 0.55);
+  }
+  100% {
+    background: rgba(255, 159, 10, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .exp-war-cell {
+    animation: none;
+  }
+}
+
+.exp-root.exp-locked {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.exp-role-line {
+  margin-top: 8px;
+}
+
+.exp-reading-paused {
+  margin-top: 4px;
+  color: var(--participant-warning);
+}
+
+.exp-rest-ready {
+  min-width: 240px;
+  margin-top: 8px;
+}
+
+.exp-rest .p-wait-status {
+  margin: 8px 0;
+}
+
+.exp-end-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(560px, 100%);
+  padding: 32px;
+  background: #ffffff;
+  border-radius: var(--radius-participant-lg);
+  text-align: center;
+}
+
+.exp-root-end {
+  overflow-y: auto;
+}
+
+.exp-end-actions {
+  justify-content: center;
+}
+
+.exp-end-card .p-banner {
+  width: 100%;
+  text-align: left;
+}
+
+.exp-end-links {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 0.875rem;
+}
+
+.exp-end-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.exp-notice-stack {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, calc(100% - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.exp-notice-stack .exp-notice {
+  position: static;
+  top: auto;
+  left: auto;
+  transform: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  pointer-events: auto;
+}
+
+.exp-notice-error {
+  border-color: rgba(255, 59, 48, 0.5);
+  background: #ffeceb;
+  color: #8a1c14;
+}
+
+.history-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.history-item-time {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.history-item .p-muted {
+  margin: 0;
+}
+
+.history-details {
+  margin: 12px 0 0;
+}
+
+.history-actions {
+  margin-top: 12px;
+}
+
+.contact-value {
+  margin: 8px 0 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.contact-topics {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+
+@media (max-width: 720px) {
+  .exp-root .exp-hud {
+    grid-template-columns: 1fr auto;
+    row-gap: 4px;
+    padding: 8px 12px;
+  }
+
+  .exp-root .exp-hud-right {
+    display: flex;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    gap: 16px;
+    width: 100%;
+    padding-top: 4px;
+    border-top: 1px solid #e5e5ea;
+    text-align: left;
+  }
+
+  .exp-root .exp-hud-left {
+    font-size: 0.8125rem;
+  }
+
+  .exp-root .exp-countdown {
+    font-size: 1.25rem;
+  }
+
+  .exp-root .exp-progress {
+    width: 56px;
+  }
+
+  .exp-waiting-stage {
+    padding: 24px 16px 112px;
+  }
+
+  .exp-waiting-card {
+    padding: 24px 18px;
+  }
+
+  .exp-exit-bar {
+    bottom: 12px;
+  }
+}
