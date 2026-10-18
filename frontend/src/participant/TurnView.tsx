@@ -7,7 +7,6 @@ import type {
   TurnMessage,
   TurnResultMessage,
 } from "../shared/types";
-import { ROLE_LABELS } from "./apiTypes";
 import { ExitControl } from "./ExitControl";
 import { TURN_SELF_DISCONNECTED } from "./flowCopy";
 import { GameBoard } from "./GameBoard";
@@ -65,10 +64,10 @@ export function TurnView({
   }, [roundKey]);
 
   useEffect(() => {
-    if (result !== null || submitted) {
+    if (result !== null) {
       setSelected([]);
     }
-  }, [result, submitted]);
+  }, [result]);
 
   const board: BoardState | null = result?.board ?? turn?.board ?? game.board;
   const warCells = result?.warLocation ?? [];
@@ -86,15 +85,7 @@ export function TurnView({
   const progress = Math.max(0, Math.min(100, (remaining / turnSeconds) * 100));
   const countdownTone =
     remaining <= 5 ? "danger" : remaining <= 10 ? "warning" : "normal";
-  const reconnectRemaining = secondsLeft(partner.disconnectedUntil, now, serverOffsetMs);
-  const partnerSubmitted = game.partnerSubmitted || partner.submitted === true;
-  const partnerText = !partner.online
-    ? reconnectRemaining !== null && reconnectRemaining > 0
-      ? `另一名参与者离线，重连剩余 ${formatClock(reconnectRemaining)}`
-      : "另一名参与者离线"
-    : partnerSubmitted
-      ? "另一名参与者已提交"
-      : "另一名参与者在线";
+  const partnerText = partner.online ? "另一名玩家在线" : "另一名玩家离线";
 
   const toggleCell = (index: number) => {
     if (result !== null || submitted || !socketActive || exitPending) return;
@@ -172,15 +163,11 @@ export function TurnView({
           </span>
         </div>
         <div className="exp-hud-right">
-          <span className="exp-hud-role">你是{ROLE_LABELS[role]}</span>
+          <span className="exp-hud-role">你是玩家 {role === 1 ? "○" : "◇"}</span>
           <span className="exp-hud-partner" data-testid="hud-partner">
             <span
               className={
-                !partner.online
-                  ? "exp-partner-dot offline"
-                  : partnerSubmitted
-                    ? "exp-partner-dot"
-                    : "exp-partner-dot pending"
+                partner.online ? "exp-partner-dot" : "exp-partner-dot offline"
               }
               aria-hidden="true"
             />
@@ -217,17 +204,6 @@ export function TurnView({
             }}
           />
           <div className="exp-actions exp-actions-column">
-            {result !== null ? (
-              <p className="exp-result-line" role="status">
-                本回合交火 {result.warLocation.length} 格
-                {result.autoSelected[role === 1 ? "player1" : "player2"]
-                  ? " · 你未在时限内提交，系统已自动选择一个格子"
-                  : ""}
-                {result.trialEnded
-                  ? " · 本对局已结束"
-                  : " · 即将进入下一回合"}
-              </p>
-            ) : null}
             <button
               type="button"
               className="exp-confirm"

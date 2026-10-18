@@ -32,7 +32,7 @@ const EMPTY_PARTNER: PartnerState = {
   disconnectedUntil: null,
 };
 
-const RESULT_DISPLAY_MS = 1200;
+const RESULT_DISPLAY_MS = 1000;
 const FULLSCREEN_NOTICE = "浏览器未进入全屏，实验将继续";
 const FULLSCREEN_EXIT_NOTICE = "已退出全屏，实验继续";
 

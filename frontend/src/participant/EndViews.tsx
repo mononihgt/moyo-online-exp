@@ -47,7 +47,7 @@ export function QuestionnaireView({
         {submitted ? (
           <>
             <p className="exp-rest-info">{QUESTIONNAIRE_SUBMITTED}</p>
-            <div className="p-btn-row exp-end-actions">
+            <div className="p-btn-row exp-end-actions exp-end-actions-stacked">
               <Link
                 className="p-btn p-btn-primary"
                 data-testid="reward-info"
@@ -56,13 +56,15 @@ export function QuestionnaireView({
                 <ClipboardCheck size={18} aria-hidden="true" />
                 {VIEW_REWARD_INFO}
               </Link>
-              <Link className="p-btn p-btn-secondary" to="/history">
-                历史实验
-              </Link>
-              <Link className="p-btn p-btn-secondary" to="/">
-                <Home size={18} aria-hidden="true" />
-                返回首页
-              </Link>
+              <div className="exp-end-actions-secondary">
+                <Link className="p-btn p-btn-secondary" to="/history">
+                  历史实验
+                </Link>
+                <Link className="p-btn p-btn-secondary" to="/">
+                  <Home size={18} aria-hidden="true" />
+                  返回首页
+                </Link>
+              </div>
             </div>
           </>
         ) : (

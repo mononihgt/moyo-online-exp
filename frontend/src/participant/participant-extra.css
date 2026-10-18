@@ -291,13 +291,6 @@
   text-align: center;
 }
 
-.exp-result-line {
-  margin: 0;
-  color: var(--participant-warning);
-  font-size: 0.9375rem;
-  font-weight: 600;
-}
-
 .exp-board-stage {
   position: relative;
   flex: 0 0 auto;
@@ -321,16 +314,17 @@
 }
 
 .exp-war-cell {
-  border: 2px solid #ff9f0a;
-  animation: exp-war-flash 1s ease-out 1;
+  border: 2px solid var(--participant-error);
+  animation: exp-war-flash 1s linear 1 both;
 }
 
 @keyframes exp-war-flash {
-  0% {
-    background: rgba(255, 159, 10, 0.55);
+  0%,
+  60% {
+    opacity: 1;
   }
   100% {
-    background: rgba(255, 159, 10, 0);
+    opacity: 0;
   }
 }
 
@@ -381,6 +375,19 @@
 
 .exp-end-actions {
   justify-content: center;
+}
+
+.exp-end-actions-stacked {
+  flex-direction: column;
+  align-items: center;
+}
+
+.exp-end-actions-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .exp-end-card .p-banner {

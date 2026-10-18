@@ -11,6 +11,9 @@ interface CachedImage {
 
 const imageCache = new Map<string, CachedImage>();
 
+const NUMBER_FONT =
+  '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
 function hexBrightness(color: string): number | null {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
   if (match === null) return null;
@@ -69,6 +72,7 @@ export function GameBoard({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [imageVersion, setImageVersion] = useState(0);
+  const [hovered, setHovered] = useState<number | null>(null);
 
   const { rows, cols } = board;
 
@@ -124,14 +128,12 @@ export function GameBoard({
     if (context === null) return;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, size.width, size.height);
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, size.width, size.height);
 
     const cellWidth = size.width / cols;
     const cellHeight = size.height / rows;
     const selectedSet = new Set(selected);
-    const warSet = new Set(warCells);
 
+    // 每个格子单独铺白底，再把条件背景绘制在自己的格内
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
         const index = row * cols + col;
@@ -139,6 +141,9 @@ export function GameBoard({
         const x = col * cellWidth;
         const y = row * cellHeight;
         let dark = false;
+
+        context.fillStyle = "#ffffff";
+        context.fillRect(x, y, cellWidth, cellHeight);
 
         if (visual.backgroundAssetId) {
           const entry = loadImage(visual.backgroundAssetId);
@@ -177,62 +182,86 @@ export function GameBoard({
 
         const owner = board.owners[index] ?? 0;
         const soldiers = board.soldiers[index] ?? 0;
+        if (owner === 0) continue;
+
         const ink = dark ? "#ffffff" : "#1C1C1E";
-        const stroke = dark ? "rgba(255,255,255,0.7)" : "rgba(28,28,30,0.55)";
         const centerX = x + cellWidth / 2;
-        const centerY = y + cellHeight * 0.36;
-        const markerSize = Math.min(cellWidth, cellHeight) * 0.17;
+        const centerY = y + cellHeight / 2;
+        const radius = Math.min(cellWidth, cellHeight) * 0.31;
 
+        context.beginPath();
         if (owner === 1) {
-          context.beginPath();
-          context.arc(centerX, centerY, markerSize, 0, Math.PI * 2);
-          context.fillStyle = ink;
-          context.fill();
-          context.lineWidth = 1;
-          context.strokeStyle = stroke;
-          context.stroke();
-        } else if (owner === 2) {
-          context.beginPath();
-          context.moveTo(centerX, centerY - markerSize);
-          context.lineTo(centerX + markerSize, centerY);
-          context.lineTo(centerX, centerY + markerSize);
-          context.lineTo(centerX - markerSize, centerY);
+          context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        } else {
+          context.moveTo(centerX, centerY - radius);
+          context.lineTo(centerX + radius, centerY);
+          context.lineTo(centerX, centerY + radius);
+          context.lineTo(centerX - radius, centerY);
           context.closePath();
-          context.fillStyle = ink;
-          context.fill();
-          context.lineWidth = 1;
-          context.strokeStyle = stroke;
-          context.stroke();
         }
+        context.lineWidth = 1.5;
+        context.strokeStyle = ink;
+        context.lineJoin = "round";
+        context.stroke();
 
-        if (owner !== 0) {
-          const fontSize = Math.max(11, Math.min(cellWidth, cellHeight) * 0.26);
-          context.fillStyle = ink;
-          context.font = `600 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-          context.textAlign = "center";
-          context.textBaseline = "middle";
-          context.fillText(String(soldiers), centerX, y + cellHeight * 0.73);
-        }
-
-        if (warSet.has(index)) {
-          context.lineWidth = 2;
-          context.strokeStyle = "#FF9F0A";
-          context.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
-        }
-        if (selectedSet.has(index)) {
-          context.fillStyle = "rgba(52, 199, 89, 0.16)";
-          context.fillRect(x, y, cellWidth, cellHeight);
-          context.lineWidth = 2;
-          context.strokeStyle = "#34C759";
-          context.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
-        }
-
-        context.lineWidth = 1;
-        context.strokeStyle = "#E5E5EA";
-        context.strokeRect(x + 0.5, y + 0.5, cellWidth - 1, cellHeight - 1);
+        const fontSize = Math.max(10, Math.min(cellWidth, cellHeight) * 0.19);
+        context.fillStyle = ink;
+        context.font = `600 ${fontSize}px ${NUMBER_FONT}`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(String(soldiers), centerX, centerY);
       }
     }
-  }, [board, cols, loadImage, rows, selected, size.height, size.width, visuals, warCells, imageVersion]);
+
+    context.lineWidth = 1;
+    context.strokeStyle = "#B8B8B8";
+    context.beginPath();
+    for (let col = 0; col <= cols; col += 1) {
+      const lineX = Math.round((size.width * col) / cols) + 0.5;
+      context.moveTo(lineX, 0);
+      context.lineTo(lineX, size.height);
+    }
+    for (let row = 0; row <= rows; row += 1) {
+      const lineY = Math.round((size.height * row) / rows) + 0.5;
+      context.moveTo(0, lineY);
+      context.lineTo(size.width, lineY);
+    }
+    context.stroke();
+
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const index = row * cols + col;
+        const x = col * cellWidth;
+        const y = row * cellHeight;
+
+        if (selectedSet.has(index)) {
+          context.lineWidth = 2;
+          context.strokeStyle = "#505050";
+          context.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+        } else if (!disabled && hovered === index) {
+          context.lineWidth = 1;
+          context.strokeStyle = "#AEAEB2";
+          context.strokeRect(x + 0.5, y + 0.5, cellWidth - 1, cellHeight - 1);
+        }
+      }
+    }
+  }, [
+    board,
+    cols,
+    disabled,
+    hovered,
+    imageVersion,
+    loadImage,
+    rows,
+    selected,
+    size.height,
+    size.width,
+    visuals,
+  ]);
+
+  useEffect(() => {
+    if (disabled) setHovered(null);
+  }, [disabled]);
 
   const cellFromEvent = (event: MouseEvent<HTMLDivElement>): number | null => {
     if (size.width <= 0 || size.height <= 0) return null;
@@ -255,6 +284,12 @@ export function GameBoard({
           const index = cellFromEvent(event);
           if (index !== null) onToggle(index);
         }}
+        onMouseMove={(event) => {
+          if (disabled) return;
+          const index = cellFromEvent(event);
+          setHovered((current) => (current === index ? current : index));
+        }}
+        onMouseLeave={() => setHovered(null)}
         onContextMenu={(event) => {
           event.preventDefault();
           if (!disabled) onClear();
