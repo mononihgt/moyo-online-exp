@@ -36,6 +36,7 @@ export function WaitingView({
   actionPending,
   canExit,
   errorCode,
+  errorMessage,
   onStart,
   onExit,
 }: {
@@ -45,6 +46,7 @@ export function WaitingView({
   actionPending: boolean;
   canExit: boolean;
   errorCode: string | null;
+  errorMessage: string | null;
   onStart: () => void;
   onExit: () => void;
 }) {
@@ -65,11 +67,12 @@ export function WaitingView({
   const partnerLabel = partnerWaitingText(roomState.partner);
   const showExit = canExit && !partnerEntered;
   const waitError =
-    errorCode === "partner_missing"
+    errorMessage ??
+    (errorCode === "partner_missing"
       ? WAIT_ERROR_PARTNER_MISSING
       : errorCode === "partner_absent"
         ? WAIT_ERROR_PARTNER_ABSENT
-        : null;
+        : null);
   const waitingDetail = onlyOneBooked
     ? WAIT_SINGLE_DETAIL
     : !partnerEntered

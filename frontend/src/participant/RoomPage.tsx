@@ -736,6 +736,12 @@ export default function RoomPage() {
           actionPending={exitPending}
           canExit={canExit}
           errorCode={waitErrorCode}
+          errorMessage={
+            error !== null &&
+            (error.code === "partner_missing" || error.code === "partner_absent")
+              ? error.message
+              : null
+          }
           onStart={handleStartMatching}
           onExit={handleExitRoom}
         />
