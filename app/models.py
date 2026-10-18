@@ -150,6 +150,7 @@ class Room(Base):
     wait_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=900)
     reconnect_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    archive_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     config_locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     trial_plan_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     runtime_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)

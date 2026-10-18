@@ -385,6 +385,9 @@ async def archive_room(db: AsyncSession, room: Room, reason: str) -> None:
     room.status = ROOM_ARCHIVED
     room.archive_reason = reason
     room.archived_at = utcnow()
+    from .export import build_archive_snapshot
+
+    room.archive_snapshot_json = await build_archive_snapshot(db, room)
     timers_query = await db.execute(
         select(RoomTimer).where(RoomTimer.room_id == room.id, RoomTimer.status == "scheduled")
     )

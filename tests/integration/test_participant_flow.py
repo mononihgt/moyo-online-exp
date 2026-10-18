@@ -1,9 +1,12 @@
+import io
+import json
 import time
 import uuid
+import zipfile
 
 import httpx
 import pytest
-from conftest import WsClient, import_roster, wait_until
+from conftest import WsClient, _mysql_connection, execute_sql, import_roster, wait_until
 from test_review_regressions import (
     _completion_payload,
     _reach_instructions,
@@ -621,6 +624,72 @@ def test_completed_questionnaire_creates_zero_payment_and_archives_completed(ser
     ws_b.close()
     participant_a.close()
     participant_b.close()
+    context.admin.close()
+
+
+@pytest.mark.integration
+def test_archive_snapshot_freezes_materials_for_export(server):
+    context = Context(server)
+    import_roster(context.admin, [("快照甲", "13700000701")])
+    room = context.room(starts_in_seconds=120)
+    context.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/archive",
+        json={"reason": "admin_cancelled"},
+    )
+
+    connection = _mysql_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT archive_snapshot_json FROM rooms WHERE id=%s", (room["id"],)
+            )
+            stored = cursor.fetchone()[0]
+    finally:
+        connection.close()
+    snapshot = json.loads(stored)
+    assert snapshot["condition"]["name"] == room["condition"]["name"]
+    assert snapshot["questionnaire"]["schema"]["title"] == "后测问卷"
+    assert snapshot["media"] == []
+
+    before = context.admin.json("GET", f"/admin/api/rooms/{room['id']}/export.json")
+    assert before["room"]["archiveSnapshotAt"] == snapshot["createdAt"]
+    assert before["instructions"]["player1"]["contentMarkdown"] == "# 玩家1"
+
+    execute_sql(
+        "UPDATE instruction_versions SET markdown=%s WHERE id=%s",
+        ("# 已修改", room["instructions"]["player1"]["id"]),
+    )
+    execute_sql(
+        "UPDATE questionnaire_versions SET schema_json=%s WHERE id=%s",
+        (
+            json.dumps({"title": "已修改", "pages": []}, ensure_ascii=False),
+            room["questionnaire"]["id"],
+        ),
+    )
+    execute_sql(
+        "UPDATE condition_versions SET name=%s WHERE id=%s",
+        ("已修改条件", room["condition"]["id"]),
+    )
+
+    after = context.admin.json("GET", f"/admin/api/rooms/{room['id']}/export.json")
+    assert after["condition"]["name"] == before["condition"]["name"]
+    assert (
+        after["instructions"]["player1"]["contentMarkdown"]
+        == before["instructions"]["player1"]["contentMarkdown"]
+    )
+    assert after["questionnaire"]["schema"] == before["questionnaire"]["schema"]
+
+    zip_response = context.admin.request(
+        "GET", f"/admin/api/rooms/{room['id']}/analysis.zip"
+    )
+    assert zip_response.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(zip_response.content))
+    exported = json.loads(archive.read("room.json"))
+    assert exported["condition"]["name"] == before["condition"]["name"]
+    assert exported["questionnaire"]["schema"] == before["questionnaire"]["schema"]
+    assert json.loads(archive.read("media/manifest.json")) == {"assets": []}
+
     context.admin.close()
 
 

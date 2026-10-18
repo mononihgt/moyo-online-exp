@@ -179,10 +179,46 @@ async def _room_condition(db: AsyncSession, room: Room) -> dict:
     return serialize_condition_snapshot(condition)
 
 
-async def build_room_export(db: AsyncSession, room: Room) -> dict:
+async def build_archive_snapshot(db: AsyncSession, room: Room) -> dict:
     condition = await _room_condition(db, room)
     instructions = await _room_instructions(db, room)
     questionnaire = await _room_questionnaire(db, room)
+    assets, media_entries = await _collect_media(db, condition, instructions)
+    for asset in assets:
+        if not media_absolute_path(asset).exists():
+            raise RuntimeError(f"归档快照引用的媒体文件缺失: {asset.id}")
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "createdAt": isoformat_utc(room.archived_at or utcnow()),
+        "room": {
+            "id": room.id,
+            "startsAt": isoformat_utc(room.starts_at),
+            "archivedAt": isoformat_utc(room.archived_at),
+            "archiveReason": room.archive_reason,
+            "conditionVersionId": room.condition_version_id,
+            "instructionVersionP1Id": room.instruction_version_p1_id,
+            "instructionVersionP2Id": room.instruction_version_p2_id,
+            "questionnaireVersionId": room.questionnaire_version_id,
+            "basePayCents": room.base_pay_cents,
+            "performanceRateCents": room.performance_rate_cents,
+            "showupPayCents": room.showup_pay_cents,
+            "waitWindowSeconds": room.wait_window_seconds,
+            "reconnectWindowSeconds": room.reconnect_window_seconds,
+            "configLockedAt": isoformat_utc(room.config_locked_at),
+        },
+        "condition": condition,
+        "instructions": instructions,
+        "questionnaire": questionnaire,
+        "media": media_entries,
+    }
+
+
+async def build_room_export(db: AsyncSession, room: Room) -> dict:
+    snapshot = room.archive_snapshot_json if isinstance(room.archive_snapshot_json, dict) else {}
+    condition = snapshot.get("condition") or await _room_condition(db, room)
+    instructions = snapshot.get("instructions") or await _room_instructions(db, room)
+    questionnaire = snapshot.get("questionnaire") or await _room_questionnaire(db, room)
+    media_entries = snapshot.get("media")
     revisions_query = await db.execute(
         select(RoomConfigRevision)
         .where(RoomConfigRevision.room_id == room.id)
@@ -203,6 +239,7 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         "waitWindowSeconds": room.wait_window_seconds,
         "reconnectWindowSeconds": room.reconnect_window_seconds,
         "configLockedAt": isoformat_utc(room.config_locked_at),
+        "archiveSnapshotAt": snapshot.get("createdAt"),
         "basePayCents": room.base_pay_cents,
         "performanceRateCents": room.performance_rate_cents,
         "showupPayCents": room.showup_pay_cents,
@@ -337,7 +374,8 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         data.pop("roomId", None)
         payments.append(data)
 
-    media_assets, media_entries = await _collect_media(db, condition, instructions)
+    if media_entries is None:
+        _media_assets, media_entries = await _collect_media(db, condition, instructions)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "exportedAt": isoformat_utc(utcnow()),
@@ -384,11 +422,29 @@ async def _collect_media(db: AsyncSession, condition: dict, instructions: dict) 
     return assets, entries
 
 
+async def _assets_for_media_entries(
+    db: AsyncSession, entries: list[dict]
+) -> tuple[list[MediaAsset], list[dict]]:
+    if not entries:
+        return [], []
+    asset_ids = [entry["assetId"] for entry in entries]
+    rows = await db.execute(select(MediaAsset).where(MediaAsset.id.in_(asset_ids)))
+    by_id = {asset.id: asset for asset in rows.scalars().all()}
+    missing = [asset_id for asset_id in asset_ids if asset_id not in by_id]
+    if missing:
+        raise RuntimeError("导出引用了不存在的媒体资产: " + ", ".join(sorted(missing)))
+    assets = []
+    for entry in entries:
+        asset = by_id[entry["assetId"]]
+        if "sha256:" + asset.sha256 != entry.get("sha256"):
+            raise RuntimeError(f"媒体快照哈希不匹配: {asset.id}")
+        assets.append(asset)
+    return assets, entries
+
+
 async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
     export = await build_room_export(db, room)
-    condition = export["condition"]
-    instructions = export["instructions"]
-    assets, media_entries = await _collect_media(db, condition, instructions)
+    assets, media_entries = await _assets_for_media_entries(db, export.get("media") or [])
     participants_rows = []
     for participant in export["participants"]:
         instruction = participant.get("instruction") or {}
