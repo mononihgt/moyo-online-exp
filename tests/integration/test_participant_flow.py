@@ -161,8 +161,12 @@ def test_exit_during_rest_archives_abandoned_without_payment(server):
             cells=[_owned_cell(turn["board"], role)],
             clientMsgId=f"rest-exit-{role}-{uuid.uuid4().hex[:6]}",
         )
-    ws_a.recv_until("rest")
-    ws_b.recv_until("rest")
+    rest_a = ws_a.recv_until("rest")
+    rest_b = ws_b.recv_until("rest")
+    assert rest_a["trialIndex"] == 0
+    assert rest_a["round"] == 1
+    assert rest_b["trialIndex"] == 0
+    assert rest_b["round"] == 1
     ws_b.send("exit_room", roomId=room["id"])
     archived_b = ws_b.recv_until("room_archived")
     assert archived_b["reason"] == "abandoned"
@@ -172,6 +176,58 @@ def test_exit_during_rest_archives_abandoned_without_payment(server):
     assert context.admin.json("GET", "/admin/api/payments")["payments"] == []
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     assert detail["room"]["archiveReason"] == "abandoned"
+    ws_a.close()
+    ws_b.close()
+    participant_a.close()
+    participant_b.close()
+    context.admin.close()
+
+
+@pytest.mark.integration
+def test_rest_messages_carry_trial_round_and_complete(server):
+    context = Context(server)
+    import_roster(context.admin, [("休息甲", "13700000801"), ("休息乙", "13700000802")])
+    room = context.room(
+        starts_in_seconds=2,
+        practice=0,
+        formal=2,
+        turn_count=1,
+        turn_seconds=3,
+        rest_seconds=30,
+    )
+    participant_a = context.participant("休息甲", "13700000801")
+    participant_b = context.participant("休息乙", "13700000802")
+    _book(context, room, participant_a, participant_b)
+    wait_until(
+        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        timeout=20,
+    )
+    ws_a, ws_b, role_a, role_b, turn_a, turn_b = _start_game(
+        context, room, participant_a, participant_b
+    )
+    for ws, role, turn in ((ws_a, role_a, turn_a), (ws_b, role_b, turn_b)):
+        ws.send(
+            "submit_selection",
+            roomId=room["id"],
+            trialIndex=turn["trialIndex"],
+            round=turn["round"],
+            cells=[_owned_cell(turn["board"], role)],
+            clientMsgId=f"rest-complete-{role}-{uuid.uuid4().hex[:6]}",
+        )
+    rest_a = ws_a.recv_until("rest")
+    rest_b = ws_b.recv_until("rest")
+    assert rest_a["trialIndex"] == 0
+    assert rest_a["round"] == 1
+    assert rest_b["trialIndex"] == 0
+    assert rest_b["round"] == 1
+    ws_a.send("rest_ready", roomId=room["id"])
+    ws_b.send("rest_ready", roomId=room["id"])
+    complete_a = ws_a.recv_until("rest_complete")
+    complete_b = ws_b.recv_until("rest_complete")
+    assert complete_a["trialIndex"] == 0
+    assert complete_a["round"] == 1
+    assert complete_b["trialIndex"] == 0
+    assert complete_b["round"] == 1
     ws_a.close()
     ws_b.close()
     participant_a.close()

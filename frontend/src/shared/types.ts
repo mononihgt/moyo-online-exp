@@ -493,6 +493,8 @@ export interface TurnResultMessage {
 export interface RestMessage {
   type: "rest";
   roomId: string;
+  trialIndex: number;
+  round: number;
   completedTrialIndex: number;
   completedIsPractice: boolean;
   completedFormalTrial: number;
@@ -528,7 +530,7 @@ export type ServerMessage =
   | { type: "game_start"; roomId: string; totalTrials: number }
   | { type: "partner_state"; roomId: string; partner: PartnerState }
   | { type: "instruction_state"; roomId: string; instruction: InstructionState }
-  | { type: "rest_complete"; roomId: string }
+  | { type: "rest_complete"; roomId: string; trialIndex: number; round: number }
   | { type: "game_over"; roomId: string; trialsCompleted: number; questionnaireUrl: string | null }
   | { type: "questionnaire_required"; roomId: string; url: string | null; status: QuestionnaireStatus }
   | {

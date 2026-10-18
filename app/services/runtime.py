@@ -674,6 +674,19 @@ class RuntimeManager:
     async def _start_next_trial(self, db: AsyncSession, room: Room, state: dict) -> None:
         condition = room.config_snapshot["condition"]
         order = room.trial_plan_json["order"]
+        if state["phase"] == PHASE_REST:
+            rows = await self._room_participant_rows(db, room.id)
+            for row in rows:
+                await self._send_json(
+                    room.id,
+                    row.participant_id,
+                    {
+                        "type": "rest_complete",
+                        "roomId": room.id,
+                        "trialIndex": state["trial_index"],
+                        "round": state["round"],
+                    },
+                )
         trial_index = 0 if state["phase"] != PHASE_REST else state["trial_index"] + 1
         if trial_index >= len(order):
             await self._enter_questionnaire(db, room, state)
@@ -1525,6 +1538,8 @@ class RuntimeManager:
         completed_source = order[state["trial_index"]]
         completed_params = condition["trialParams"][completed_source]
         return {
+            "trialIndex": state["trial_index"],
+            "round": state["round"],
             "completedTrialIndex": state["trial_index"],
             "completedIsPractice": completed_params["isPractice"],
             "completedFormalTrial": completed_params["formalTrial"],
