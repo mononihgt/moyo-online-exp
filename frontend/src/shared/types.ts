@@ -494,6 +494,7 @@ export interface TurnResultMessage {
   logistics: { player1: number; player2: number };
   board: BoardState;
   trialEnded: boolean;
+  resultDisplayMs?: number;
   nextRound?: number;
   deadline?: string;
 }

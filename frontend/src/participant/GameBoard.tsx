@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 
 import type { BoardState, ConditionVisual } from "../shared/types";
 
@@ -118,7 +125,7 @@ export function GameBoard({
     return entry;
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null || size.width <= 0 || size.height <= 0) return;
     const dpr = window.devicePixelRatio || 1;
@@ -217,12 +224,18 @@ export function GameBoard({
     context.strokeStyle = "#B8B8B8";
     context.beginPath();
     for (let col = 0; col <= cols; col += 1) {
-      const lineX = Math.round((size.width * col) / cols) + 0.5;
+      const lineX =
+        col === cols
+          ? size.width - 0.5
+          : Math.round((size.width * col) / cols) + 0.5;
       context.moveTo(lineX, 0);
       context.lineTo(lineX, size.height);
     }
     for (let row = 0; row <= rows; row += 1) {
-      const lineY = Math.round((size.height * row) / rows) + 0.5;
+      const lineY =
+        row === rows
+          ? size.height - 0.5
+          : Math.round((size.height * row) / rows) + 0.5;
       context.moveTo(0, lineY);
       context.lineTo(size.width, lineY);
     }

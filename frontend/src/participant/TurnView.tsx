@@ -82,10 +82,13 @@ export function TurnView({
     ? rawRemaining ?? lastRemainingRef.current
     : lastRemainingRef.current;
   const turnSeconds = game.turnSeconds > 0 ? game.turnSeconds : 30;
-  const progress = Math.max(0, Math.min(100, (remaining / turnSeconds) * 100));
+  const displayRemaining = result !== null ? turnSeconds : remaining;
+  const progress = Math.max(0, Math.min(100, (displayRemaining / turnSeconds) * 100));
   const countdownTone =
-    remaining <= 5 ? "danger" : remaining <= 10 ? "warning" : "normal";
+    displayRemaining <= 5 ? "danger" : displayRemaining <= 10 ? "warning" : "normal";
   const partnerText = partner.online ? "另一名玩家在线" : "另一名玩家离线";
+  const boardSelected = result !== null ? [] : selected;
+  const submittedView = result !== null || submitted;
 
   const toggleCell = (index: number) => {
     if (result !== null || submitted || !socketActive || exitPending) return;
@@ -135,9 +138,6 @@ export function TurnView({
       <div className="exp-hud">
         <div className="exp-hud-left">
           <span>{hudTrialLabel(game, displayRound)}</span>
-          {result !== null ? (
-            <span className="exp-hud-result-tag">结算中</span>
-          ) : null}
         </div>
         <div className="exp-countdown-slot">
           <span className="exp-countdown-label">剩余时间</span>
@@ -151,9 +151,9 @@ export function TurnView({
             }
             data-testid="game-countdown"
             role="timer"
-            aria-label={`回合剩余时间 ${formatClock(remaining)}`}
+            aria-label={`回合剩余时间 ${formatClock(displayRemaining)}`}
           >
-            {formatClock(remaining)}
+            {formatClock(displayRemaining)}
             <span className="exp-progress" aria-hidden="true">
               <span
                 className="exp-progress-fill"
@@ -193,7 +193,7 @@ export function TurnView({
           <GameBoard
             board={board}
             visuals={game.visuals}
-            selected={selected}
+            selected={boardSelected}
             warCells={warCells}
             flashKey={flashKey}
             disabled={result !== null || submitted || !socketActive || exitPending}
@@ -211,24 +211,18 @@ export function TurnView({
               disabled={!canSubmit}
               onClick={submit}
             >
-              {result !== null
-                ? "回合结算中"
-                : submitted
-                  ? "已提交"
-                  : "确认选择"}
+              {submittedView ? "已提交" : "确认选择"}
             </button>
             <p className="exp-hint" role="status">
               {exitPending
                 ? "正在退出实验，请稍候…"
-                : result !== null
-                  ? "回合已结算，请等待下一回合。"
-                  : submitted
-                    ? "已提交，等待另一名参与者或回合结算。"
-                    : !socketActive
-                      ? "连接中断，正在重新连接…"
-                      : selected.length === 0
-                        ? "至少选择一个格子"
-                        : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
+                : submittedView
+                  ? "已提交，等待另一名参与者或回合结算。"
+                  : !socketActive
+                    ? "连接中断，正在重新连接…"
+                    : selected.length === 0
+                      ? "至少选择一个格子"
+                      : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
             </p>
           </div>
         </div>

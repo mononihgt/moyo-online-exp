@@ -283,7 +283,10 @@ export default function RoomPage() {
           break;
         }
         case "turn_result": {
-          setResult(message);
+          const resultDisplayMs =
+            message.resultDisplayMs ??
+            (message.warLocation.length > 0 ? RESULT_DISPLAY_MS : 0);
+          setResult(resultDisplayMs > 0 ? message : null);
           setSubmittedLocal(true);
           setGame((current) =>
             current === null
@@ -446,7 +449,14 @@ export default function RoomPage() {
 
   useEffect(() => {
     if (result === null) return;
-    const timer = window.setTimeout(() => setResult(null), RESULT_DISPLAY_MS);
+    const delay =
+      result.resultDisplayMs ??
+      (result.warLocation.length > 0 ? RESULT_DISPLAY_MS : 0);
+    if (delay <= 0) {
+      setResult(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setResult(null), delay);
     return () => window.clearTimeout(timer);
   }, [result]);
 

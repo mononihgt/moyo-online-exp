@@ -30,11 +30,11 @@ import {
 import type { RosterEntry } from "./support";
 
 const WAIT_PARTNER_NOT_ENTERED_DETAIL =
-  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待窗口结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
+  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待时间结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
 const WAIT_EXIT_PARTNER_BUTTON =
   "另一名被试可能放鸽子了，我退出本次实验";
 const WAIT_BOTH_ENTERED_DETAIL =
-  "双方均已到场后不能退出；如果等待窗口结束时仍未开始，本次实验将自动结束，不产生报酬。";
+  "双方均已到场后不能退出；如果等待时间结束时仍未开始，本次实验将自动结束，不产生报酬。";
 
 const ABANDONED_SELF_TITLE = "你已退出实验";
 const ABANDONED_SELF_DETAIL =

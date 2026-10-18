@@ -76,6 +76,8 @@ from .rooms import (
 
 logger = logging.getLogger(__name__)
 
+RESULT_ANIMATION_MS = 1000
+
 
 def _default_state() -> dict:
     return {
@@ -820,6 +822,7 @@ class RuntimeManager:
         }
         state["board"] = _board_payload(resolution.board)
         state["submissions"] = {}
+        result_animation_ms = RESULT_ANIMATION_MS if resolution.war_location else 0
         result = {
             "round": round_number,
             "selections": {
@@ -842,6 +845,7 @@ class RuntimeManager:
             "logistics": {"player1": resolution.logistics_p1, "player2": resolution.logistics_p2},
             "board": _board_payload(resolution.board),
             "trialEnded": False,
+            "resultDisplayMs": result_animation_ms,
         }
         without_territory = player_without_territory(resolution.board)
         if without_territory is not None:
@@ -854,6 +858,7 @@ class RuntimeManager:
                 winner=3 - without_territory,
                 end_reason=END_REASON_ANNIHILATION,
                 end_turn=round_number,
+                result_animation_ms=result_animation_ms,
             )
         elif round_number >= condition["turnCount"]:
             result["trialEnded"] = True
@@ -865,13 +870,15 @@ class RuntimeManager:
                 winner=None,
                 end_reason=END_REASON_TURN_LIMIT,
                 end_turn=round_number,
+                result_animation_ms=result_animation_ms,
             )
         else:
+            next_turn_seconds = condition["turnSeconds"] + result_animation_ms // 1000
             state["round"] = round_number + 1
-            self._set_turn_deadline(state, condition["turnSeconds"])
+            self._set_turn_deadline(state, next_turn_seconds)
             state["turn_generation"] += 1
             if state["turn_deadline"] is not None:
-                self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=condition["turnSeconds"]))
+                self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=next_turn_seconds))
             result["nextRound"] = state["round"]
             result["deadline"] = state["turn_deadline"]
         _save_state(room, state)
@@ -887,6 +894,7 @@ class RuntimeManager:
         winner,
         end_reason: str,
         end_turn: int,
+        result_animation_ms: int = 0,
     ) -> None:
         condition = room.config_snapshot["condition"]
         params = condition["trialParams"][room.trial_plan_json["order"][state["trial_index"]]]
@@ -965,10 +973,11 @@ class RuntimeManager:
         if state["trial_index"] + 1 >= total_trials:
             await self._enter_questionnaire(db, room, state)
         else:
-            self._set_rest_deadline(state, condition["restSeconds"])
+            rest_seconds = condition["restSeconds"] + result_animation_ms // 1000
+            self._set_rest_deadline(state, rest_seconds)
             state["rest_ready"] = {}
             if state["rest_deadline"] is not None:
-                self._record_timer(db, room, "rest", utcnow() + timedelta(seconds=condition["restSeconds"]))
+                self._record_timer(db, room, "rest", utcnow() + timedelta(seconds=rest_seconds))
         _save_state(room, state)
 
     async def _enter_questionnaire(self, db: AsyncSession, room: Room, state: dict) -> None:
@@ -1503,6 +1512,7 @@ class RuntimeManager:
                 "logistics": outcome["logistics"],
                 "board": outcome["board"],
                 "trialEnded": outcome["trialEnded"],
+                "resultDisplayMs": outcome["resultDisplayMs"],
             }
             if not outcome["trialEnded"]:
                 payload["nextRound"] = outcome["nextRound"]
