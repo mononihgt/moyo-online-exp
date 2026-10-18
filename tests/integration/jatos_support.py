@@ -36,14 +36,15 @@ def jatos_api_token() -> str:
 
 def ensure_questionnaire_build() -> Path:
     html = COMPONENT_DIR / "questionnaire.html"
-    if html.exists():
-        return html
     npm = shutil.which("npm")
     if npm is None:
         raise RuntimeError("缺少 npm，无法构建问卷组件")
+    env = os.environ.copy()
+    env["VITE_ALLOW_BASE_OVERRIDE"] = "true"
     result = subprocess.run(
         [npm, "run", "build"],
         cwd=ROOT / "frontend",
+        env=env,
         capture_output=True,
         text=True,
     )

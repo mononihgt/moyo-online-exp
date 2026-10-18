@@ -533,11 +533,21 @@ uv run --with httpx python scripts/deploy_jatos_questionnaire.py --title "Moyo �
 
 ### 平台地址与 CORS
 
-问卷通过查询参数 `base` 或构建时注入的 `VITE_PLATFORM_BASE_URL` 获取平台地址。生产镜像在构建时把 `PUBLIC_BASE_URL` 注入为 `VITE_PLATFORM_BASE_URL`。本地测试可以显式传入：
+问卷通过构建时注入的 `VITE_PLATFORM_BASE_URL` 获取平台地址。生产镜像在构建时把 `PUBLIC_BASE_URL` 注入为 `VITE_PLATFORM_BASE_URL`，并忽略 URL 中的 `base` 查询参数。
+
+本地测试需要构建问卷组件时显式启用覆盖：
+
+```bash
+VITE_ALLOW_BASE_OVERRIDE=true npm --prefix frontend run build
+```
+
+启用后才可以在组件 URL 追加 `base`：
 
 ```text
 http://127.0.0.1:9000/publix/<studyCode>?rt=<token>&pid=<analysisCode>&base=http%3A%2F%2F127.0.0.1%3A8000
 ```
+
+可以设置 `VITE_ALLOWED_PLATFORM_ORIGINS=https://a.example,https://b.example` 限制允许的覆盖来源。`tests/integration/test_jatos.py` 构建问卷组件时会自动启用覆盖。
 
 平台 CORS 允许 `PUBLIC_BASE_URL` 和 `JATOS_BASE_URL` 的 origin，`/api/jatos/*` 的 GET 与 POST 可用。问卷组件在两个 origin 之间使用 fetch，不依赖参与者 cookie。
 

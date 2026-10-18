@@ -1,3 +1,5 @@
+import { parseAllowedOrigins, selectPlatformBase } from "./platformBase";
+
 export interface JatosApi {
   version?: string;
   workerId?: string | number;
@@ -66,18 +68,23 @@ export function readQueryParam(jatos: JatosApi, name: string): string | null {
 }
 
 export function resolvePlatformBase(jatos: JatosApi): string {
-  const envBase = import.meta.env.VITE_PLATFORM_BASE_URL as string | undefined;
-  const raw = readQueryParam(jatos, "base") ?? (envBase && envBase.trim() ? envBase : window.location.origin);
-  let url: URL;
-  try {
-    url = new URL(raw, window.location.href);
-  } catch {
-    throw new Error("平台地址配置无效，请联系主试。");
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("平台地址配置无效，请联系主试。");
-  }
-  return url.href.replace(/\/+$/, "");
+  const env = import.meta.env;
+  const allowOverride = env.VITE_ALLOW_BASE_OVERRIDE === "true";
+  const envBase =
+    typeof env.VITE_PLATFORM_BASE_URL === "string" &&
+    env.VITE_PLATFORM_BASE_URL.trim() !== ""
+      ? env.VITE_PLATFORM_BASE_URL
+      : null;
+  return selectPlatformBase({
+    allowOverride,
+    overrideBase: allowOverride ? readQueryParam(jatos, "base") : null,
+    allowedOrigins: allowOverride
+      ? parseAllowedOrigins(env.VITE_ALLOWED_PLATFORM_ORIGINS)
+      : [],
+    configuredBase: envBase,
+    fallbackBase: window.location.origin,
+    resolutionBase: window.location.href,
+  });
 }
 
 export function readJatosResultIds(jatos: JatosApi): JatosResultIds | null {

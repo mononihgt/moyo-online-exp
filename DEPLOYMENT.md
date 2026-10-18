@@ -65,7 +65,7 @@ sudo ufw status
 
 ## 2. 文件职责
 
-- `Dockerfile`：两阶段构建。Node 构建 `frontend/dist` 与 `frontend/dist-questionnaire`，Python 安装 `uv.lock` 中的依赖，构建产物保留在 `frontend/dist` 和 `frontend/dist-questionnaire`，以非 root 用户运行。`PUBLIC_BASE_URL` 通过构建参数 `VITE_PLATFORM_BASE_URL` 注入问卷组件。
+- `Dockerfile`：两阶段构建。Node 构建 `frontend/dist` 与 `frontend/dist-questionnaire`，Python 安装 `uv.lock` 中的依赖，构建产物保留在 `frontend/dist` 和 `frontend/dist-questionnaire`，以非 root 用户运行。`PUBLIC_BASE_URL` 通过构建参数 `VITE_PLATFORM_BASE_URL` 注入问卷组件。生产构建不设置 `VITE_ALLOW_BASE_OVERRIDE`，问卷 URL 中的 `base` 查询参数会被忽略。
 - `docker-compose.yml`：`caddy`、`app`、`db`、`jatos`、`backup` 五个服务，全部使用命名卷。
 - `Caddyfile`：两个域名分别反向代理到 `app:8000` 和 `jatos:9000`，自动申请 TLS 证书。平台站点有 25 MB 请求体上限和安全响应头。
 - `.env.example`：环境变量模板。实际使用的 `.env` 不提交到仓库。

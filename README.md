@@ -123,7 +123,7 @@ Vite 将 `/api`、`/admin/api`、`/media` 和 `/ws` 代理到 `127.0.0.1:8000`�
 {JATOS_BASE_URL}/publix/{studyCode}?rt={signed_token}&pid={analysis_code}
 ```
 
-生产构建问卷组件时通过 `VITE_PLATFORM_BASE_URL` 注入平台地址（Docker Compose 使用 `PUBLIC_BASE_URL` 作为构建参数）。本地测试也可以在组件 URL 追加 `base=<平台地址>`。
+生产构建问卷组件时通过 `VITE_PLATFORM_BASE_URL` 注入平台地址（Docker Compose 使用 `PUBLIC_BASE_URL` 作为构建参数），并忽略组件 URL 中的 `base` 查询参数。本地测试构建问卷组件时设置 `VITE_ALLOW_BASE_OVERRIDE=true`，之后才能在组件 URL 追加 `base=<平台地址>`；可再用 `VITE_ALLOWED_PLATFORM_ORIGINS` 逗号分隔限制允许来源。
 
 JATOS study 的批次必须允许 `GeneralMultiple`。API 创建的 study 默认只允许 `PersonalSingle` 和 `PersonalMultiple`，需要使用 JATOS 管理界面或 API 打开 `GeneralMultiple`。
 
