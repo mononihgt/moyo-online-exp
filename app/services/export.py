@@ -6,10 +6,15 @@ import re
 import zipfile
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..constants import QUESTIONNAIRE_COMPLETED, SCHEMA_VERSION, TIMEZONE
+from ..constants import (
+    ARCHIVE_TECHNICAL_ABORT,
+    QUESTIONNAIRE_COMPLETED,
+    SCHEMA_VERSION,
+    TIMEZONE,
+)
 from ..models import (
     Booking,
     ConditionVersion,
@@ -595,7 +600,12 @@ async def build_payment_export_csv(db: AsyncSession) -> bytes:
             (RoomParticipant.room_id == Payment.room_id)
             & (RoomParticipant.participant_id == Payment.participant_id),
         )
-        .where(RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED)
+        .where(
+            or_(
+                RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
+                Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
+            )
+        )
         .order_by(Room.starts_at, Participant.name)
     )
     header = [

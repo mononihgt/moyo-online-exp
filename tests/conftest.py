@@ -63,6 +63,15 @@ def migrate_database():
         raise RuntimeError("alembic upgrade failed:\n" + result.stdout + result.stderr)
 
 
+def execute_sql(sql: str, params: tuple = ()) -> None:
+    connection = _mysql_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+    finally:
+        connection.close()
+
+
 def reset_database() -> None:
     from app import models  # noqa: F401
     from app.db import Base

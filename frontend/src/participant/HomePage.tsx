@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarPlus, ClipboardList, LogOut, Mail, PlayCircle, RefreshCw, XCircle } from "lucide-react";
+import {
+  CalendarPlus,
+  ClipboardCheck,
+  ClipboardList,
+  LogOut,
+  Mail,
+  PlayCircle,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
 import { formatDateTime } from "../shared/format";
@@ -8,12 +17,29 @@ import type {
   BookableRoomsResponse,
   MyRoomResponse,
   PendingQuestionnaire,
-  QuestionnaireContextResponse,
 } from "./apiTypes";
 import { ROOM_STATUS_LABELS, formatUnknownError, isUnauthorized } from "./apiTypes";
 import { LoadingCard, PageLinks, StatusChip } from "./common";
+import { ContinueQuestionnaireButton } from "./ContinueQuestionnaireButton";
+import {
+  ACCOUNT_COMPLETED,
+  ACCOUNT_DISABLED,
+  ACCOUNT_PENDING_QUESTIONNAIRE,
+  AFTER_START_BOOKING_NOTE,
+  BOOKABLE_HIDDEN_NOTE,
+  BOOKING_SUCCESS,
+  CANCEL_SUCCESS,
+  PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL,
+  PENDING_QUESTIONNAIRE_DETAIL,
+  PENDING_QUESTIONNAIRE_TITLE,
+  SELF_SUBMITTED_DETAIL,
+  SELF_SUBMITTED_TITLE,
+  VIEW_REWARD_INFO,
+} from "./flowCopy";
 import { PageFrame, SessionNotice, useSession } from "./session";
 import { useNow, formatClock, secondsLeft } from "./time";
+
+const STARTED_STATUSES = ["waiting", "instructions", "playing", "questionnaire"];
 
 export default function HomePage() {
   const session = useSession();
@@ -31,7 +57,6 @@ export default function HomePage() {
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [booking, setBooking] = useState(false);
   const [canceling, setCanceling] = useState(false);
-  const [continuing, setContinuing] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const now = useNow(1000);
 
@@ -51,6 +76,7 @@ export default function HomePage() {
           setServerNow(bookable.serverNow);
         } else {
           setRooms([]);
+          setServerNow(null);
         }
       } catch (error: unknown) {
         if (!alive.current || isUnauthorized(error)) return;
@@ -93,6 +119,55 @@ export default function HomePage() {
     (room.canEnter ||
       (startRemaining === 0 &&
         (room.status === "open" || room.status === "full")));
+  const bookingStarted =
+    room !== null &&
+    (startRemaining === 0 ||
+      STARTED_STATUSES.includes(room.status) ||
+      (!room.canCancel && room.bookingStatus === "booked"));
+
+  const activePending = useMemo<PendingQuestionnaire | null>(() => {
+    if (
+      room === null ||
+      room.status !== "questionnaire" ||
+      room.questionnaireStatus === "completed"
+    ) {
+      return null;
+    }
+    return {
+      roomId: room.roomId,
+      startsAt: room.startsAt,
+      questionnaireStatus: room.questionnaireStatus ?? "not_started",
+      archiveReason: null,
+      canContinue: true,
+    };
+  }, [room]);
+
+  const pendingItems = useMemo(() => {
+    const seen = new Set<string>();
+    const items: PendingQuestionnaire[] = [];
+    const candidates = activePending === null ? pending : [activePending, ...pending];
+    for (const item of candidates) {
+      if (seen.has(item.roomId)) continue;
+      if (!item.canContinue) continue;
+      if (item.questionnaireStatus === "completed") continue;
+      seen.add(item.roomId);
+      items.push(item);
+    }
+    return items;
+  }, [activePending, pending]);
+
+  const hasPending = pendingItems.length > 0;
+  const pendingLocked = hasPending || session.me.hasPendingQuestionnaire;
+  const selfCompletedPartnerPending =
+    room !== null &&
+    room.status === "questionnaire" &&
+    room.questionnaireStatus === "completed";
+  const activeRoomIsPending =
+    room !== null && pendingItems.some((item) => item.roomId === room.roomId);
+  const showCurrentRoomCard =
+    room !== null && !activeRoomIsPending && !selfCompletedPartnerPending;
+  const accountLocked =
+    session.me.isCompleted || session.me.isDisabled || !session.me.canBook;
 
   const bookRoom = async () => {
     if (selectedRoom === null || booking) return;
@@ -102,7 +177,7 @@ export default function HomePage() {
     try {
       await session.request(`/api/rooms/${selectedRoom.id}/book`, { method: "POST" });
       setSelectedRoomId(null);
-      setActionNotice("预约成功。请在开始时间前进入等待。");
+      setActionNotice(BOOKING_SUCCESS);
       setLoading(true);
       setReloadToken((token) => token + 1);
     } catch (error: unknown) {
@@ -120,7 +195,7 @@ export default function HomePage() {
     setCanceling(true);
     try {
       await session.request(`/api/bookings/${bookingId}/cancel`, { method: "POST" });
-      setActionNotice("已取消预约。你可以重新选择场次。");
+      setActionNotice(CANCEL_SUCCESS);
       setLoading(true);
       setReloadToken((token) => token + 1);
     } catch (error: unknown) {
@@ -140,40 +215,14 @@ export default function HomePage() {
     }
   };
 
-  const continueQuestionnaire = async (roomId: string) => {
-    if (continuing) return;
-    setActionError("");
-    setContinuing(true);
-    try {
-      const context = await session.request<QuestionnaireContextResponse>(
-        `/api/questionnaire/context?roomId=${encodeURIComponent(roomId)}`,
-      );
-      if (context.submitted) {
-        setActionError("该实验的问卷已提交。");
-        return;
-      }
-      if (context.url === null) {
-        setActionError("暂时无法生成问卷链接，请联系实验主试。");
-        return;
-      }
-      window.location.href = context.url;
-    } catch (error: unknown) {
-      if (!isUnauthorized(error)) {
-        setActionError(
-          formatUnknownError(error, "无法继续填写问卷，请联系实验主试。"),
-        );
-      }
-    } finally {
-      setContinuing(false);
-    }
-  };
-
-  const activeRoomId = room?.roomId ?? null;
-  const extraPending = pending.filter((item) => item.roomId !== activeRoomId);
   const blockingHint =
-    room !== null
+    room !== null && !bookingStarted
       ? "你已有预约。如需改报其他场次，请先取消当前预约。"
       : null;
+
+  const showBookable =
+    session.me.canBook && !pendingLocked && !selfCompletedPartnerPending;
+  const showHiddenBookable = pendingLocked;
 
   return (
     <PageFrame>
@@ -235,7 +284,54 @@ export default function HomePage() {
         </div>
       ) : (
         <>
-          {room !== null ? (
+          {pendingItems.map((item, index) => {
+            const archived = item.archiveReason === "questionnaire_incomplete";
+            return (
+              <section
+                key={item.roomId}
+                className="p-card p-pending-questionnaire"
+                data-testid="pending-questionnaire-card"
+                aria-labelledby={`pending-questionnaire-title-${index}`}
+              >
+                <div className="p-row">
+                  <h2
+                    className="p-section-title"
+                    id={`pending-questionnaire-title-${index}`}
+                  >
+                    {PENDING_QUESTIONNAIRE_TITLE}
+                  </h2>
+                  <StatusChip tone="warning">
+                    {archived ? "已归档" : "待填写"}
+                  </StatusChip>
+                </div>
+                <p className="p-muted">{formatDateTime(item.startsAt)}</p>
+                <div className="p-banner p-banner-warning" role="status">
+                  {archived
+                    ? PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL
+                    : PENDING_QUESTIONNAIRE_DETAIL}
+                </div>
+                <div className="p-btn-row">
+                  <ContinueQuestionnaireButton
+                    roomId={item.roomId}
+                    testId={
+                      index === 0
+                        ? "continue-questionnaire"
+                        : `continue-questionnaire-${item.roomId}`
+                    }
+                  />
+                  <Link
+                    className="p-btn p-btn-secondary"
+                    data-testid="reward-info"
+                    to={`/complete?room=${encodeURIComponent(item.roomId)}`}
+                  >
+                    {VIEW_REWARD_INFO}
+                  </Link>
+                </div>
+              </section>
+            );
+          })}
+
+          {showCurrentRoomCard && room !== null ? (
             <section
               className="p-card p-current-booking"
               data-testid="current-booking"
@@ -249,9 +345,7 @@ export default function HomePage() {
                   tone={
                     room.status === "questionnaire"
                       ? "warning"
-                      : room.status === "waiting" ||
-                          room.status === "instructions" ||
-                          room.status === "playing"
+                      : STARTED_STATUSES.includes(room.status)
                         ? "success"
                         : "neutral"
                   }
@@ -276,14 +370,11 @@ export default function HomePage() {
                     <dd className="p-mono">{formatClock(startRemaining)}</dd>
                   </div>
                 ) : null}
-              </dl>
-
-              {room.status === "questionnaire" &&
-              room.questionnaireStatus !== "completed" ? (
-                <div className="p-banner p-banner-warning" role="status">
-                  实验已结束，仍需填写后测问卷。完成后才能确认实验记录与报酬。
+                <div className="p-detail-row">
+                  <dt>预约状态</dt>
+                  <dd>{ROOM_STATUS_LABELS[room.status]}</dd>
                 </div>
-              ) : null}
+              </dl>
 
               <div className="p-btn-row">
                 {canEnterNow ? (
@@ -296,23 +387,7 @@ export default function HomePage() {
                     进入实验
                   </Link>
                 ) : null}
-                {room.status === "questionnaire" &&
-                room.questionnaireStatus !== "completed" ? (
-                  <button
-                    type="button"
-                    className={
-                      canEnterNow
-                        ? "p-btn p-btn-secondary"
-                        : "p-btn p-btn-primary"
-                    }
-                    data-testid="continue-questionnaire"
-                    disabled={continuing}
-                    onClick={() => void continueQuestionnaire(room.roomId)}
-                  >
-                    继续填写问卷
-                  </button>
-                ) : null}
-                {!canEnterNow && bookingId !== null ? (
+                {room.canCancel && bookingId !== null ? (
                   <button
                     type="button"
                     className="p-btn p-btn-secondary"
@@ -324,19 +399,52 @@ export default function HomePage() {
                     {canceling ? "正在取消…" : "取消预约"}
                   </button>
                 ) : null}
-                {!canEnterNow && bookingId === null ? (
-                  <Link className="p-btn p-btn-secondary" to={`/room/${room.roomId}`}>
-                    查看房间状态
-                  </Link>
-                ) : null}
               </div>
-              {!canEnterNow ? (
+              {bookingStarted ? (
+                <p className="p-muted p-current-booking-note">
+                  {AFTER_START_BOOKING_NOTE}
+                </p>
+              ) : room.canCancel ? (
                 <p className="p-muted p-current-booking-note">
                   开始时间到达后才能进入实验。开始前可以取消预约。
                 </p>
-              ) : null}
+              ) : (
+                <p className="p-muted p-current-booking-note">
+                  开始时间到达后才能进入实验。
+                </p>
+              )}
             </section>
-          ) : (
+          ) : null}
+
+          {selfCompletedPartnerPending ? (
+            <section
+              className="p-card p-current-booking"
+              data-testid="experiment-completed"
+              aria-labelledby="experiment-completed-title"
+            >
+              <h2 className="p-section-title" id="experiment-completed-title">
+                {SELF_SUBMITTED_TITLE}
+              </h2>
+              <p className="p-muted">{SELF_SUBMITTED_DETAIL}</p>
+              <div className="p-btn-row">
+                <Link
+                  className="p-btn p-btn-primary"
+                  data-testid="reward-info"
+                  to={`/complete?room=${encodeURIComponent(room.roomId)}`}
+                >
+                  <ClipboardCheck size={18} aria-hidden="true" />
+                  {VIEW_REWARD_INFO}
+                </Link>
+                <Link className="p-btn p-btn-secondary" to="/history">
+                  历史实验
+                </Link>
+              </div>
+            </section>
+          ) : null}
+
+          {!showCurrentRoomCard &&
+          !hasPending &&
+          !selfCompletedPartnerPending ? (
             <section
               className="p-card p-current-booking p-card-quiet"
               data-testid="current-booking"
@@ -349,45 +457,37 @@ export default function HomePage() {
                   : "当前账号无法预约新的场次。"}
               </p>
             </section>
-          )}
-
-          {extraPending.length > 0 ? (
-            <section className="p-card" aria-labelledby="pending-questionnaire-title">
-              <h2 className="p-section-title" id="pending-questionnaire-title">
-                待完成问卷
-              </h2>
-              <ul className="p-list">
-                {extraPending.map((item) => (
-                  <li key={item.roomId} className="p-row">
-                    <span>{formatDateTime(item.startsAt)}</span>
-                    <button
-                      type="button"
-                      className="p-linkish"
-                      disabled={continuing}
-                      onClick={() => void continueQuestionnaire(item.roomId)}
-                    >
-                      继续填写问卷
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
           ) : null}
 
-          {session.me.isCompleted || session.me.isDisabled || !session.me.canBook ? (
+          {accountLocked ? (
             <section className="p-card p-account-status" aria-labelledby="account-status-title">
               <h2 className="p-section-title" id="account-status-title">
                 预约状态
               </h2>
               <p className="p-muted">
                 {session.me.isCompleted
-                  ? "你已完成全部实验，无法再预约新的场次。你可以查看历史实验与报酬记录。"
+                  ? ACCOUNT_COMPLETED
                   : session.me.isDisabled
-                    ? "你的账号当前已停用，无法预约新的场次。如有疑问，请联系实验主试。"
-                    : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
+                    ? ACCOUNT_DISABLED
+                    : pendingLocked
+                      ? ACCOUNT_PENDING_QUESTIONNAIRE
+                      : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
               </p>
             </section>
-          ) : (
+          ) : null}
+
+          {showHiddenBookable ? (
+            <section className="p-card" data-testid="bookable-hidden" aria-labelledby="bookable-hidden-title">
+              <h2 className="p-section-title" id="bookable-hidden-title">
+                可预约场次
+              </h2>
+              <div className="p-banner p-banner-info" role="status">
+                {BOOKABLE_HIDDEN_NOTE}
+              </div>
+            </section>
+          ) : null}
+
+          {showBookable ? (
             <section className="p-card" aria-labelledby="bookable-title">
               <div className="p-row">
                 <h2 className="p-section-title" id="bookable-title">
@@ -419,6 +519,7 @@ export default function HomePage() {
                             : "p-room-button"
                         }
                         data-testid="room-option"
+                        data-room-id={candidate.id}
                         disabled={disabled}
                         aria-pressed={selected}
                         onClick={() => {
@@ -473,7 +574,7 @@ export default function HomePage() {
                 </div>
               ) : null}
             </section>
-          )}
+          ) : null}
 
           <PageLinks items={["history", "contact"]} />
         </>

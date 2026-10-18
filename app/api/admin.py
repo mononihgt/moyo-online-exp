@@ -6,10 +6,11 @@ from sqlalchemy import func, or_, select
 
 from ..config import get_settings
 from ..constants import (
+    ARCHIVE_ADMIN_ABORTED,
     ARCHIVE_ADMIN_CANCELLED,
+    ARCHIVE_COMPLETED,
     ARCHIVE_QUESTIONNAIRE_INCOMPLETE,
     ARCHIVE_REASONS,
-    ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
     BOOKING_CANCELED,
@@ -17,6 +18,7 @@ from ..constants import (
     PARTICIPANT_COMPLETED,
     PARTICIPANT_DISABLED,
     PAYMENT_PAID,
+    QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
     ROOM_FULL,
     ROOM_INSTRUCTIONS,
@@ -703,7 +705,7 @@ async def post_archive_room(room_id: str, payload: RoomAction, admin: AdminDep, 
         await db.commit()
         room = await _get_room(db, room_id)
         reason = payload.reason or _default_archive_reason(room)
-        _validate_archive_reason(reason)
+        await _validate_archive_reason(db, room, reason)
         await archive_room(db, room, reason)
         _audit(db, admin, "room_archived", "room", room.id, {"reason": reason})
         await db.commit()
@@ -714,14 +716,38 @@ async def post_archive_room(room_id: str, payload: RoomAction, admin: AdminDep, 
 def _default_archive_reason(room: Room) -> str:
     if room.status == ROOM_QUESTIONNAIRE:
         return ARCHIVE_QUESTIONNAIRE_INCOMPLETE
-    if room.status in (ROOM_INSTRUCTIONS, ROOM_PLAYING):
-        return ARCHIVE_TECHNICAL_ABORT
+    if room.status in (ROOM_WAITING, ROOM_INSTRUCTIONS, ROOM_PLAYING) or utcnow() >= room.starts_at:
+        return ARCHIVE_ADMIN_ABORTED
     return ARCHIVE_ADMIN_CANCELLED
 
 
-def _validate_archive_reason(reason: str) -> None:
+async def _validate_archive_reason(db, room: Room, reason: str) -> None:
     if reason not in ARCHIVE_REASONS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "归档原因无效")
+    if room.status == ROOM_ARCHIVED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "房间已归档")
+    if room.status == ROOM_QUESTIONNAIRE:
+        allowed = {ARCHIVE_QUESTIONNAIRE_INCOMPLETE}
+    elif (
+        room.status in (ROOM_WAITING, ROOM_INSTRUCTIONS, ROOM_PLAYING)
+        or utcnow() >= room.starts_at
+    ):
+        allowed = {ARCHIVE_ADMIN_ABORTED}
+    else:
+        allowed = {ARCHIVE_ADMIN_CANCELLED}
+    statuses = list(
+        (
+            await db.execute(
+                select(RoomParticipant.questionnaire_status).where(RoomParticipant.room_id == room.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if statuses and all(status == QUESTIONNAIRE_COMPLETED for status in statuses):
+        allowed.add(ARCHIVE_COMPLETED)
+    if reason not in allowed:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "当前阶段不允许该归档原因")
 
 
 @router.post("/rooms/{room_id}/bookings", dependencies=[Depends(require_csrf)])
@@ -732,8 +758,6 @@ async def add_booking(room_id: str, payload: BookingCreate, admin: AdminDep, db:
         participant = await db.get(Participant, payload.participant_id)
         if participant is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
-        if participant.status != "eligible":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "参与者当前状态不允许报名")
         booking = await book_room(db, room, participant, allow_after_start=True)
         _audit(db, admin, "booking_added", "room", room.id, {"participantId": participant.id})
         await db.commit()
@@ -845,7 +869,7 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
         action = payload.action
         if action == "force_archive":
             reason = payload.reason or _default_archive_reason(room)
-            _validate_archive_reason(reason)
+            await _validate_archive_reason(db, room, reason)
             await archive_room(db, room, reason)
             _audit(db, admin, "room_force_archived", "room", room.id, {"reason": reason})
             await db.commit()

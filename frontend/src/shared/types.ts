@@ -12,10 +12,13 @@ export type ArchiveReason =
   | "completed"
   | "not_full"
   | "no_show"
+  | "no_start"
   | "abandoned"
   | "technical_abort"
   | "questionnaire_incomplete"
+  | "admin_aborted"
   | "admin_cancelled";
+export type RewardKind = "completion" | "showup" | "none";
 export type BookingStatus = "booked" | "canceled" | "attended" | "no_show";
 export type QuestionnaireStatus = "not_started" | "in_progress" | "completed";
 export type VersionStatus = "draft" | "published" | "archived";
@@ -27,6 +30,7 @@ export interface ParticipantMe {
   phoneMasked: string;
   status: ParticipantStatus;
   canBook: boolean;
+  hasPendingQuestionnaire: boolean;
   consentRequired: boolean;
   consentVersion: { id: string; version: number; publishedAt: string | null } | null;
   completedExperiments: number;
@@ -60,6 +64,8 @@ export interface CurrentRoom {
   status: RoomStatus;
   archiveReason: ArchiveReason | null;
   canEnter: boolean;
+  canCancel: boolean;
+  bookingStatus: BookingStatus;
   role: 1 | 2 | null;
   instructionCompleted: boolean;
   questionnaireStatus: QuestionnaireStatus | null;
@@ -96,6 +102,10 @@ export interface ExperimentRecord {
   questionnaireStatus: QuestionnaireStatus | null;
   completedAt: string | null;
   payment: Payment | null;
+  selfAttended: boolean;
+  selfExited: boolean;
+  canRebook: boolean;
+  rewardKind: RewardKind;
 }
 
 export interface MediaAsset {
@@ -436,12 +446,18 @@ export interface RoomStateMessage {
     instructionCompleted: boolean;
     questionnaireStatus: QuestionnaireStatus | null;
     completedAt: string | null;
+    canExit: boolean;
   };
   partner: PartnerState;
   instruction?: InstructionState;
   game?: GameState;
   questionnaire?: { url: string | null; status: QuestionnaireStatus; submitted: boolean };
-  archive?: { reason: ArchiveReason; canRebook: boolean };
+  archive?: {
+    reason: ArchiveReason;
+    canRebook: boolean;
+    selfExited: boolean;
+    rewardKind: RewardKind;
+  };
 }
 
 export interface TurnMessage {
@@ -515,7 +531,16 @@ export type ServerMessage =
   | { type: "rest_complete"; roomId: string }
   | { type: "game_over"; roomId: string; trialsCompleted: number; questionnaireUrl: string | null }
   | { type: "questionnaire_required"; roomId: string; url: string | null; status: QuestionnaireStatus }
-  | { type: "room_archived"; roomId: string; reason: ArchiveReason | null; canRebook?: boolean }
+  | {
+      type: "room_archived";
+      roomId: string;
+      reason: ArchiveReason | null;
+      selfExited: boolean;
+      selfQuestionnaireStatus: QuestionnaireStatus | null;
+      selfCompleted: boolean;
+      canRebook: boolean;
+      rewardKind: RewardKind;
+    }
   | { type: "trial_start"; roomId: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; serverNow: string };

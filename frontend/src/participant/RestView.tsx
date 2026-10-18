@@ -1,6 +1,11 @@
 import { useRef } from "react";
 
 import type { PartnerState, RestMessage } from "../shared/types";
+import { ExitControl } from "./ExitControl";
+import {
+  PARTNER_OFFLINE_RECONNECTING,
+  REST_SELF_DISCONNECTED,
+} from "./flowCopy";
 import type { SocketStatus } from "./RoomSocket";
 import { formatClock, secondsLeft, useNow } from "./time";
 
@@ -57,7 +62,10 @@ export function RestView({
   socketStatus,
   serverOffsetMs,
   selfReady,
+  exitPending,
+  canExit,
   onReady,
+  onExit,
 }: {
   data: RestViewData;
   role: 1 | 2 | null;
@@ -65,16 +73,25 @@ export function RestView({
   socketStatus: SocketStatus;
   serverOffsetMs: number;
   selfReady: boolean;
+  exitPending: boolean;
+  canExit: boolean;
   onReady: () => void;
+  onExit: () => void;
 }) {
   const now = useNow(250);
   const heldRef = useRef(data.restSeconds);
   const socketActive = socketStatus === "open";
+  const clockActive = socketActive && partner.online;
   const rawRemaining = secondsLeft(data.deadline, now, serverOffsetMs);
-  if (rawRemaining !== null && socketActive) {
+  const reconnectRemaining = secondsLeft(
+    partner.disconnectedUntil,
+    now,
+    serverOffsetMs,
+  );
+  if (rawRemaining !== null && clockActive) {
     heldRef.current = rawRemaining;
   }
-  const remaining = socketActive
+  const remaining = clockActive
     ? rawRemaining ?? heldRef.current
     : heldRef.current;
   const partnerReady =
@@ -110,19 +127,21 @@ export function RestView({
             ? "搭档已准备"
             : partner.online
               ? "等待搭档准备"
-              : "搭档离线，等待重新连接"}
+              : reconnectRemaining !== null && reconnectRemaining > 0
+                ? `搭档离线，重连剩余 ${formatClock(reconnectRemaining)}`
+                : PARTNER_OFFLINE_RECONNECTING}
         </span>
       </div>
       {!socketActive ? (
         <p className="p-muted" role="status">
-          连接中断，正在重新连接。倒计时已暂停。
+          {REST_SELF_DISCONNECTED}
         </p>
       ) : null}
       <button
         type="button"
         className="p-btn p-btn-primary exp-rest-ready"
         data-testid="rest-ready"
-        disabled={selfReady || !socketActive}
+        disabled={selfReady || !socketActive || exitPending}
         onClick={onReady}
       >
         {bothReady
@@ -131,6 +150,16 @@ export function RestView({
             ? "已准备，等待搭档"
             : "准备继续"}
       </button>
+      {canExit ? (
+        <div className="exp-rest-exit">
+          {exitPending ? (
+            <p className="p-muted" role="status">
+              正在退出实验，请稍候…
+            </p>
+          ) : null}
+          <ExitControl onConfirm={onExit} disabled={exitPending} />
+        </div>
+      ) : null}
       <p className="exp-small-screen exp-viewport-hint">
         建议使用桌面浏览器并保持窗口足够大
       </p>

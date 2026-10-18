@@ -94,6 +94,10 @@
   background: var(--participant-error);
 }
 
+.exp-partner-dot.pending {
+  background: var(--participant-warning);
+}
+
 .exp-instructions {
   width: min(760px, calc(100% - 32px));
   margin: 0 auto;

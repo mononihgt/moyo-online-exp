@@ -6,13 +6,12 @@ import secrets
 from datetime import datetime, timedelta
 
 from fastapi import WebSocket
-from sqlalchemy import select
+from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketDisconnect
 
 from ..constants import (
     ARCHIVE_ABANDONED,
-    ARCHIVE_COMPLETED,
     ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
@@ -53,6 +52,7 @@ from ..models import (
     Booking,
     GameTrial,
     Room,
+    RoomEvent,
     RoomParticipant,
     RoomTimer,
     Turn,
@@ -64,7 +64,15 @@ from .instructions import render_markdown
 from .locking import room_lock
 from .participants import new_analysis_code
 from .questionnaire_flow import questionnaire_link_for_participant
-from .rooms import archive_reason_for_wait_expiry, archive_room, lock_config, mark_attended, transition_to_waiting
+from .rooms import (
+    archive_reason_for_wait_expiry,
+    archive_room,
+    can_rebook_for_participant,
+    lock_config,
+    mark_attended,
+    participant_reward_kind,
+    transition_to_waiting,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,10 +162,13 @@ class RuntimeManager:
                 .join(Room, Room.id == Booking.room_id)
                 .where(
                     Booking.participant_id == participant.id,
-                    Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)),
-                    Room.status != ROOM_ARCHIVED,
+                    or_(
+                        (Room.status != ROOM_ARCHIVED)
+                        & Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)),
+                        (Room.status == ROOM_ARCHIVED) & (Booking.status == BOOKING_ATTENDED),
+                    ),
                 )
-                .order_by(Room.starts_at.desc())
+                .order_by(case((Room.status == ROOM_ARCHIVED, 1), else_=0), Room.starts_at.desc())
             )
             booking = bookings.scalars().first()
             if booking is None:
@@ -172,13 +183,22 @@ class RuntimeManager:
         async with room_lock(room_id):
             async with session_scope() as db:
                 room = await db.get(Room, room_id)
-                if room is None or room.status == ROOM_ARCHIVED:
+                if room is None:
                     await self._safe_send(
                         websocket,
-                        {"type": "room_archived", "roomId": room_id, "reason": room.archive_reason if room else None},
+                        {"type": "error", "code": "no_active_room", "message": "当前没有可进入的房间"},
                     )
                     await websocket.close(code=4404)
                     return None
+                if room.status == ROOM_ARCHIVED:
+                    self.connections.setdefault(room_id, {})[participant.id] = websocket
+                    await self._send_snapshot(db, room, participant.id)
+                    await self._send_json(
+                        room.id,
+                        participant.id,
+                        {"type": "room_archived", "roomId": room.id, **await self._archive_payload(db, room, participant.id)},
+                    )
+                    return room.id
                 old = self.connections.get(room_id, {}).get(participant.id)
                 self.connections.setdefault(room_id, {})[participant.id] = websocket
                 if old is not None and old is not websocket:
@@ -190,8 +210,16 @@ class RuntimeManager:
                 reconnected = participant.id in state["disconnected"]
                 resumed = False
                 if room.status == ROOM_INSTRUCTIONS:
-                    self._resume_instruction(state, participant.id, now)
                     state["disconnected"].pop(participant.id, None)
+                    incomplete_ids = [
+                        row.participant_id
+                        for row in rows
+                        if row.instruction_completed_at is None
+                    ]
+                    if all(
+                        pid in self.connections.get(room_id, {}) for pid in incomplete_ids
+                    ):
+                        self._resume_instruction_clocks(state, incomplete_ids, now)
                     await self._persist_instruction_seconds(db, room, role_rows, state)
                 elif room.status == ROOM_PLAYING:
                     state["disconnected"].pop(participant.id, None)
@@ -237,7 +265,7 @@ class RuntimeManager:
                         due = now + timedelta(seconds=room.reconnect_window_seconds)
                         state["disconnected"][participant.id] = isoformat_utc(due)
                         if room.status == ROOM_INSTRUCTIONS:
-                            self._accumulate_instruction_seconds(state, participant.id, now)
+                            self._pause_instruction_clocks(state, now)
                         else:
                             self._pause_game_clock(state)
                         add_event(db, room, "disconnect", participant.id, payload)
@@ -347,19 +375,24 @@ class RuntimeManager:
         if len(bookings) != 2:
             add_event(db, room, "partner_absent", participant.id, {"reason": "partner_missing"})
             await db.commit()
-            await self._send_error(participant.id, room.id, "partner_missing", "另一名被试尚未报名")
+            await self._send_error(participant.id, room.id, "partner_missing", "搭档尚未进入实验。")
             return
         if any(booking.status != BOOKING_ATTENDED for booking in bookings):
             add_event(db, room, "partner_absent", participant.id, {"reason": "not_entered"})
             await db.commit()
-            await self._send_error(participant.id, room.id, "partner_absent", "另一名被试尚未进入实验")
+            await self._send_error(participant.id, room.id, "partner_absent", "搭档尚未进入实验。")
             await self._broadcast_partner_state(db, room)
             return
         participants = [booking.participant_id for booking in bookings]
         if any(pid not in self.connections.get(room.id, {}) for pid in participants):
             add_event(db, room, "partner_absent", participant.id, {"reason": "offline"})
             await db.commit()
-            await self._send_error(participant.id, room.id, "partner_absent", "另一名被试不在线")
+            await self._send_error(
+                participant.id,
+                room.id,
+                "partner_absent",
+                "搭档当前不在线，请等待其重新连接。",
+            )
             await self._broadcast_partner_state(db, room)
             return
         state = _state(room)
@@ -496,12 +529,15 @@ class RuntimeManager:
             await self._broadcast_partner_state(db, room)
 
     async def _handle_exit(self, db: AsyncSession, room: Room, participant) -> None:
-        if room.status != ROOM_WAITING:
+        if room.status == ROOM_WAITING:
+            bookings = await self._active_bookings(db, room.id)
+            if sum(1 for booking in bookings if booking.status == BOOKING_ATTENDED) >= 2:
+                await self._send_error(
+                    participant.id, room.id, "partner_present", "搭档已到场，不能退出实验"
+                )
+                return
+        elif room.status not in (ROOM_INSTRUCTIONS, ROOM_PLAYING):
             await self._send_error(participant.id, room.id, "invalid_state", "当前状态不能退出")
-            return
-        bookings = await self._active_bookings(db, room.id)
-        if sum(1 for booking in bookings if booking.status == BOOKING_ATTENDED) >= 2:
-            await self._send_error(participant.id, room.id, "partner_present", "搭档已到场，不能退出实验")
             return
         add_event(db, room, "participant_exited", participant.id)
         await archive_room(db, room, ARCHIVE_ABANDONED)
@@ -1103,8 +1139,15 @@ class RuntimeManager:
             accumulated += max(0.0, (now - started).total_seconds())
         return accumulated
 
-    def _resume_instruction(self, state: dict, participant_id: str, now: datetime) -> None:
-        state["instruction"]["connected_since"][participant_id] = isoformat_utc(now)
+    def _resume_instruction_clocks(
+        self, state: dict, participant_ids: list[str], now: datetime
+    ) -> None:
+        for participant_id in participant_ids:
+            state["instruction"]["connected_since"][participant_id] = isoformat_utc(now)
+
+    def _pause_instruction_clocks(self, state: dict, now: datetime) -> None:
+        for participant_id in list(state["instruction"]["connected_since"]):
+            self._accumulate_instruction_seconds(state, participant_id, now)
 
     def _accumulate_instruction_seconds(self, state: dict, participant_id: str, now: datetime) -> None:
         since = state["instruction"]["connected_since"].get(participant_id)
@@ -1307,6 +1350,10 @@ class RuntimeManager:
                 if booking.participant_id != participant_id:
                     partner_id = booking.participant_id
         partner_row = next((row for row in rows if row.participant_id == partner_id), None)
+        attended_count = sum(1 for booking in bookings if booking.status == BOOKING_ATTENDED)
+        can_exit = (
+            room.status == ROOM_WAITING and attended_count < 2
+        ) or room.status in (ROOM_INSTRUCTIONS, ROOM_PLAYING)
         partner = {
             "online": bool(partner_id and partner_id in self.connections.get(room.id, {})),
             "entered": bool(
@@ -1342,6 +1389,7 @@ class RuntimeManager:
                 "instructionCompleted": bool(role_row and role_row.instruction_completed_at is not None),
                 "questionnaireStatus": role_row.questionnaire_status if role_row else None,
                 "completedAt": isoformat_utc(role_row.completed_at) if role_row else None,
+                "canExit": can_exit,
             },
             "partner": partner,
         }
@@ -1357,9 +1405,14 @@ class RuntimeManager:
                 "submitted": role_row.questionnaire_status == QUESTIONNAIRE_COMPLETED,
             }
         if room.status == ROOM_ARCHIVED:
+            archive_payload = await self._archive_payload(db, room, participant_id)
             payload["archive"] = {
-                "reason": room.archive_reason,
-                "canRebook": room.archive_reason != ARCHIVE_COMPLETED,
+                "reason": archive_payload["reason"],
+                "canRebook": archive_payload["canRebook"],
+                "selfExited": archive_payload["selfExited"],
+                "selfQuestionnaireStatus": archive_payload["selfQuestionnaireStatus"],
+                "selfCompleted": archive_payload["selfCompleted"],
+                "rewardKind": archive_payload["rewardKind"],
             }
         await self._send_json(room.id, participant_id, payload)
 
@@ -1582,6 +1635,38 @@ class RuntimeManager:
                 },
             )
 
+    async def _archive_payload(self, db: AsyncSession, room: Room, participant_id: str) -> dict:
+        rows = await db.execute(
+            select(RoomParticipant).where(
+                RoomParticipant.room_id == room.id, RoomParticipant.participant_id == participant_id
+            )
+        )
+        role_row = rows.scalars().first()
+        exited_query = await db.execute(
+            select(RoomEvent.id)
+            .where(
+                RoomEvent.room_id == room.id,
+                RoomEvent.participant_id == participant_id,
+                RoomEvent.type == "participant_exited",
+            )
+            .limit(1)
+        )
+        self_exited = exited_query.first() is not None
+        booking_query = await db.execute(
+            select(Booking).where(Booking.room_id == room.id, Booking.participant_id == participant_id)
+        )
+        booking = booking_query.scalars().first()
+        return {
+            "reason": room.archive_reason,
+            "selfExited": self_exited,
+            "selfQuestionnaireStatus": role_row.questionnaire_status if role_row else None,
+            "selfCompleted": bool(
+                role_row is not None and role_row.questionnaire_status == QUESTIONNAIRE_COMPLETED
+            ),
+            "canRebook": await can_rebook_for_participant(db, room, participant_id),
+            "rewardKind": participant_reward_kind(room, role_row, booking),
+        }
+
     async def notify_room(self, room_id: str) -> None:
         async with room_lock(room_id):
             async with session_scope() as db:
@@ -1596,8 +1681,7 @@ class RuntimeManager:
                             {
                                 "type": "room_archived",
                                 "roomId": room.id,
-                                "reason": room.archive_reason,
-                                "canRebook": room.archive_reason != ARCHIVE_COMPLETED,
+                                **await self._archive_payload(db, room, participant_id),
                             },
                         )
                 for participant_id in list(self.connections.get(room.id, {}).keys()):
@@ -1612,8 +1696,7 @@ class RuntimeManager:
                 {
                     "type": "room_archived",
                     "roomId": room.id,
-                    "reason": room.archive_reason,
-                    "canRebook": room.archive_reason != ARCHIVE_COMPLETED,
+                    **await self._archive_payload(db, room, participant_id),
                 },
             )
             await self._send_snapshot(db, room, participant_id)

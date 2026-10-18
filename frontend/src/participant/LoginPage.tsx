@@ -65,7 +65,7 @@ export default function LoginPage() {
             {error}
           </div>
         ) : null}
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <div className="p-field">
             <label className="p-label" htmlFor="login-name">
               姓名

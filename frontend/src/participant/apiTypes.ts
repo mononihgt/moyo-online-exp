@@ -39,6 +39,8 @@ export interface PendingQuestionnaire {
   roomId: string;
   startsAt: string;
   questionnaireStatus: QuestionnaireStatus;
+  archiveReason: ArchiveReason | null;
+  canContinue: boolean;
 }
 
 export interface MyRoomResponse {
@@ -61,6 +63,8 @@ export interface QuestionnaireContextResponse {
   url: string | null;
   status: QuestionnaireStatus;
   submitted: boolean;
+  archiveReason: ArchiveReason | null;
+  roomStatus: RoomStatus;
 }
 
 export interface ContactResponse {
@@ -106,45 +110,6 @@ export const QUESTIONNAIRE_STATUS_LABELS: Record<QuestionnaireStatus, string> = 
   not_started: "未开始",
   in_progress: "填写中",
   completed: "已完成",
-};
-
-export interface ArchiveCopy {
-  title: string;
-  detail: string;
-  showContact?: boolean;
-}
-
-export const ARCHIVE_COPY: Record<ArchiveReason, ArchiveCopy> = {
-  completed: {
-    title: "实验已完成",
-    detail: "本次实验已经结束。你可以在完成页面查看费用与支付状态。",
-  },
-  not_full: {
-    title: "报名人数不足",
-    detail: "等待窗口结束前未达到两名参与者，本次实验已关闭。你可以改报其他时间。",
-  },
-  no_show: {
-    title: "搭档未到场",
-    detail: "另一名参与者未按时到场，本次实验未能开始。你可以改报其他时间。",
-  },
-  abandoned: {
-    title: "实验已中止",
-    detail: "搭档已离开本次实验，本次实验已结束。你可以改报其他时间。",
-  },
-  technical_abort: {
-    title: "因技术原因中止",
-    detail: "连接未能按时恢复，本次实验已中止。费用会按照到场规则处理。如需帮助，请联系实验主试。",
-    showContact: true,
-  },
-  questionnaire_incomplete: {
-    title: "问卷未完成",
-    detail: "后测问卷未完成，本次实验记录已归档。请联系实验主试确认后续安排。",
-    showContact: true,
-  },
-  admin_cancelled: {
-    title: "实验已取消",
-    detail: "实验主试已取消本次实验。你可以改报其他时间。",
-  },
 };
 
 export function formatUnknownError(error: unknown, fallback: string): string {

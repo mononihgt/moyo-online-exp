@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 
 import type { InstructionState, PartnerState } from "../shared/types";
 import { ROLE_LABELS } from "./apiTypes";
+import { ExitControl } from "./ExitControl";
+import {
+  INSTRUCTION_PARTNER_OFFLINE,
+  INSTRUCTION_SELF_DISCONNECTED,
+} from "./flowCopy";
 import { formatClock } from "./time";
 
 export function InstructionsView({
@@ -9,15 +14,21 @@ export function InstructionsView({
   partner,
   connectionActive,
   actionPending,
+  exitPending,
+  canExit,
   onComplete,
   onEnterGame,
+  onExit,
 }: {
   instruction: InstructionState;
   partner: PartnerState;
   connectionActive: boolean;
   actionPending: boolean;
+  exitPending: boolean;
+  canExit: boolean;
   onComplete: () => void;
   onEnterGame: () => void;
+  onExit: () => void;
 }) {
   const [elapsed, setElapsed] = useState(instruction.connectedSeconds);
 
@@ -25,13 +36,15 @@ export function InstructionsView({
     setElapsed(instruction.connectedSeconds);
   }, [instruction.connectedSeconds]);
 
+  const clockActive = connectionActive && partner.online;
+
   useEffect(() => {
-    if (!connectionActive || instruction.completed) return;
+    if (!clockActive || instruction.completed) return;
     const timer = window.setInterval(() => {
       setElapsed((current) => current + 1);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [connectionActive, instruction.completed]);
+  }, [clockActive, instruction.completed]);
 
   const remaining = Math.max(0, instruction.minReadingSeconds - elapsed);
   const canComplete = instruction.completed || remaining === 0;
@@ -40,7 +53,7 @@ export function InstructionsView({
     ? "搭档已完成阅读"
     : partner.online
       ? "搭档正在阅读"
-      : "搭档离线，等待重新连接";
+      : INSTRUCTION_PARTNER_OFFLINE;
 
   return (
     <div className="exp-instructions">
@@ -54,21 +67,28 @@ export function InstructionsView({
             {instruction.role === 1 ? "菱形" : "圆形"}标记。
           </p>
         </div>
-        <div className="exp-reading-status" role="status">
-          <div>
-            最短阅读时间：{formatClock(instruction.minReadingSeconds)}
-          </div>
-          <div>
-            {instruction.completed
-              ? "你已完成阅读"
-              : remaining > 0
-                ? `请继续阅读，剩余 ${formatClock(remaining)}`
-                : "已满足最短阅读时间"}
-          </div>
-          <div>{partnerReading}</div>
-          {!connectionActive ? (
-            <div className="exp-reading-paused">连接中断，阅读计时已暂停</div>
+        <div className="exp-instructions-side">
+          {canExit ? (
+            <ExitControl onConfirm={onExit} disabled={exitPending} />
           ) : null}
+          <div className="exp-reading-status" role="status">
+            <div>
+              最短阅读时间：{formatClock(instruction.minReadingSeconds)}
+            </div>
+            <div>
+              {instruction.completed
+                ? "你已完成阅读"
+                : remaining > 0
+                  ? `请继续阅读，剩余 ${formatClock(remaining)}`
+                  : "已满足最短阅读时间"}
+            </div>
+            <div>{partnerReading}</div>
+            {!connectionActive ? (
+              <div className="exp-reading-paused">
+                {INSTRUCTION_SELF_DISCONNECTED}
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -83,7 +103,9 @@ export function InstructionsView({
           type="button"
           className="p-btn p-btn-primary"
           data-testid="instruction-complete"
-          disabled={!canComplete || instruction.completed || actionPending}
+          disabled={
+            !canComplete || instruction.completed || actionPending || exitPending
+          }
           onClick={onComplete}
           aria-describedby="reading-remaining"
         >
@@ -116,7 +138,7 @@ export function InstructionsView({
             type="button"
             className="p-btn p-btn-primary"
             data-testid="enter-game"
-            disabled={instruction.enterRequested || actionPending}
+            disabled={instruction.enterRequested || actionPending || exitPending}
             onClick={onEnterGame}
           >
             {instruction.enterRequested ? "已确认，等待搭档" : "进入实验"}

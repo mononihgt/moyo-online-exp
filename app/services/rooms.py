@@ -1,18 +1,23 @@
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
-    ARCHIVE_ABANDONED,
     ARCHIVE_ADMIN_CANCELLED,
-    ARCHIVE_NOT_FULL,
+    ARCHIVE_COMPLETED,
     ARCHIVE_NO_SHOW,
+    ARCHIVE_NO_START,
+    ARCHIVE_NOT_FULL,
+    ARCHIVE_QUESTIONNAIRE_INCOMPLETE,
+    ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
     BOOKING_CANCELED,
     BOOKING_NO_SHOW,
+    PARTICIPANT_COMPLETED,
     PARTICIPANT_ELIGIBLE,
+    QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
     ROOM_DRAFT,
     ROOM_FULL,
@@ -29,6 +34,7 @@ from ..models import (
     Booking,
     ConditionVersion,
     InstructionVersion,
+    Participant,
     QuestionnaireVersion,
     Room,
     RoomConfigRevision,
@@ -194,16 +200,73 @@ async def blocking_booking_for_participant(db: AsyncSession, participant_id: str
         .where(
             Booking.participant_id == participant_id,
             Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)),
-            Room.status.not_in((ROOM_ARCHIVED, ROOM_QUESTIONNAIRE)),
+            Room.status != ROOM_ARCHIVED,
         )
         .order_by(Booking.created_at.desc())
     )
     return query.scalars().first()
 
 
+async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> tuple[bool, bool]:
+    participant = await db.get(Participant, participant_id)
+    if participant is None:
+        return False, False
+    rows = await db.execute(
+        select(RoomParticipant.questionnaire_status)
+        .join(Room, Room.id == RoomParticipant.room_id)
+        .where(
+            RoomParticipant.participant_id == participant_id,
+            or_(
+                Room.status == ROOM_QUESTIONNAIRE,
+                and_(
+                    Room.status == ROOM_ARCHIVED,
+                    Room.archive_reason.in_((ARCHIVE_QUESTIONNAIRE_INCOMPLETE, ARCHIVE_COMPLETED)),
+                ),
+            ),
+        )
+    )
+    statuses = list(rows.scalars().all())
+    pending = any(status != QUESTIONNAIRE_COMPLETED for status in statuses)
+    locked = participant.status == PARTICIPANT_COMPLETED or bool(statuses)
+    return locked, pending
+
+
+def booking_lock_message(pending: bool) -> str:
+    if pending:
+        return "你已完成本次正式实验，但后测问卷尚未提交。请先继续填写并提交问卷，目前无法预约新的场次。"
+    return "你已完成全部实验，无法再预约新的场次。"
+
+
+def participant_reward_kind(
+    room: Room, room_participant: RoomParticipant | None, booking: Booking | None
+) -> str:
+    if room_participant is not None and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED:
+        return "completion"
+    if (
+        room.archive_reason == ARCHIVE_TECHNICAL_ABORT
+        and booking is not None
+        and booking.status == BOOKING_ATTENDED
+        and room.showup_pay_cents > 0
+    ):
+        return "showup"
+    return "none"
+
+
+async def can_rebook_for_participant(db: AsyncSession, room: Room, participant_id: str) -> bool:
+    if room.status != ROOM_ARCHIVED:
+        return False
+    if room.archive_reason in (ARCHIVE_COMPLETED, ARCHIVE_QUESTIONNAIRE_INCOMPLETE):
+        return False
+    locked, _pending = await one_time_experiment_lock(db, participant_id)
+    return not locked
+
+
 async def book_room(
     db: AsyncSession, room: Room, participant, *, allow_after_start: bool = False
 ) -> Booking:
+    locked, pending = await one_time_experiment_lock(db, participant.id)
+    if locked:
+        raise HTTPException(status.HTTP_409_CONFLICT, booking_lock_message(pending))
     if participant.status != PARTICIPANT_ELIGIBLE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "当前账号状态不允许报名")
     consent = await current_consent_version(db)
@@ -338,16 +401,17 @@ async def archive_room(db: AsyncSession, room: Room, reason: str) -> None:
             pass
     participants_query = await db.execute(select(RoomParticipant).where(RoomParticipant.room_id == room.id))
     room_participants = {item.participant_id: item for item in participants_query.scalars().all()}
-    for booking in bookings:
-        if booking.status in (BOOKING_CANCELED,):
-            continue
-        await upsert_payment(
-            db,
-            room,
-            booking.participant_id,
-            booking=booking,
-            room_participant=room_participants.get(booking.participant_id),
-        )
+    if reason == ARCHIVE_TECHNICAL_ABORT and room.showup_pay_cents > 0:
+        for booking in bookings:
+            if booking.status != BOOKING_ATTENDED:
+                continue
+            await upsert_payment(
+                db,
+                room,
+                booking.participant_id,
+                booking=booking,
+                room_participant=room_participants.get(booking.participant_id),
+            )
     add_event(
         db,
         room,
@@ -360,6 +424,8 @@ async def archive_room(db: AsyncSession, room: Room, reason: str) -> None:
 async def cancel_room(db: AsyncSession, room: Room) -> None:
     if room.status not in (ROOM_DRAFT, ROOM_OPEN, ROOM_FULL):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前状态不允许取消房间")
+    if utcnow() >= room.starts_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "开始时间已到，无法取消房间")
     await archive_room(db, room, ARCHIVE_ADMIN_CANCELLED)
 
 
@@ -369,7 +435,7 @@ def archive_reason_for_wait_expiry(bookings: list[Booking]) -> str:
         return ARCHIVE_NOT_FULL
     if any(booking.status != BOOKING_ATTENDED for booking in remaining):
         return ARCHIVE_NO_SHOW
-    return ARCHIVE_ABANDONED
+    return ARCHIVE_NO_START
 
 
 async def room_summary(db: AsyncSession, room: Room) -> dict:

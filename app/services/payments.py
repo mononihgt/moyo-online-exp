@@ -6,11 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..constants import (
+    ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
-    BOOKING_NO_SHOW,
     PAYMENT_PAID,
     PAYMENT_PENDING,
     QUESTIONNAIRE_COMPLETED,
+    ROOM_ARCHIVED,
 )
 from ..models import Booking, GameTrial, Payment, Room, RoomParticipant
 from ..timeutil import isoformat_utc, utcnow, week_deadline_utc
@@ -50,7 +51,7 @@ async def upsert_payment(
     *,
     booking: Booking | None = None,
     room_participant: RoomParticipant | None = None,
-) -> Payment:
+) -> Payment | None:
     if booking is None:
         query = await db.execute(
             select(Booking).where(Booking.room_id == room.id, Booking.participant_id == participant_id)
@@ -64,11 +65,6 @@ async def upsert_payment(
         )
         room_participant = query.scalars().first()
 
-    trials_query = await db.execute(
-        select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
-    )
-    trials = list(trials_query.scalars().all())
-
     existing_query = await db.execute(
         select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant_id)
     )
@@ -76,21 +72,30 @@ async def upsert_payment(
 
     completed = room_participant is not None and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
     attended = booking is not None and booking.status == BOOKING_ATTENDED
-    no_show = booking is None or booking.status == BOOKING_NO_SHOW
+    settings = get_settings()
 
     base = 0
     performance = 0
     showup = 0
     if completed:
+        trials_query = await db.execute(
+            select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
+        )
+        trials = list(trials_query.scalars().all())
         base = room.base_pay_cents
         performance = compute_performance_cents(room, trials, room_participant.role)
-    elif attended and room.status == "archived":
+        deadline = payment_deadline(room, room_participant.completed_at)
+    elif (
+        room.status == ROOM_ARCHIVED
+        and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
+        and attended
+        and room.showup_pay_cents > 0
+    ):
         showup = room.showup_pay_cents
-    elif no_show and room.status == "archived":
-        showup = 0
+        deadline = week_deadline_utc(room.archived_at or utcnow(), settings.timezone)
+    else:
+        return None
 
-    completed_at = room_participant.completed_at if room_participant is not None else None
-    deadline = payment_deadline(room, completed_at)
     if payment is None:
         payment = Payment(
             room_id=room.id,
@@ -101,7 +106,11 @@ async def upsert_payment(
     payment.base_pay_cents = base
     payment.performance_pay_cents = performance
     payment.showup_pay_cents = showup
-    payment.total_cents = payment.override_amount_cents if payment.override_amount_cents is not None else base + performance + showup
+    payment.total_cents = (
+        payment.override_amount_cents
+        if payment.override_amount_cents is not None
+        else base + performance + showup
+    )
     payment.deadline_at = deadline
     payment.computed_at = utcnow()
     if payment.status == PAYMENT_PAID:

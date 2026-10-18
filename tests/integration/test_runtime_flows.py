@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.timeutil import week_deadline_utc
 from conftest import (
     ApiClient,
     WsClient,
@@ -40,6 +41,9 @@ class Context:
         rows=3,
         cols=4,
         min_reading_seconds=None,
+        base_pay_cents=1000,
+        performance_rate_cents=1,
+        showup_pay_cents=500,
         label="Integration Room",
     ):
         if min_reading_seconds is not None:
@@ -64,6 +68,9 @@ class Context:
             starts_in_seconds=starts_in_seconds,
             wait_window_seconds=wait_window_seconds,
             reconnect_window_seconds=reconnect_window_seconds,
+            base_pay_cents=base_pay_cents,
+            performance_rate_cents=performance_rate_cents,
+            showup_pay_cents=showup_pay_cents,
             label=label,
         )
 
@@ -142,7 +149,7 @@ def _close_participants(admin, *clients):
 
 
 @pytest.mark.integration
-def test_wait_window_archives_not_full_and_showup_payment(server):
+def test_wait_window_archives_not_full_without_payment(server):
     context = Context(server)
     import_roster(context.admin, [("独行者", "13700000001")])
     room = context.room(starts_in_seconds=2, wait_window_seconds=2)
@@ -153,18 +160,27 @@ def test_wait_window_archives_not_full_and_showup_payment(server):
     ws.send("enter_room", roomId=room["id"])
     state = ws.recv_until("room_state")
     assert state["bookedCount"] == 1
+    assert state["self"]["canExit"] is True
     archived = ws.recv_until("room_archived", timeout=20)
     assert archived["reason"] == "not_full"
+    assert archived["selfExited"] is False
+    assert archived["selfCompleted"] is False
+    assert archived["canRebook"] is True
+    assert archived["rewardKind"] == "none"
     wait_until(
         lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"]["status"] == "archived",
         timeout=10,
     )
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 1
-    assert payments[0]["showupPayCents"] == 500
-    assert payments[0]["totalCents"] == 500
+    assert payments == []
     me = participant.json("GET", "/api/me")["me"]
     assert me["status"] == "eligible"
+    assert me["canBook"] is True
+    experiment = participant.json("GET", "/api/my-experiments")["experiments"][0]
+    assert experiment["selfAttended"] is True
+    assert experiment["selfExited"] is False
+    assert experiment["canRebook"] is True
+    assert experiment["rewardKind"] == "none"
     new_room = context.room(starts_in_seconds=60)
     bookable = participant.json("GET", "/api/rooms/bookable")
     assert any(item["id"] == new_room["id"] and item["canBook"] for item in bookable["rooms"])
@@ -188,13 +204,13 @@ def test_two_bookings_one_absent_archives_no_show(server):
     ws.send("start_matching", roomId=room["id"])
     error = ws.recv_until("error")
     assert error["code"] == "partner_absent"
+    assert error["message"] == "搭档尚未进入实验。"
     archived = ws.recv_until("room_archived", timeout=20)
     assert archived["reason"] == "no_show"
+    assert archived["rewardKind"] == "none"
+    assert archived["canRebook"] is True
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    by_name = {(item["name"]): item for item in payments}
-    assert by_name["到场甲"]["showupPayCents"] == 500
-    assert by_name["缺席乙"]["showupPayCents"] == 0
-    assert by_name["缺席乙"]["totalCents"] == 0
+    assert payments == []
     bookings = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["bookings"]
     statuses = {booking["name"]: booking["status"] for booking in bookings}
     assert statuses["到场甲"] == "attended"
@@ -221,8 +237,18 @@ def test_participant_cannot_exit_when_partner_present(server):
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     assert detail["room"]["status"] == "waiting"
     assert participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting"
-    ws_a.close()
     ws_b.close()
+    for _ in range(40):
+        message = ws_a.recv()
+        if message.get("type") == "partner_state" and message["partner"]["online"] is False:
+            break
+    else:
+        raise AssertionError("partner offline state did not arrive")
+    ws_a.send("start_matching", roomId=room["id"])
+    offline_error = ws_a.recv_until("error")
+    assert offline_error["code"] == "partner_absent"
+    assert offline_error["message"] == "搭档当前不在线，请等待其重新连接。"
+    ws_a.close()
     _close_participants(context.admin, participant_a, participant_b)
 
 
@@ -242,11 +268,31 @@ def test_participant_exit_with_absent_partner_archives_abandoned(server):
     ws_a.send("exit_room", roomId=room["id"])
     archived = ws_a.recv_until("room_archived", timeout=10)
     assert archived["reason"] == "abandoned"
+    assert archived["selfExited"] is True
+    assert archived["selfQuestionnaireStatus"] is None
+    assert archived["selfCompleted"] is False
+    assert archived["canRebook"] is True
+    assert archived["rewardKind"] == "none"
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    by_name = {item["name"]: item for item in payments}
-    assert by_name["退出丙"]["showupPayCents"] == 500
-    assert by_name["缺席丁"]["showupPayCents"] == 0
+    assert payments == []
     assert participant_a.json("GET", "/api/my-room")["room"] is None
+    experiment = participant_a.json("GET", "/api/my-experiments")["experiments"][0]
+    assert experiment["selfAttended"] is True
+    assert experiment["selfExited"] is True
+    assert experiment["canRebook"] is True
+    assert experiment["rewardKind"] == "none"
+    ws_a.close()
+    ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
+    reconnect_state = ws_a.recv_until("room_state")
+    assert reconnect_state["status"] == "archived"
+    assert reconnect_state["archive"]["reason"] == "abandoned"
+    assert reconnect_state["archive"]["selfExited"] is True
+    assert reconnect_state["archive"]["selfQuestionnaireStatus"] is None
+    assert reconnect_state["archive"]["selfCompleted"] is False
+    assert reconnect_state["archive"]["canRebook"] is True
+    assert reconnect_state["archive"]["rewardKind"] == "none"
+    reconnect_archived = ws_a.recv_until("room_archived")
+    assert reconnect_archived["selfExited"] is True
     ws_a.close()
     _close_participants(context.admin, participant_a, participant_b)
 
@@ -343,12 +389,27 @@ def test_reconnect_timeout_archives_technical_abort(server):
     ws_b.close()
     archived = ws_a.recv_until("room_archived", timeout=15)
     assert archived["reason"] == "technical_abort"
+    assert archived["selfExited"] is False
+    assert archived["selfQuestionnaireStatus"] == "not_started"
+    assert archived["selfCompleted"] is False
+    assert archived["canRebook"] is True
+    assert archived["rewardKind"] == "showup"
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     assert detail["room"]["status"] == "archived"
     assert detail["room"]["archiveReason"] == "technical_abort"
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
     assert len(payments) == 2
     assert all(item["showupPayCents"] == 500 for item in payments)
+    assert all(item["basePayCents"] == 0 and item["performancePayCents"] == 0 for item in payments)
+    archived_at = datetime.fromisoformat(detail["room"]["archivedAt"].replace("Z", "+00:00"))
+    expected_deadline = week_deadline_utc(
+        archived_at.astimezone(timezone.utc).replace(tzinfo=None), "Asia/Shanghai"
+    )
+    assert all(
+        datetime.fromisoformat(item["deadlineAt"].replace("Z", "+00:00")).replace(tzinfo=None)
+        == expected_deadline
+        for item in payments
+    )
     ws_a.close()
     _close_participants(context.admin, participant_a, participant_b)
 
@@ -413,8 +474,13 @@ def test_server_restart_recovers_playing_room(server):
     _close_participants(admin, participant_a, participant_b)
 
 
+PENDING_QUESTIONNAIRE_MESSAGE = (
+    "你已完成本次正式实验，但后测问卷尚未提交。请先继续填写并提交问卷，目前无法预约新的场次。"
+)
+
+
 @pytest.mark.integration
-def test_questionnaire_pending_allows_new_booking_and_manual_archive(server):
+def test_questionnaire_pending_locks_booking_and_manual_archive(server):
     context = Context(server)
     import_roster(context.admin, [("问卷甲", "13700000071"), ("问卷乙", "13700000072")])
     room = context.room(starts_in_seconds=2, turn_seconds=3)
@@ -449,42 +515,90 @@ def test_questionnaire_pending_allows_new_booking_and_manual_archive(server):
     assert room_state["status"] == "questionnaire"
 
     new_room = context.room(starts_in_seconds=60, label="Second room")
-    participant_a.json("POST", f"/api/rooms/{new_room['id']}/book")
+    blocked_booking = participant_a.request("POST", f"/api/rooms/{new_room['id']}/book")
+    assert blocked_booking.status_code == 409
+    assert blocked_booking.json()["detail"] == PENDING_QUESTIONNAIRE_MESSAGE
+    bookable = participant_a.json("GET", "/api/rooms/bookable")
+    assert bookable["canBook"] is False
+    assert next(item for item in bookable["rooms"] if item["id"] == new_room["id"])["canBook"] is False
     my_room = participant_a.json("GET", "/api/my-room")
-    assert my_room["room"]["roomId"] == new_room["id"]
-    assert my_room["pendingQuestionnaires"][0]["roomId"] == room["id"]
+    assert my_room["room"]["roomId"] == room["id"]
+    pending = next(item for item in my_room["pendingQuestionnaires"] if item["roomId"] == room["id"])
+    assert pending["archiveReason"] is None
+    assert pending["canContinue"] is True
     links = context.admin.json(
         "POST", f"/admin/api/rooms/{room['id']}/actions", json={"action": "resend_questionnaire"}
     )
     assert len(links["links"]) == 2
     old_context = participant_a.json("GET", f"/api/questionnaire/context?roomId={room['id']}")
     assert old_context["roomId"] == room["id"]
+    assert old_context["roomStatus"] == "questionnaire"
+    assert old_context["archiveReason"] is None
     assert old_context["url"]
     participant_me = participant_a.json("GET", "/api/me")["me"]
     assert participant_me["status"] == "eligible"
+    assert participant_me["canBook"] is False
+    assert participant_me["hasPendingQuestionnaire"] is True
+    assert participant_me["isCompleted"] is False
 
+    rejected = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "force_archive", "reason": "completed"},
+    )
+    assert rejected.status_code == 400
+    rejected = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "force_archive", "reason": "technical_abort"},
+    )
+    assert rejected.status_code == 400
     context.admin.json(
         "POST",
         f"/admin/api/rooms/{room['id']}/actions",
         json={"action": "force_archive", "reason": "questionnaire_incomplete"},
     )
+    archived_a = ws_a.recv_until("room_archived")
+    assert archived_a["reason"] == "questionnaire_incomplete"
+    assert archived_a["selfQuestionnaireStatus"] == "in_progress"
+    assert archived_a["selfCompleted"] is False
+    assert archived_a["canRebook"] is False
+    assert archived_a["rewardKind"] == "none"
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     assert detail["room"]["status"] == "archived"
     assert detail["room"]["archiveReason"] == "questionnaire_incomplete"
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert all(item["status"] == "pending" for item in payments)
-    assert all(item["showupPayCents"] == 500 for item in payments)
+    assert payments == []
     participant_me = participant_a.json("GET", "/api/me")["me"]
     assert participant_me["status"] == "eligible"
+    assert participant_me["canBook"] is False
+    assert participant_me["hasPendingQuestionnaire"] is True
+    assert participant_me["isCompleted"] is False
     archived_context = participant_a.json(
         "GET", f"/api/questionnaire/context?roomId={room['id']}"
     )
     assert archived_context["roomId"] == room["id"]
+    assert archived_context["roomStatus"] == "archived"
+    assert archived_context["archiveReason"] == "questionnaire_incomplete"
     assert archived_context["url"]
     my_room = participant_a.json("GET", "/api/my-room")
-    assert any(
-        item["roomId"] == room["id"] for item in my_room["pendingQuestionnaires"]
+    assert my_room["room"] is None
+    pending = next(
+        item for item in my_room["pendingQuestionnaires"] if item["roomId"] == room["id"]
     )
+    assert pending["archiveReason"] == "questionnaire_incomplete"
+    assert pending["canContinue"] is True
+    blocked_again = participant_a.request("POST", f"/api/rooms/{new_room['id']}/book")
+    assert blocked_again.status_code == 409
+    assert blocked_again.json()["detail"] == PENDING_QUESTIONNAIRE_MESSAGE
+    experiment = participant_a.json("GET", "/api/my-experiments")["experiments"][0]
+    assert experiment["archiveReason"] == "questionnaire_incomplete"
+    assert experiment["questionnaireStatus"] == "in_progress"
+    assert experiment["selfAttended"] is True
+    assert experiment["selfExited"] is False
+    assert experiment["canRebook"] is False
+    assert experiment["rewardKind"] == "none"
+    assert experiment["payment"] is None
     ws_a.close()
     ws_b.close()
     _close_participants(context.admin, participant_a, participant_b)
@@ -521,14 +635,27 @@ def test_admin_extend_wait_add_remove_booking_and_force_archive(server):
     )
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     assert detail["room"]["bookedCount"] == 1
-    context.admin.json(
+    rejected = context.admin.request(
         "POST",
         f"/admin/api/rooms/{room['id']}/actions",
         json={"action": "force_archive", "reason": "technical_abort"},
     )
+    assert rejected.status_code == 400
+    rejected = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "force_archive", "reason": "admin_cancelled"},
+    )
+    assert rejected.status_code == 400
+    context.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "force_archive", "reason": "admin_aborted"},
+    )
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     assert detail["room"]["status"] == "archived"
-    assert detail["room"]["archiveReason"] == "technical_abort"
+    assert detail["room"]["archiveReason"] == "admin_aborted"
+    assert context.admin.json("GET", "/admin/api/payments")["payments"] == []
     _close_participants(context.admin, participant_a, participant_b)
 
 

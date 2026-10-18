@@ -203,7 +203,7 @@ export function PaymentsPage() {
     <div>
       <PageHeader
         title="付款"
-        subtitle="核对参与者付款金额，覆盖金额必须填写备注。导出包含全部付款记录。"
+        subtitle="核对参与者付款金额，覆盖金额必须填写备注。付款名单 CSV 仅包含完成实验者与技术中止到场费记录。"
         actions={
           <button
             type="button"

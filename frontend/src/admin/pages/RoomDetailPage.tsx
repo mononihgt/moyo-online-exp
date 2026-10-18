@@ -24,6 +24,7 @@ import {
 import type {
   AdminBooking,
   AdminRoomParticipant,
+  ArchiveReason,
   Payment,
   RoomDetail,
   RoomMonitor,
@@ -62,10 +63,11 @@ import {
 } from "../ui";
 import {
   ARCHIVE_REASON_LABELS,
-  ARCHIVE_REASON_OPTIONS,
   BOOKING_STATUS_LABELS,
   PARTICIPANT_STATUS_LABELS,
   PAYMENT_STATUS_LABELS,
+  archiveReasonOptionsForStatus,
+  defaultArchiveReasonForStatus,
   phaseLabel,
 } from "../labels";
 import {
@@ -139,7 +141,7 @@ export function RoomDetailPage() {
   const [monitorLoading, setMonitorLoading] = useState(false);
   const [monitorError, setMonitorError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
-  const [archiveReason, setArchiveReason] = useState("technical_abort");
+  const [archiveReasonChoice, setArchiveReasonChoice] = useState<string | null>(null);
   const [extendOpen, setExtendOpen] = useState(false);
   const [extendMinutes, setExtendMinutes] = useState("5");
   const [extendError, setExtendError] = useState<string | null>(null);
@@ -234,6 +236,19 @@ export function RoomDetailPage() {
   const room = detail?.room ?? null;
   const canEdit = room !== null && EDITABLE_STATUSES.includes(room.status);
   const lockStartsAt = room !== null && room.status === "waiting";
+  const roomStarted = room !== null && Date.parse(room.startsAt) <= Date.now();
+  const archiveOptions =
+    room === null ? [] : archiveReasonOptionsForStatus(room.status, roomStarted);
+  const defaultArchiveReason =
+    room === null
+      ? "admin_aborted"
+      : defaultArchiveReasonForStatus(room.status, roomStarted);
+  const archiveReason: ArchiveReason =
+    archiveReasonChoice !== null &&
+    archiveOptions.includes(archiveReasonChoice as ArchiveReason)
+      ? (archiveReasonChoice as ArchiveReason)
+      : defaultArchiveReason;
+  const canForceArchive = archiveOptions.length > 0;
 
   const participantNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -390,9 +405,10 @@ export function RoomDetailPage() {
   }
 
   async function forceArchive() {
+    if (!canForceArchive) return;
     const ok = await confirm({
       title: "强制归档",
-      message: `确认强制归档「${room?.internalLabel ?? ""}」？归档原因：${ARCHIVE_REASON_LABELS[archiveReason as keyof typeof ARCHIVE_REASON_LABELS] ?? archiveReason}。未完成问卷的参与者不会被自动标记完成。`,
+      message: `确认强制归档「${room?.internalLabel ?? ""}」？归档原因：${ARCHIVE_REASON_LABELS[archiveReason]}。未完成问卷的参与者不会被自动标记完成。`,
       confirmLabel: "强制归档",
       danger: true,
     });
@@ -1197,9 +1213,10 @@ export function RoomDetailPage() {
                         id="archive-reason"
                         className="admin-select"
                         value={archiveReason}
-                        onChange={(event) => setArchiveReason(event.target.value)}
+                        disabled={!canForceArchive}
+                        onChange={(event) => setArchiveReasonChoice(event.target.value)}
                       >
-                        {ARCHIVE_REASON_OPTIONS.map((reason) => (
+                        {archiveOptions.map((reason) => (
                           <option key={reason} value={reason}>
                             {ARCHIVE_REASON_LABELS[reason]}
                           </option>
@@ -1210,11 +1227,14 @@ export function RoomDetailPage() {
                       type="button"
                       className="admin-btn admin-btn-danger"
                       onClick={() => void forceArchive()}
-                      disabled={actionBusy !== null}
+                      disabled={actionBusy !== null || !canForceArchive}
                     >
                       <Archive size={15} />
                       强制归档
                     </button>
+                    {!canForceArchive ? (
+                      <p className="admin-hint">房间已归档，不能再次归档。</p>
+                    ) : null}
                   </div>
                   <div>
                     <Field label="等待窗口" htmlFor="extend-wait">

@@ -3,6 +3,9 @@ from sqlalchemy import and_, func, or_, select
 
 from ..config import get_settings
 from ..constants import (
+    ARCHIVE_ADMIN_CANCELLED,
+    ARCHIVE_COMPLETED,
+    ARCHIVE_QUESTIONNAIRE_INCOMPLETE,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
     BOOKING_CANCELED,
@@ -13,18 +16,20 @@ from ..constants import (
     ROOM_OPEN,
     ROOM_QUESTIONNAIRE,
 )
-from ..models import Booking, Payment, Room, RoomParticipant, SystemSetting
+from ..models import Booking, Payment, Room, RoomEvent, RoomParticipant, SystemSetting
 from ..schemas import ConsentRequest, ParticipantQuestionnaireCompleteRequest
 from ..services.instructions import render_markdown
 from ..services.jatos import build_questionnaire_url
+from ..services.participants import current_consent_version, participant_me
 from ..services.payments import serialize_payment
 from ..services.questionnaire_flow import complete_with_participant
-from ..services.participants import current_consent_version, participant_me
 from ..services.rooms import (
     active_booking_for_participant,
     blocking_booking_for_participant,
     book_room,
     cancel_booking,
+    one_time_experiment_lock,
+    participant_reward_kind,
 )
 from ..timeutil import isoformat_utc, utcnow
 from .auth import clear_participant_cookies
@@ -87,7 +92,8 @@ async def bookable_rooms(participant: ParticipantDep, db: DbSession):
     blocking_booking = await blocking_booking_for_participant(db, participant.id)
     consent = await current_consent_version(db)
     consent_ok = consent is not None and participant.consent_version_id == consent.id
-    eligible = participant.status == PARTICIPANT_ELIGIBLE and consent_ok
+    locked, _pending = await one_time_experiment_lock(db, participant.id)
+    eligible = participant.status == PARTICIPANT_ELIGIBLE and consent_ok and not locked
     items = []
     for room in rooms:
         count = int(counts.get(room.id, 0))
@@ -144,7 +150,7 @@ async def cancel(booking_id: str, participant: ParticipantDep, db: DbSession):
     return {"canceled": True}
 
 
-async def _room_public_state(db, room: Room, participant) -> dict:
+async def _room_public_state(db, room: Room, participant, booking: Booking) -> dict:
     count_query = await db.execute(
         select(func.count(Booking.id)).where(
             Booking.room_id == room.id, Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED))
@@ -165,6 +171,12 @@ async def _room_public_state(db, room: Room, participant) -> dict:
         "status": room.status,
         "archiveReason": room.archive_reason,
         "canEnter": now >= room.starts_at or room.status not in (ROOM_OPEN, ROOM_FULL),
+        "canCancel": (
+            room.status in (ROOM_OPEN, ROOM_FULL)
+            and now < room.starts_at
+            and booking.status == BOOKING_BOOKED
+        ),
+        "bookingStatus": booking.status,
         "role": role_row.role if role_row else None,
         "instructionCompleted": bool(role_row and role_row.instruction_completed_at is not None),
         "questionnaireStatus": role_row.questionnaire_status if role_row else None,
@@ -195,6 +207,8 @@ async def my_room(participant: ParticipantDep, db: DbSession):
             "roomId": room.id,
             "startsAt": isoformat_utc(room.starts_at),
             "questionnaireStatus": row.questionnaire_status,
+            "archiveReason": room.archive_reason,
+            "canContinue": True,
         }
         for room, row in pending_rows.all()
     ]
@@ -203,7 +217,7 @@ async def my_room(participant: ParticipantDep, db: DbSession):
         return {"room": None, "pendingQuestionnaires": pending_questionnaires}
     room = await db.get(Room, booking.room_id)
     return {
-        "room": await _room_public_state(db, room, participant),
+        "room": await _room_public_state(db, room, participant, booking),
         "bookingId": booking.id,
         "pendingQuestionnaires": pending_questionnaires,
     }
@@ -214,11 +228,45 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
     rows = await db.execute(
         select(Booking, Room)
         .join(Room, Room.id == Booking.room_id)
-        .where(Booking.participant_id == participant.id, Booking.status != BOOKING_CANCELED)
+        .where(
+            Booking.participant_id == participant.id,
+            or_(
+                Booking.status != BOOKING_CANCELED,
+                and_(
+                    Booking.status == BOOKING_CANCELED,
+                    Room.status == ROOM_ARCHIVED,
+                    Room.archive_reason == ARCHIVE_ADMIN_CANCELLED,
+                ),
+            ),
+        )
         .order_by(Room.starts_at.desc())
     )
+    records = rows.all()
+    room_ids = {room.id for _booking, room in records}
+    canceled_by_participant: set[str] = set()
+    exited_rooms: set[str] = set()
+    if room_ids:
+        canceled_rows = await db.execute(
+            select(RoomEvent.room_id).where(
+                RoomEvent.participant_id == participant.id,
+                RoomEvent.type == "booking_canceled",
+                RoomEvent.room_id.in_(room_ids),
+            )
+        )
+        canceled_by_participant = set(canceled_rows.scalars().all())
+        exited_rows = await db.execute(
+            select(RoomEvent.room_id).where(
+                RoomEvent.participant_id == participant.id,
+                RoomEvent.type == "participant_exited",
+                RoomEvent.room_id.in_(room_ids),
+            )
+        )
+        exited_rooms = set(exited_rows.scalars().all())
+    locked, _pending = await one_time_experiment_lock(db, participant.id)
     items = []
-    for booking, room in rows.all():
+    for booking, room in records:
+        if booking.status == BOOKING_CANCELED and room.id in canceled_by_participant:
+            continue
         role_row_query = await db.execute(
             select(RoomParticipant).where(
                 RoomParticipant.room_id == room.id, RoomParticipant.participant_id == participant.id
@@ -229,6 +277,11 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
             select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant.id)
         )
         payment = payment_query.scalars().first()
+        can_rebook = (
+            room.status == ROOM_ARCHIVED
+            and room.archive_reason not in (ARCHIVE_COMPLETED, ARCHIVE_QUESTIONNAIRE_INCOMPLETE)
+            and not locked
+        )
         items.append(
             {
                 "roomId": room.id,
@@ -240,6 +293,10 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
                 "instructionCompleted": bool(role_row and role_row.instruction_completed_at is not None),
                 "questionnaireStatus": role_row.questionnaire_status if role_row else None,
                 "completedAt": isoformat_utc(role_row.completed_at) if role_row else None,
+                "selfAttended": booking.status == BOOKING_ATTENDED,
+                "selfExited": room.id in exited_rooms,
+                "canRebook": can_rebook,
+                "rewardKind": participant_reward_kind(room, role_row, booking),
                 "payment": (
                     serialize_payment(payment, role_row.analysis_code if role_row else None)
                     if payment is not None
@@ -305,6 +362,8 @@ async def questionnaire_context(
         url = None
     return {
         "roomId": room.id,
+        "roomStatus": room.status,
+        "archiveReason": room.archive_reason,
         "url": url,
         "status": row.questionnaire_status,
         "submitted": row.questionnaire_status == QUESTIONNAIRE_COMPLETED,

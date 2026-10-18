@@ -8,6 +8,8 @@ import type {
   TurnResultMessage,
 } from "../shared/types";
 import { ROLE_LABELS } from "./apiTypes";
+import { ExitControl } from "./ExitControl";
+import { TURN_SELF_DISCONNECTED } from "./flowCopy";
 import { GameBoard } from "./GameBoard";
 import type { SocketStatus } from "./RoomSocket";
 import { formatClock, secondsLeft, useNow } from "./time";
@@ -38,7 +40,10 @@ export function TurnView({
   serverOffsetMs,
   formalTrialTotal,
   submitted,
+  exitPending,
+  canExit,
   onSubmit,
+  onExit,
 }: {
   role: 1 | 2;
   game: GameState;
@@ -49,11 +54,15 @@ export function TurnView({
   serverOffsetMs: number;
   formalTrialTotal: number | null;
   submitted: boolean;
+  exitPending: boolean;
+  canExit: boolean;
   onSubmit: (cells: number[]) => void;
+  onExit: () => void;
 }) {
   const now = useNow(250);
   const [selected, setSelected] = useState<number[]>([]);
   const socketActive = socketStatus === "open";
+  const clockActive = socketActive && partner.online;
   const roundKey = `${game.trialIndex}:${game.round}`;
   const lastRemainingRef = useRef(game.turnSeconds);
 
@@ -73,10 +82,10 @@ export function TurnView({
   const displayRound = result?.round ?? game.round;
   const deadline = result?.deadline ?? turn?.deadline ?? game.turnDeadline;
   const rawRemaining = secondsLeft(deadline, now, serverOffsetMs);
-  if (rawRemaining !== null && socketActive) {
+  if (rawRemaining !== null && clockActive) {
     lastRemainingRef.current = rawRemaining;
   }
-  const remaining = socketActive
+  const remaining = clockActive
     ? rawRemaining ?? lastRemainingRef.current
     : lastRemainingRef.current;
   const turnSeconds = game.turnSeconds > 0 ? game.turnSeconds : 30;
@@ -85,16 +94,16 @@ export function TurnView({
     remaining <= 5 ? "danger" : remaining <= 10 ? "warning" : "normal";
   const reconnectRemaining = secondsLeft(partner.disconnectedUntil, now, serverOffsetMs);
   const partnerSubmitted = game.partnerSubmitted || partner.submitted === true;
-  const partnerText = partnerSubmitted
-    ? "搭档已提交"
-    : partner.online
-      ? "搭档在线"
-      : reconnectRemaining !== null && reconnectRemaining > 0
-        ? `搭档离线 · 重连剩余 ${formatClock(reconnectRemaining)}`
-        : "搭档离线";
+  const partnerText = !partner.online
+    ? reconnectRemaining !== null && reconnectRemaining > 0
+      ? `搭档离线，重连剩余 ${formatClock(reconnectRemaining)}`
+      : "搭档离线"
+    : partnerSubmitted
+      ? "搭档已提交"
+      : "搭档在线";
 
   const toggleCell = (index: number) => {
-    if (result !== null || submitted || !socketActive) return;
+    if (result !== null || submitted || !socketActive || exitPending) return;
     setSelected((current) =>
       current.includes(index)
         ? current.filter((candidate) => candidate !== index)
@@ -106,7 +115,8 @@ export function TurnView({
     selected.length > 0 &&
     result === null &&
     !submitted &&
-    socketActive;
+    socketActive &&
+    !exitPending;
 
   const submit = () => {
     if (!canSubmit) return;
@@ -172,20 +182,25 @@ export function TurnView({
           <span className="exp-hud-partner" data-testid="hud-partner">
             <span
               className={
-                partnerSubmitted || partner.online
-                  ? "exp-partner-dot"
-                  : "exp-partner-dot offline"
+                !partner.online
+                  ? "exp-partner-dot offline"
+                  : partnerSubmitted
+                    ? "exp-partner-dot"
+                    : "exp-partner-dot pending"
               }
               aria-hidden="true"
             />
             {partnerText}
           </span>
+          {canExit ? (
+            <ExitControl onConfirm={onExit} disabled={exitPending} />
+          ) : null}
         </div>
       </div>
 
       {!socketActive ? (
         <div className="exp-connection-banner" role="status">
-          连接中断，正在重新连接。倒计时已暂停，请保持页面打开。
+          {TURN_SELF_DISCONNECTED}
         </div>
       ) : null}
       <p className="exp-small-screen exp-viewport-hint">
@@ -200,10 +215,10 @@ export function TurnView({
             selected={selected}
             warCells={warCells}
             flashKey={flashKey}
-            disabled={result !== null || submitted || !socketActive}
+            disabled={result !== null || submitted || !socketActive || exitPending}
             onToggle={toggleCell}
             onClear={() => {
-              if (result !== null || submitted || !socketActive) return;
+              if (result !== null || submitted || !socketActive || exitPending) return;
               setSelected([]);
             }}
           />
@@ -233,15 +248,17 @@ export function TurnView({
                   : "确认选择"}
             </button>
             <p className="exp-hint" role="status">
-              {result !== null
-                ? "回合已结算，请等待下一回合。"
-                : submitted
-                  ? "已提交，等待搭档或回合结算。"
-                  : !socketActive
-                    ? "连接中断，正在重新连接…"
-                    : selected.length === 0
-                      ? "至少选择一个格子"
-                      : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
+              {exitPending
+                ? "正在退出实验，请稍候…"
+                : result !== null
+                  ? "回合已结算，请等待下一回合。"
+                  : submitted
+                    ? "已提交，等待搭档或回合结算。"
+                    : !socketActive
+                      ? "连接中断，正在重新连接…"
+                      : selected.length === 0
+                        ? "至少选择一个格子"
+                        : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
             </p>
           </div>
         </div>

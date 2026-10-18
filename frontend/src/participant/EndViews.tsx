@@ -1,8 +1,25 @@
 import { ClipboardCheck, Home, Mail, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import type { ArchiveReason, QuestionnaireStatus } from "../shared/types";
-import { ARCHIVE_COPY, QUESTIONNAIRE_STATUS_LABELS } from "./apiTypes";
+import type {
+  ArchiveReason,
+  QuestionnaireStatus,
+  RewardKind,
+} from "../shared/types";
+import { QUESTIONNAIRE_STATUS_LABELS } from "./apiTypes";
+import { ContinueQuestionnaireButton } from "./ContinueQuestionnaireButton";
+import {
+  CONTINUE_QUESTIONNAIRE,
+  QUESTIONNAIRE_BUTTON,
+  QUESTIONNAIRE_HOME_NOTE,
+  QUESTIONNAIRE_LINK_FAILED,
+  QUESTIONNAIRE_LOCK_NOTE,
+  QUESTIONNAIRE_REQUIRED,
+  QUESTIONNAIRE_SUBMITTED,
+  REBOOK,
+  VIEW_REWARD_INFO,
+  archiveCopyFor,
+} from "./flowCopy";
 
 export interface QuestionnaireViewInfo {
   url: string | null;
@@ -27,29 +44,37 @@ export function QuestionnaireView({
         <h1 className="exp-rest-title">实验结束</h1>
         {submitted ? (
           <>
-            <p className="exp-rest-info">
-              后测问卷已提交，感谢你的参与。你可以查看完成信息与历史实验记录。
-            </p>
+            <p className="exp-rest-info">{QUESTIONNAIRE_SUBMITTED}</p>
             <div className="p-btn-row exp-end-actions">
-              <Link className="p-btn p-btn-primary" to={`/complete?room=${encodeURIComponent(roomId)}`}>
+              <Link
+                className="p-btn p-btn-primary"
+                data-testid="reward-info"
+                to={`/complete?room=${encodeURIComponent(roomId)}`}
+              >
                 <ClipboardCheck size={18} aria-hidden="true" />
-                查看完成信息
+                {VIEW_REWARD_INFO}
               </Link>
               <Link className="p-btn p-btn-secondary" to="/history">
                 历史实验
+              </Link>
+              <Link className="p-btn p-btn-secondary" to="/">
+                <Home size={18} aria-hidden="true" />
+                返回首页
               </Link>
             </div>
           </>
         ) : (
           <>
-            <p className="exp-rest-info">
-              请完成实验后测问卷。问卷会在新的页面中打开，完成后才能确认本次实验记录。
-            </p>
+            <p className="exp-rest-info">{QUESTIONNAIRE_REQUIRED}</p>
             {info !== null ? (
               <p className="p-muted">
                 问卷状态：{QUESTIONNAIRE_STATUS_LABELS[info.status]}
               </p>
             ) : null}
+            <div className="p-banner p-banner-info" role="status">
+              <p>{QUESTIONNAIRE_LOCK_NOTE}</p>
+              <p>{QUESTIONNAIRE_HOME_NOTE}</p>
+            </div>
             <div className="p-btn-row exp-end-actions">
               <button
                 type="button"
@@ -60,8 +85,16 @@ export function QuestionnaireView({
                   if (url !== null) window.location.href = url;
                 }}
               >
-                填写后测问卷
+                {QUESTIONNAIRE_BUTTON}
               </button>
+              <Link
+                className="p-btn p-btn-secondary"
+                data-testid="reward-info"
+                to={`/complete?room=${encodeURIComponent(roomId)}`}
+              >
+                <ClipboardCheck size={18} aria-hidden="true" />
+                {VIEW_REWARD_INFO}
+              </Link>
               <Link className="p-btn p-btn-secondary" to="/">
                 <Home size={18} aria-hidden="true" />
                 返回首页
@@ -69,7 +102,7 @@ export function QuestionnaireView({
             </div>
             {url === null ? (
               <div className="p-banner p-banner-warning" role="status">
-                暂时无法生成问卷链接。请联系实验主试获取问卷地址。
+                {QUESTIONNAIRE_LINK_FAILED}
                 <div className="exp-end-links">
                   <Link to="/contact">
                     <Mail size={14} aria-hidden="true" />
@@ -89,19 +122,28 @@ export function ArchiveView({
   roomId,
   reason,
   canRebook,
+  selfExited,
+  questionnaireCompleted,
+  rewardKind,
 }: {
   roomId: string;
   reason: ArchiveReason | null;
   canRebook: boolean;
+  selfExited: boolean;
+  questionnaireCompleted: boolean;
+  rewardKind: RewardKind;
 }) {
-  const copy =
-    reason === null
-      ? {
-          title: "房间已结束",
-          detail: "本次实验已结束。你可以返回首页查看当前预约或联系实验主试。",
-          showContact: true,
-        }
-      : ARCHIVE_COPY[reason];
+  const copy = archiveCopyFor(reason, {
+    selfExited,
+    questionnaireCompleted,
+    hasShowupPay: rewardKind === "showup",
+  });
+  const needsQuestionnaire =
+    reason === "questionnaire_incomplete" && !questionnaireCompleted;
+  const rebookAllowed =
+    canRebook &&
+    reason !== "completed" &&
+    reason !== "questionnaire_incomplete";
 
   return (
     <div className="exp-centered exp-archive">
@@ -110,23 +152,37 @@ export function ArchiveView({
         <h1 className="exp-rest-title">{copy.title}</h1>
         <p className="exp-rest-info">{copy.detail}</p>
         <div className="p-btn-row exp-end-actions">
-          <Link className="p-btn p-btn-primary" to="/">
+          {needsQuestionnaire ? (
+            <ContinueQuestionnaireButton
+              roomId={roomId}
+              className="p-btn p-btn-primary"
+              label={CONTINUE_QUESTIONNAIRE}
+            />
+          ) : null}
+          <Link
+            className={
+              needsQuestionnaire
+                ? "p-btn p-btn-secondary"
+                : "p-btn p-btn-primary"
+            }
+            data-testid="reward-info"
+            to={`/complete?room=${encodeURIComponent(roomId)}`}
+          >
+            <ClipboardCheck size={18} aria-hidden="true" />
+            {VIEW_REWARD_INFO}
+          </Link>
+          <Link className="p-btn p-btn-secondary" to="/">
             <Home size={18} aria-hidden="true" />
             返回首页
           </Link>
-          {canRebook ? (
-            <Link className="p-btn p-btn-secondary" to="/">
-              <RefreshCw size={18} aria-hidden="true" />
-              重新预约
-            </Link>
-          ) : null}
-          {reason === "completed" ? (
+          {rebookAllowed ? (
             <Link
               className="p-btn p-btn-secondary"
-              to={`/complete?room=${encodeURIComponent(roomId)}`}
+              data-testid="rebook"
+              to="/"
             >
-              <ClipboardCheck size={18} aria-hidden="true" />
-              查看完成信息
+              <RefreshCw size={18} aria-hidden="true" />
+              {REBOOK}
             </Link>
           ) : null}
           {copy.showContact ? (

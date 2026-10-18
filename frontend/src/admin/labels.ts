@@ -132,21 +132,49 @@ export const ARCHIVE_REASON_LABELS: Record<ArchiveReason, string> = {
   completed: "正常完成",
   not_full: "人数不足",
   no_show: "参与者缺席",
+  no_start: "未开始",
   abandoned: "参与者离开",
   technical_abort: "技术中断",
   questionnaire_incomplete: "问卷未完成",
+  admin_aborted: "主试中止",
   admin_cancelled: "主试取消",
 };
 
-export const ARCHIVE_REASON_OPTIONS: ArchiveReason[] = [
-  "completed",
-  "not_full",
-  "no_show",
-  "abandoned",
-  "technical_abort",
-  "questionnaire_incomplete",
-  "admin_cancelled",
-];
+export function archiveReasonOptionsForStatus(
+  status: RoomStatus,
+  started: boolean,
+): ArchiveReason[] {
+  switch (status) {
+    case "draft":
+    case "open":
+    case "full":
+      return [started ? "admin_aborted" : "admin_cancelled"];
+    case "waiting":
+    case "instructions":
+    case "playing":
+      return ["admin_aborted"];
+    case "questionnaire":
+      return ["questionnaire_incomplete"];
+    default:
+      return [];
+  }
+}
+
+export function defaultArchiveReasonForStatus(
+  status: RoomStatus,
+  started: boolean,
+): ArchiveReason {
+  switch (status) {
+    case "draft":
+    case "open":
+    case "full":
+      return started ? "admin_aborted" : "admin_cancelled";
+    case "questionnaire":
+      return "questionnaire_incomplete";
+    default:
+      return "admin_aborted";
+  }
+}
 
 export const QUESTION_TYPE_LABELS: Record<string, string> = {
   single_choice: "单选",

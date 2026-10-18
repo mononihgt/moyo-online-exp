@@ -6,6 +6,7 @@ import type {
   GameState,
   InstructionState,
   PartnerState,
+  RewardKind,
   RoomStateMessage,
   ServerMessage,
   TrialStartMessage,
@@ -14,6 +15,7 @@ import type {
 } from "../shared/types";
 import { ArchiveView, NoRoomView, QuestionnaireView } from "./EndViews";
 import type { QuestionnaireViewInfo } from "./EndViews";
+import { SELF_EXIT_NOTICE } from "./flowCopy";
 import { InstructionsView } from "./InstructionsView";
 import { RestView, restDataFromMessage } from "./RestView";
 import type { RestViewData } from "./RestView";
@@ -42,6 +44,13 @@ interface RoomError {
 interface ArchiveInfo {
   reason: ArchiveReason | null;
   canRebook: boolean;
+  selfExited: boolean;
+  questionnaireCompleted: boolean;
+  rewardKind: RewardKind;
+}
+
+function fallbackRebook(reason: ArchiveReason | null): boolean {
+  return reason !== "completed" && reason !== "questionnaire_incomplete";
 }
 
 function deriveRestFromGame(game: GameState): RestViewData {
@@ -140,6 +149,7 @@ export default function RoomPage() {
   const [restSelfReadyLocal, setRestSelfReadyLocal] = useState(false);
   const [exitPending, setExitPending] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const roomWasActiveRef = useRef(false);
 
   const handleMessage = useCallback(
     (message: ServerMessage) => {
@@ -155,7 +165,13 @@ export default function RoomPage() {
           return;
         }
         if (message.code === "room_archived") {
-          setArchive({ reason: null, canRebook: true });
+          setArchive({
+            reason: null,
+            canRebook: true,
+            selfExited: false,
+            questionnaireCompleted: false,
+            rewardKind: "none",
+          });
           setTerminal(true);
           return;
         }
@@ -179,6 +195,9 @@ export default function RoomPage() {
 
       switch (message.type) {
         case "room_state": {
+          if (message.status !== "archived") {
+            roomWasActiveRef.current = true;
+          }
           setRoomState(message);
           setPartner(message.partner);
           setServerOffsetMs(Date.parse(message.serverNow) - Date.now());
@@ -234,10 +253,18 @@ export default function RoomPage() {
           }
           if (message.archive || message.status === "archived") {
             const reason = message.archive?.reason ?? message.archiveReason;
+            const selfExited = message.archive?.selfExited === true;
+            const questionnaireCompleted =
+              message.self.questionnaireStatus === "completed";
             setArchive({
               reason,
               canRebook:
-                message.archive?.canRebook ?? reason !== "completed",
+                message.archive?.canRebook ?? fallbackRebook(reason),
+              selfExited,
+              questionnaireCompleted,
+              rewardKind:
+                message.archive?.rewardKind ??
+                (reason === "completed" ? "completion" : "none"),
             });
             setTerminal(true);
           }
@@ -334,9 +361,21 @@ export default function RoomPage() {
           break;
         }
         case "room_archived": {
+          if (message.selfExited && roomWasActiveRef.current) {
+            setTerminal(true);
+            navigate("/", {
+              replace: true,
+              state: { notice: SELF_EXIT_NOTICE },
+            });
+            break;
+          }
           setArchive({
             reason: message.reason,
-            canRebook: message.canRebook ?? message.reason !== "completed",
+            canRebook: message.canRebook,
+            selfExited: message.selfExited,
+            questionnaireCompleted:
+              message.selfQuestionnaireStatus === "completed",
+            rewardKind: message.rewardKind,
           });
           setTerminal(true);
           break;
@@ -432,15 +471,6 @@ export default function RoomPage() {
     return () => window.clearTimeout(timer);
   }, [error]);
 
-  useEffect(() => {
-    if (archive !== null && exitPending) {
-      navigate("/", {
-        replace: true,
-        state: { notice: "你已退出本次实验，可以重新预约。" },
-      });
-    }
-  }, [archive, exitPending, navigate]);
-
   if (roomId === "") {
     return <Navigate to="/" replace />;
   }
@@ -450,6 +480,7 @@ export default function RoomPage() {
   const sentSubmit = send;
 
   const handleStartMatching = () => {
+    if (exitPending) return;
     requestFullscreen();
     if (sentSubmit({ type: "start_matching", roomId })) {
       setError(null);
@@ -463,6 +494,7 @@ export default function RoomPage() {
   };
 
   const handleInstructionComplete = () => {
+    if (exitPending) return;
     if (sentSubmit({ type: "instruction_complete", roomId })) {
       setInstructionCompleteSent(true);
     } else {
@@ -474,6 +506,7 @@ export default function RoomPage() {
   };
 
   const handleEnterGame = () => {
+    if (exitPending) return;
     requestFullscreen();
     if (sentSubmit({ type: "enter_game", roomId })) {
       setEnterRequestedLocal(true);
@@ -486,7 +519,7 @@ export default function RoomPage() {
   };
 
   const handleSubmitSelection = (cells: number[]) => {
-    if (game === null) return;
+    if (game === null || exitPending) return;
     const clientMsgId =
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
@@ -510,6 +543,7 @@ export default function RoomPage() {
   };
 
   const handleRestReady = () => {
+    if (exitPending) return;
     if (sentSubmit({ type: "rest_ready", roomId })) {
       setRestSelfReadyLocal(true);
     } else {
@@ -521,6 +555,7 @@ export default function RoomPage() {
   };
 
   const handleExitRoom = () => {
+    if (exitPending) return;
     if (sentSubmit({ type: "exit_room", roomId })) {
       setExitPending(true);
       setNotice("正在退出实验，请稍候…");
@@ -537,8 +572,16 @@ export default function RoomPage() {
     archive ??
     (roomState?.status === "archived"
       ? {
-          reason: roomState.archiveReason,
-          canRebook: roomState.archiveReason !== "completed",
+          reason: roomState.archive?.reason ?? roomState.archiveReason,
+          canRebook:
+            roomState.archive?.canRebook ??
+            fallbackRebook(roomState.archiveReason),
+          selfExited: roomState.archive?.selfExited === true,
+          questionnaireCompleted:
+            roomState.self.questionnaireStatus === "completed",
+          rewardKind:
+            roomState.archive?.rewardKind ??
+            (roomState.archiveReason === "completed" ? "completion" : "none"),
         }
       : null);
   const questionnaireInfo: QuestionnaireViewInfo | null =
@@ -594,6 +637,7 @@ export default function RoomPage() {
   }
 
   const waitingActive = phaseKind === "waiting" && startRequested;
+  const canExit = roomState?.self.canExit !== false;
   const rootClass = [
     "exp-root",
     phaseKind === "waiting"
@@ -613,10 +657,7 @@ export default function RoomPage() {
     .join(" ");
 
   const connectionNoticeVisible =
-    socketStatus !== "open" &&
-    phaseKind !== "turn" &&
-    phaseKind !== "rest" &&
-    phaseKind !== "connecting";
+    socketStatus !== "open" && phaseKind === "waiting";
 
   return (
     <div className={rootClass} ref={shellRef}>
@@ -647,6 +688,9 @@ export default function RoomPage() {
           roomId={roomId}
           reason={archiveInfo.reason}
           canRebook={archiveInfo.canRebook}
+          selfExited={archiveInfo.selfExited}
+          questionnaireCompleted={archiveInfo.questionnaireCompleted}
+          rewardKind={archiveInfo.rewardKind}
         />
       ) : phaseKind === "missing" ? (
         <NoRoomView />
@@ -663,7 +707,10 @@ export default function RoomPage() {
           serverOffsetMs={serverOffsetMs}
           formalTrialTotal={formalTrialTotal}
           submitted={submittedLocal || game.submitted}
+          exitPending={exitPending}
+          canExit={canExit}
           onSubmit={handleSubmitSelection}
+          onExit={handleExitRoom}
         />
       ) : phaseKind === "rest" && restVisible !== null && role !== null ? (
         <RestView
@@ -676,7 +723,10 @@ export default function RoomPage() {
             restSelfReadyLocal ||
             restVisible.ready[String(role)] === true
           }
+          exitPending={exitPending}
+          canExit={canExit}
           onReady={handleRestReady}
+          onExit={handleExitRoom}
         />
       ) : phaseKind === "waiting" && roomState !== null ? (
         <WaitingView
@@ -684,10 +734,10 @@ export default function RoomPage() {
           serverOffsetMs={serverOffsetMs}
           startRequested={startRequested}
           actionPending={exitPending}
+          canExit={canExit}
           errorCode={waitErrorCode}
           onStart={handleStartMatching}
           onExit={handleExitRoom}
-          onHome={() => navigate("/")}
         />
       ) : phaseKind === "instructions" &&
         instruction !== null &&
@@ -701,8 +751,11 @@ export default function RoomPage() {
           partner={partner}
           connectionActive={socketStatus === "open"}
           actionPending={instructionCompleteSent && !instruction.completed}
+          exitPending={exitPending}
+          canExit={canExit}
           onComplete={handleInstructionComplete}
           onEnterGame={handleEnterGame}
+          onExit={handleExitRoom}
         />
       ) : phaseKind === "connecting" || phaseKind === "loading" ? (
         <div className="exp-centered">

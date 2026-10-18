@@ -87,6 +87,8 @@ async def _questionnaire_context_locked(db: AsyncSession, token: str) -> dict:
     settings = get_settings()
     return {
         "roomId": room.id,
+        "roomStatus": room.status,
+        "archiveReason": room.archive_reason,
         "analysisCode": room_participant.analysis_code,
         "completed": room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
         "questionnaire": serialize_questionnaire(questionnaire),
@@ -120,7 +122,9 @@ async def _save_draft_locked(db: AsyncSession, token: str, answers: dict) -> dic
     room, room_participant, questionnaire = await load_context(db, token)
     if room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED:
         raise HTTPException(status.HTTP_409_CONFLICT, "问卷已经提交")
-    if room.status not in (ROOM_QUESTIONNAIRE,):
+    if room.status == ROOM_ARCHIVED and room.archive_reason != "questionnaire_incomplete":
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
+    if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间不在问卷阶段")
     validate_answers(questionnaire.schema_json, answers, enforce_required=False)
     row = await db.execute(

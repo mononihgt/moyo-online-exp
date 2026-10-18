@@ -1,7 +1,9 @@
+import io
 import json
 import threading
 import time
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
@@ -13,6 +15,7 @@ from conftest import (
     ApiClient,
     WsClient,
     create_condition,
+    execute_sql,
     import_roster,
     wait_until,
 )
@@ -152,11 +155,8 @@ def test_mark_absent_while_waiting_archives_no_show(server):
     )
     archived = ws_a.recv_until("room_archived", timeout=20)
     assert archived["reason"] == "no_show"
-    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    by_name = {item["name"]: item for item in payments}
-    assert by_name["到场甲"]["showupPayCents"] == 500
-    assert by_name["标记乙"]["showupPayCents"] == 0
-    assert by_name["标记乙"]["totalCents"] == 0
+    assert archived["rewardKind"] == "none"
+    assert context.admin.json("GET", "/admin/api/payments")["payments"] == []
     detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     statuses = {booking["name"]: booking["status"] for booking in detail["bookings"]}
     assert statuses["标记乙"] == "no_show"
@@ -168,10 +168,14 @@ def test_mark_absent_while_waiting_archives_no_show(server):
 
 
 @pytest.mark.integration
-def test_mark_absent_after_archive_recomputes_pending_payment(server):
+def test_mark_absent_after_technical_abort_keeps_existing_payment(server):
     context = Context(server)
     import_roster(context.admin, [("到场丙", "13700000121"), ("标记丁", "13700000122")])
-    room = context.room(starts_in_seconds=2, wait_window_seconds=3)
+    room = context.room(
+        starts_in_seconds=2,
+        turn_seconds=30,
+        reconnect_window_seconds=2,
+    )
     participant_a = context.participant("到场丙", "13700000121")
     participant_b = context.participant("标记丁", "13700000122")
     _book(context, room, participant_a, participant_b)
@@ -179,29 +183,37 @@ def test_mark_absent_after_archive_recomputes_pending_payment(server):
         lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
         timeout=20,
     )
-    ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
-    ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
-    _enter_both(ws_a, ws_b, room["id"], context.admin)
+    ws_a, ws_b, _role_a, _role_b, _turn_a, _turn_b = _start_game(
+        context, room, participant_a, participant_b
+    )
+    ws_b.close()
     archived = ws_a.recv_until("room_archived", timeout=20)
-    assert archived["reason"] == "abandoned"
+    assert archived["reason"] == "technical_abort"
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
+    assert len(payments) == 2
     assert all(item["showupPayCents"] == 500 for item in payments)
     booking_b = next(
         booking
         for booking in context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["bookings"]
         if booking["name"] == "标记丁"
     )
-    context.admin.json(
+    result = context.admin.json(
         "POST",
         f"/admin/api/rooms/{room['id']}/actions",
         json={"action": "mark_absent", "participantId": booking_b["participantId"]},
     )
+    assert result == {"ok": True}
+    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    assert detail["room"]["archiveReason"] == "technical_abort"
+    statuses = {booking["name"]: booking["status"] for booking in detail["bookings"]}
+    assert statuses["标记丁"] == "no_show"
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
+    assert len(payments) == 2
     by_name = {item["name"]: item for item in payments}
     assert by_name["到场丙"]["totalCents"] == 500
-    assert by_name["标记丁"]["totalCents"] == 0
+    assert by_name["标记丁"]["totalCents"] == 500
+    assert by_name["标记丁"]["showupPayCents"] == 500
     ws_a.close()
-    ws_b.close()
     participant_a.close()
     participant_b.close()
     context.admin.close()
@@ -245,18 +257,20 @@ def test_archived_condition_can_still_be_updated_and_copied(server):
 @pytest.mark.integration
 def test_payment_status_patch_preserves_override_and_note(server):
     context = Context(server)
-    import_roster(context.admin, [("付款甲", "13700000131")])
-    room = context.room(starts_in_seconds=2, wait_window_seconds=2)
-    participant = context.participant("付款甲", "13700000131")
-    _book(context, room, participant)
+    import_roster(context.admin, [("付款甲", "13700000131"), ("付款乙", "13700000132")])
+    room = context.room(starts_in_seconds=2, turn_seconds=30, reconnect_window_seconds=2)
+    participant_a = context.participant("付款甲", "13700000131")
+    participant_b = context.participant("付款乙", "13700000132")
+    _book(context, room, participant_a, participant_b)
     wait_until(
-        lambda: participant.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
         timeout=20,
     )
-    ws = WsClient(server, participant.cookie_value("moyo_participant"))
-    ws.send("enter_room", roomId=room["id"])
-    ws.recv_until("room_state")
-    ws.recv_until("room_archived", timeout=20)
+    ws_a, ws_b, _role_a, _role_b, _turn_a, _turn_b = _start_game(
+        context, room, participant_a, participant_b
+    )
+    ws_b.close()
+    ws_a.recv_until("room_archived", timeout=20)
     payment = next(
         item
         for item in context.admin.json("GET", "/admin/api/payments")["payments"]
@@ -288,8 +302,9 @@ def test_payment_status_patch_preserves_override_and_note(server):
     assert cleared["overrideAmountCents"] is None
     assert cleared["note"] is None
     assert cleared["totalCents"] == 500
-    ws.close()
-    participant.close()
+    ws_a.close()
+    participant_a.close()
+    participant_b.close()
     context.admin.close()
 
 
@@ -609,30 +624,64 @@ def test_concurrent_questionnaire_completion_keeps_single_canonical(server):
 
 
 @pytest.mark.integration
-def test_payment_export_only_contains_completed_questionnaires(server):
+def test_payment_export_filters_and_analysis_zip_keeps_all(server):
     context = Context(server)
-    import_roster(context.admin, [("导出甲", "13700000211")])
-    room = context.room(starts_in_seconds=2, wait_window_seconds=2)
-    participant = context.participant("导出甲", "13700000211")
-    _book(context, room, participant)
+    import_roster(
+        context.admin, [("导出甲", "13700000211"), ("导出乙", "13700000212")]
+    )
+    room = context.room(starts_in_seconds=2, turn_seconds=30, reconnect_window_seconds=2)
+    participant_a = context.participant("导出甲", "13700000211")
+    participant_b = context.participant("导出乙", "13700000212")
+    _book(context, room, participant_a, participant_b)
     wait_until(
-        lambda: participant.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
         timeout=20,
     )
-    ws = WsClient(server, participant.cookie_value("moyo_participant"))
-    ws.send("enter_room", roomId=room["id"])
-    ws.recv_until("room_state")
-    ws.recv_until("room_archived", timeout=20)
+    ws_a, ws_b, _role_a, _role_b, _turn_a, _turn_b = _start_game(
+        context, room, participant_a, participant_b
+    )
+    ws_b.close()
+    archived = ws_a.recv_until("room_archived", timeout=20)
+    assert archived["reason"] == "technical_abort"
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 1
-    assert payments[0]["showupPayCents"] == 500
+    assert len(payments) == 2
+    assert all(item["showupPayCents"] == 500 for item in payments)
+
     export = context.admin.request("GET", "/admin/api/payments/export.csv")
     assert export.status_code == 200
     text = export.content.decode("utf-8-sig")
-    assert "导出甲" not in text
-    assert "13700000211" not in text
-    ws.close()
-    participant.close()
+    for value in ("导出甲", "13700000211", "导出乙", "13700000212"):
+        assert value in text
+
+    zip_response = context.admin.request(
+        "GET", f"/admin/api/rooms/{room['id']}/analysis.zip"
+    )
+    assert zip_response.status_code == 200
+    analysis = zipfile.ZipFile(io.BytesIO(zip_response.content))
+    payment_csv = analysis.read("payment.csv").decode("utf-8-sig")
+    assert len(payment_csv.strip().splitlines()) == 3
+
+    execute_sql(
+        "UPDATE rooms SET archive_reason = %s WHERE id = %s",
+        ("admin_aborted", room["id"]),
+    )
+    filtered = context.admin.request("GET", "/admin/api/payments/export.csv")
+    assert filtered.status_code == 200
+    filtered_text = filtered.content.decode("utf-8-sig")
+    assert "导出甲" not in filtered_text
+    assert "13700000211" not in filtered_text
+    assert len(filtered_text.strip().splitlines()) == 1
+
+    zip_after = context.admin.request(
+        "GET", f"/admin/api/rooms/{room['id']}/analysis.zip"
+    )
+    assert zip_after.status_code == 200
+    analysis_after = zipfile.ZipFile(io.BytesIO(zip_after.content))
+    payment_csv_after = analysis_after.read("payment.csv").decode("utf-8-sig")
+    assert len(payment_csv_after.strip().splitlines()) == 3
+    ws_a.close()
+    participant_a.close()
+    participant_b.close()
     context.admin.close()
 
 

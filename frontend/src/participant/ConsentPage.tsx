@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { formatDateTime } from "../shared/format";
-import { api } from "../shared/api";
+import { ApiError } from "../shared/api";
 import type { ConsentDocument } from "../shared/types";
 import { formatUnknownError, isUnauthorized } from "./apiTypes";
 import type { ConsentSubmitResponse } from "./apiTypes";
@@ -29,6 +29,11 @@ export default function ConsentPage() {
       })
       .catch((error: unknown) => {
         if (!alive || isUnauthorized(error)) return;
+        if (error instanceof ApiError && error.status === 404) {
+          setDocument(null);
+          setLoadError("");
+          return;
+        }
         setLoadError(formatUnknownError(error, "无法加载知情同意书，请稍后重试。"));
       })
       .finally(() => {

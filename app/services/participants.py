@@ -172,6 +172,8 @@ async def current_consent_version(db: AsyncSession) -> ConsentVersion | None:
 
 
 async def participant_me(db: AsyncSession, participant: Participant) -> dict:
+    from .rooms import one_time_experiment_lock
+
     consent = await current_consent_version(db)
     consent_required = consent is not None and participant.consent_version_id != consent.id
     completed_count_query = await db.execute(
@@ -180,12 +182,14 @@ async def participant_me(db: AsyncSession, participant: Participant) -> dict:
         )
     )
     completed_count = completed_count_query.scalar_one()
+    locked, pending_questionnaire = await one_time_experiment_lock(db, participant.id)
     return {
         "id": participant.id,
         "name": participant.name,
         "phoneMasked": mask_phone(decrypt_phone(participant.phone_encrypted)),
         "status": participant.status,
-        "canBook": participant.status == PARTICIPANT_ELIGIBLE and not consent_required,
+        "canBook": participant.status == PARTICIPANT_ELIGIBLE and not consent_required and not locked,
+        "hasPendingQuestionnaire": pending_questionnaire,
         "consentRequired": consent_required,
         "consentVersion": (
             {"id": consent.id, "version": consent.version, "publishedAt": isoformat_utc(consent.published_at)}

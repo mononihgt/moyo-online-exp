@@ -471,6 +471,74 @@
   line-height: 1.8;
 }
 
+.contact-note {
+  margin-top: 16px;
+}
+
+.exp-exit-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--participant-muted);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: var(--radius-participant-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.exp-exit-link:hover:not(:disabled) {
+  background: #f2f2f7;
+  color: var(--participant-text);
+}
+
+.exp-exit-link:focus-visible {
+  outline: 2px solid var(--participant-primary);
+  outline-offset: 2px;
+}
+
+.exp-exit-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.exp-hud-right .exp-exit-link {
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 1px solid #e5e5ea;
+  border-radius: 0;
+}
+
+.exp-instructions-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.exp-rest-exit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.history-note {
+  margin: 8px 0 0;
+}
+
+.p-pending-questionnaire .p-banner p {
+  margin: 0;
+}
+
+.p-pending-questionnaire .p-banner p + p {
+  margin-top: 6px;
+}
+
 @media (max-width: 720px) {
   .exp-root .exp-hud {
     grid-template-columns: 1fr auto;
