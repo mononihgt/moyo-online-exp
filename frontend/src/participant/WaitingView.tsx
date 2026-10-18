@@ -106,7 +106,7 @@ export function WaitingView({
         <div className="p-wait-countdown" aria-live="off">
           {formatClock(waitRemaining ?? 0)}
         </div>
-        <p className="p-muted">距离等待窗口结束</p>
+        <p className="p-muted">距离等待时间结束</p>
 
         <div className="p-wait-status" data-testid="hud-partner">
           <span

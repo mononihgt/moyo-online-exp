@@ -15,7 +15,7 @@ export const SELF_SUBMITTED_TITLE = "实验已完成";
 export const SELF_SUBMITTED_DETAIL =
   "你已提交后测问卷，本次实验已完成，无法再预约新的场次。房间将在双方问卷均完成后归档。你可以查看报酬信息。";
 export const AFTER_START_BOOKING_NOTE =
-  "开始时间到达后不能取消预约，也不能改报其他场次；如未进入实验，等待窗口结束后将按归档规则处理。";
+  "开始时间到达后不能取消预约，也不能改报其他场次；如未进入实验，等待时间结束后将按归档规则处理。";
 export const ACCOUNT_COMPLETED = "你已完成全部实验，无法再预约新的场次。";
 export const ACCOUNT_DISABLED =
   "你的账号当前已停用，无法预约新的场次。如有疑问，请联系实验主试。";
@@ -26,16 +26,16 @@ export const REBOOK = "重新预约";
 export const CONTACT_EXPERIMENTER = "联系主试";
 
 export const WAIT_SINGLE_DETAIL =
-  "只有你一人报名。本次实验需要两名参与者。等待窗口结束后若仍未达到两名参与者，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
+  "只有你一人报名。本次实验需要两名参与者。等待时间结束后若仍未达到两名参与者，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
 export const WAIT_PARTNER_NOT_ENTERED_DETAIL =
-  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待窗口结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
+  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待时间结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
 export const WAIT_BOTH_ENTERED_DETAIL =
-  "双方均已到场后不能退出；如果等待窗口结束时仍未开始，本次实验将自动结束，不产生报酬。";
+  "双方均已到场后不能退出；如果等待时间结束时仍未开始，本次实验将自动结束，不产生报酬。";
 export const WAIT_SELF_CLICKED = "你已点击开始匹配，等待另一名参与者点击。";
 export const WAIT_PARTNER_CLICKED = "另一名参与者已点击开始匹配，请点击开始匹配。";
 export const WAIT_BOTH_CLICKED = "双方均已点击开始匹配，正在进入实验…";
 export const WAIT_PARTNER_OFFLINE_DETAIL =
-  "另一名参与者已进入但当前离线，请等待其重新连接。双方均已到场后不能退出；如果等待窗口结束时仍未开始，本次实验将自动结束，不产生报酬。";
+  "另一名参与者已进入但当前离线，请等待其重新连接。双方均已到场后不能退出；如果等待时间结束时仍未开始，本次实验将自动结束，不产生报酬。";
 export const WAIT_ERROR_PARTNER_MISSING = "另一名参与者尚未进入实验。";
 export const WAIT_ERROR_PARTNER_ABSENT = "另一名参与者当前不在线，请等待其重新连接。";
 export const WAIT_EXIT_SINGLE = "退出本次实验";
@@ -56,15 +56,15 @@ export const SELF_EXIT_NOTICE =
   "你已主动退出本次实验，本次实验未完成，无实验报酬。你可以重新预约。";
 
 export const INSTRUCTION_PARTNER_OFFLINE =
-  "另一名参与者离线，正在等待重连。重连窗口结束后，本次实验将中止。";
+  "另一名参与者离线，正在等待重连。重连时间结束后，本次实验将中止。";
 export const INSTRUCTION_SELF_DISCONNECTED =
-  "连接中断，阅读计时已暂停；请在重连窗口内恢复连接。重连窗口结束后，本次实验将中止。";
+  "连接中断，阅读计时已暂停；请在重连时间内恢复连接。重连时间结束后，本次实验将中止。";
 export const TURN_SELF_DISCONNECTED =
-  "连接中断，正在重新连接。请保持页面打开。重连窗口结束后本次实验将中止。";
+  "连接中断，正在重新连接。请保持页面打开。重连时间结束后本次实验将中止。";
 export const REST_SELF_DISCONNECTED =
-  "连接中断，正在重新连接。倒计时已暂停。重连窗口结束后本次实验将中止。";
+  "连接中断，正在重新连接。倒计时已暂停。重连时间结束后本次实验将中止。";
 export const PARTNER_OFFLINE_RECONNECTING =
-  "另一名参与者离线，正在等待重连。重连窗口结束后，本次实验将中止。";
+  "另一名参与者离线，正在等待重连。重连时间结束后，本次实验将中止。";
 export const RECONNECTING_NOTICE = "连接中断，正在重新连接。请保持页面打开。";
 
 export const QUESTIONNAIRE_REQUIRED =
@@ -146,7 +146,7 @@ export function archiveCopyFor(
       return {
         title: "实验未能开始",
         detail:
-          "等待窗口结束时未达到两名参与者，本次实验未能开始，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+          "等待时间结束时未达到两名参与者，本次实验未能开始，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
         showContact: false,
       };
     case "no_show":
@@ -160,7 +160,7 @@ export function archiveCopyFor(
       return {
         title: "实验未能开始",
         detail:
-          "双方均已进入，但等待窗口结束时仍未开始实验，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+          "双方均已进入，但等待时间结束时仍未开始实验，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
         showContact: false,
       };
     case "abandoned":
