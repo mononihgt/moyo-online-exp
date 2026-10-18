@@ -40,8 +40,10 @@ export function QuestionnaireView({
   return (
     <div className="exp-centered exp-questionnaire">
       <div className="exp-end-card">
-        <p className="exp-kicker">全部 trial 已完成</p>
-        <h1 className="exp-rest-title">实验结束</h1>
+        <p className="exp-kicker">全部对局已完成</p>
+        <h1 className="exp-rest-title">
+          {submitted ? "问卷已提交" : "请填写后测问卷"}
+        </h1>
         {submitted ? (
           <>
             <p className="exp-rest-info">{QUESTIONNAIRE_SUBMITTED}</p>

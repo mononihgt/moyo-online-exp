@@ -50,9 +50,9 @@ export function InstructionsView({
   const canComplete = instruction.completed || remaining === 0;
   const bothCompleted = instruction.bothCompleted || (instruction.completed && instruction.partnerCompleted);
   const partnerReading = instruction.partnerCompleted
-    ? "搭档已完成阅读"
+    ? "另一名参与者已完成阅读"
     : partner.online
-      ? "搭档正在阅读"
+      ? "另一名参与者正在阅读"
       : INSTRUCTION_PARTNER_OFFLINE;
 
   return (
@@ -119,7 +119,7 @@ export function InstructionsView({
           {instruction.completed
             ? instruction.partnerCompleted
               ? "双方均已完成阅读。"
-              : "等待搭档完成阅读。"
+              : "等待另一名参与者完成阅读。"
             : remaining > 0
               ? `至少还需阅读 ${formatClock(remaining)}。`
               : "现在可以确认完成阅读。"}
@@ -141,7 +141,7 @@ export function InstructionsView({
             disabled={instruction.enterRequested || actionPending || exitPending}
             onClick={onEnterGame}
           >
-            {instruction.enterRequested ? "已确认，等待搭档" : "进入实验"}
+            {instruction.enterRequested ? "已确认，等待另一名参与者" : "进入实验"}
           </button>
         </div>
       ) : null}

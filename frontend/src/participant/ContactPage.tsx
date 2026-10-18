@@ -78,7 +78,7 @@ export default function ContactPage() {
           <div className="p-divider" />
           <h3 className="p-label">建议联系主试的情况</h3>
           <ul className="contact-topics">
-            <li>搭档缺席、断线后无法重新连接，或实验被意外中止。</li>
+            <li>另一名参与者缺席、断线后无法重新连接，或实验被意外中止。</li>
             <li>你主动退出后发现状态或报酬记录不正确。</li>
             <li>后测问卷无法打开、提交失败，或提交后仍显示待填写。</li>
             <li>到场费、报酬金额、支付状态或支付截止日期与预期不符。</li>

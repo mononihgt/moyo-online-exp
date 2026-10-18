@@ -99,7 +99,7 @@ export const ROOM_STATUS_LABELS: Record<RoomStatus, string> = {
   draft: "未发布",
   open: "等待开始",
   full: "等待开始",
-  waiting: "等待搭档",
+  waiting: "等待另一名参与者",
   instructions: "阅读指导语",
   playing: "实验进行中",
   questionnaire: "待填写问卷",
@@ -108,7 +108,7 @@ export const ROOM_STATUS_LABELS: Record<RoomStatus, string> = {
 
 export const QUESTIONNAIRE_STATUS_LABELS: Record<QuestionnaireStatus, string> = {
   not_started: "未开始",
-  in_progress: "填写中",
+  in_progress: "未成功提交问卷",
   completed: "已完成",
 };
 

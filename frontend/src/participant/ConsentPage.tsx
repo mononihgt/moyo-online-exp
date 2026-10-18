@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { formatDateTime } from "../shared/format";
 import { ApiError } from "../shared/api";
 import type { ConsentDocument } from "../shared/types";
 import { formatUnknownError, isUnauthorized } from "./apiTypes";
@@ -79,11 +78,6 @@ export default function ConsentPage() {
       <header className="p-consent-header">
         <p className="p-login-logo">Moyo 实验平台</p>
         <h1 className="p-title">知情同意</h1>
-        {document !== null ? (
-          <p className="p-muted">
-            版本 {document.version} · 更新时间 {formatDateTime(document.publishedAt)}
-          </p>
-        ) : null}
       </header>
 
       {actionError !== "" ? (
@@ -155,7 +149,7 @@ export default function ConsentPage() {
 
       {session.me.consentRequired ? (
         <p className="p-muted p-consent-note">
-          同意后，你的同意时间会记录在实验系统中。拒绝将退出登录，不创建预约。
+          参与者阅读知情同意书是心理学实验必需的步骤。如果您不同意相关内容，您也可以选择不继续参与实验
         </p>
       ) : null}
     </PageFrame>

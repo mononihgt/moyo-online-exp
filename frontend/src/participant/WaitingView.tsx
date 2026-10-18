@@ -23,10 +23,10 @@ import {
 import { formatClock, secondsLeft, useNow } from "./time";
 
 function partnerWaitingText(partner: PartnerState): string {
-  if (!partner.entered) return "等待搭档进入";
-  if (!partner.online) return "搭档离线";
-  if (partner.startRequested) return "搭档已点击开始匹配";
-  return "搭档已进入";
+  if (!partner.entered) return "等待另一名参与者进入";
+  if (!partner.online) return "另一名参与者离线";
+  if (partner.startRequested) return "另一名参与者已点击开始匹配";
+  return "另一名参与者已进入";
 }
 
 export function WaitingView({

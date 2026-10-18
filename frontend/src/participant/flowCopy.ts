@@ -28,16 +28,16 @@ export const CONTACT_EXPERIMENTER = "联系主试";
 export const WAIT_SINGLE_DETAIL =
   "只有你一人报名。本次实验需要两名参与者。等待窗口结束后若仍未达到两名参与者，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
 export const WAIT_PARTNER_NOT_ENTERED_DETAIL =
-  "搭档尚未进入实验。本次实验需要两名参与者。等待窗口结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
+  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待窗口结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
 export const WAIT_BOTH_ENTERED_DETAIL =
   "双方均已到场后不能退出；如果等待窗口结束时仍未开始，本次实验将自动结束，不产生报酬。";
-export const WAIT_SELF_CLICKED = "你已点击开始匹配，等待搭档点击。";
-export const WAIT_PARTNER_CLICKED = "搭档已点击开始匹配，请点击开始匹配。";
+export const WAIT_SELF_CLICKED = "你已点击开始匹配，等待另一名参与者点击。";
+export const WAIT_PARTNER_CLICKED = "另一名参与者已点击开始匹配，请点击开始匹配。";
 export const WAIT_BOTH_CLICKED = "双方均已点击开始匹配，正在进入实验…";
 export const WAIT_PARTNER_OFFLINE_DETAIL =
-  "搭档已进入但当前离线，请等待其重新连接。双方均已到场后不能退出；如果等待窗口结束时仍未开始，本次实验将自动结束，不产生报酬。";
-export const WAIT_ERROR_PARTNER_MISSING = "搭档尚未进入实验。";
-export const WAIT_ERROR_PARTNER_ABSENT = "搭档当前不在线，请等待其重新连接。";
+  "另一名参与者已进入但当前离线，请等待其重新连接。双方均已到场后不能退出；如果等待窗口结束时仍未开始，本次实验将自动结束，不产生报酬。";
+export const WAIT_ERROR_PARTNER_MISSING = "另一名参与者尚未进入实验。";
+export const WAIT_ERROR_PARTNER_ABSENT = "另一名参与者当前不在线，请等待其重新连接。";
 export const WAIT_EXIT_SINGLE = "退出本次实验";
 export const WAIT_EXIT_PARTNER = "另一名被试可能放鸽子了，我退出本次实验";
 export const WAIT_EXIT_TITLE = "确认退出本次实验？";
@@ -49,14 +49,14 @@ export const WAIT_EXIT_CONFIRM = "确认退出";
 export const EXIT_BUTTON = "退出实验";
 export const EXIT_TITLE = "确认退出实验？";
 export const EXIT_DETAIL =
-  "退出后本次实验未完成，无实验报酬，搭档也会结束实验。";
+  "退出后本次实验未完成，无实验报酬，另一名参与者也会结束实验。";
 export const EXIT_CONTINUE = "继续实验";
 export const EXIT_CONFIRM = "确认退出";
 export const SELF_EXIT_NOTICE =
   "你已主动退出本次实验，本次实验未完成，无实验报酬。你可以重新预约。";
 
 export const INSTRUCTION_PARTNER_OFFLINE =
-  "搭档离线，正在等待重连。重连窗口结束后，本次实验将中止。";
+  "另一名参与者离线，正在等待重连。重连窗口结束后，本次实验将中止。";
 export const INSTRUCTION_SELF_DISCONNECTED =
   "连接中断，阅读计时已暂停；请在重连窗口内恢复连接。重连窗口结束后，本次实验将中止。";
 export const TURN_SELF_DISCONNECTED =
@@ -64,11 +64,11 @@ export const TURN_SELF_DISCONNECTED =
 export const REST_SELF_DISCONNECTED =
   "连接中断，正在重新连接。倒计时已暂停。重连窗口结束后本次实验将中止。";
 export const PARTNER_OFFLINE_RECONNECTING =
-  "搭档离线，正在等待重连。重连窗口结束后，本次实验将中止。";
+  "另一名参与者离线，正在等待重连。重连窗口结束后，本次实验将中止。";
 export const RECONNECTING_NOTICE = "连接中断，正在重新连接。请保持页面打开。";
 
 export const QUESTIONNAIRE_REQUIRED =
-  "请完成实验后测问卷。只有完成全部 trial 并提交问卷后，才能获得基础费与绩效费。";
+  "请完成实验后测问卷。完成实验并提交问卷后，才会计算实验报酬";
 export const QUESTIONNAIRE_LOCK_NOTE =
   "未提交后测问卷前，你无法预约新的实验；继续填写问卷是获得报酬的唯一方式。";
 export const QUESTIONNAIRE_HOME_NOTE =
@@ -139,7 +139,7 @@ export function archiveCopyFor(
       return {
         title: "实验已完成",
         detail:
-          "你和搭档已完成全部实验并提交后测问卷。你可以查看报酬信息，确认金额、支付状态和支付截止日期。",
+          "双方已完成全部实验并提交后测问卷。你可以查看报酬信息，确认金额、支付状态和支付截止日期。",
         showContact: false,
       };
     case "not_full":

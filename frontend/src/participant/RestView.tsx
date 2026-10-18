@@ -11,10 +11,6 @@ import { formatClock, secondsLeft, useNow } from "./time";
 
 export interface RestViewData {
   completedIsPractice: boolean | null;
-  completedFormalTrial: number | null;
-  nextTrialIndex: number | null;
-  nextIsPractice: boolean | null;
-  nextFormalTrial: number | null;
   restSeconds: number;
   deadline: string | null;
   ready: Record<string, boolean>;
@@ -23,36 +19,10 @@ export interface RestViewData {
 export function restDataFromMessage(message: RestMessage): RestViewData {
   return {
     completedIsPractice: message.completedIsPractice,
-    completedFormalTrial: message.completedFormalTrial,
-    nextTrialIndex: message.nextTrialIndex,
-    nextIsPractice: message.nextIsPractice,
-    nextFormalTrial: message.nextFormalTrial,
     restSeconds: message.restSeconds,
     deadline: message.deadline,
     ready: message.ready,
   };
-}
-
-function restTitle(data: RestViewData): string {
-  if (data.completedIsPractice === true) return "练习结束";
-  if (data.completedFormalTrial !== null) {
-    return `第 ${data.completedFormalTrial} 个正式 trial 结束`;
-  }
-  return "本 trial 结束";
-}
-
-function nextTrialText(data: RestViewData): string {
-  if (data.nextTrialIndex === null) {
-    return "全部 trial 已完成，即将进入实验结束页面。";
-  }
-  if (data.nextTrialIndex === -1) {
-    return "接下来进入下一项 trial。";
-  }
-  if (data.nextIsPractice === true) return "接下来是练习 trial。";
-  if (data.nextFormalTrial !== null) {
-    return `接下来是第 ${data.nextFormalTrial} 个正式 trial。`;
-  }
-  return "接下来进入下一项 trial。";
 }
 
 export function RestView({
@@ -99,12 +69,13 @@ export function RestView({
   const bothReady = selfReady && partnerReady;
 
   return (
-    <div className="exp-rest">
-      <p className="exp-kicker">trial 间休息</p>
-      <h1 className="exp-rest-title" data-testid="rest-title">
-        {restTitle(data)}
-      </h1>
-      <p className="exp-rest-info">{nextTrialText(data)}</p>
+    <div className="exp-rest" data-testid="rest-view">
+      <p className="exp-kicker">对局间休息</p>
+      {data.completedIsPractice === true ? (
+        <h1 className="exp-rest-title" data-testid="rest-title">
+          练习结束
+        </h1>
+      ) : null}
       <div className="exp-rest-countdown" data-testid="rest-countdown" role="timer">
         {formatClock(remaining)}
       </div>
@@ -124,11 +95,11 @@ export function RestView({
         />
         <span>
           {partnerReady
-            ? "搭档已准备"
+            ? "另一名参与者已准备"
             : partner.online
-              ? "等待搭档准备"
+              ? "等待另一名参与者准备"
               : reconnectRemaining !== null && reconnectRemaining > 0
-                ? `搭档离线，重连剩余 ${formatClock(reconnectRemaining)}`
+                ? `另一名参与者离线，重连剩余 ${formatClock(reconnectRemaining)}`
                 : PARTNER_OFFLINE_RECONNECTING}
         </span>
       </div>
@@ -147,8 +118,8 @@ export function RestView({
         {bothReady
           ? "正在进入下一项…"
           : selfReady
-            ? "已准备，等待搭档"
-            : "准备继续"}
+            ? "已准备，等待另一名参与者"
+            : "我休息好了，可以继续"}
       </button>
       {canExit ? (
         <div className="exp-rest-exit">

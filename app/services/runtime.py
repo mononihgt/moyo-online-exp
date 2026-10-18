@@ -375,12 +375,12 @@ class RuntimeManager:
         if len(bookings) != 2:
             add_event(db, room, "partner_absent", participant.id, {"reason": "partner_missing"})
             await db.commit()
-            await self._send_error(participant.id, room.id, "partner_missing", "搭档尚未进入实验。")
+            await self._send_error(participant.id, room.id, "partner_missing", "另一名参与者尚未进入实验。")
             return
         if any(booking.status != BOOKING_ATTENDED for booking in bookings):
             add_event(db, room, "partner_absent", participant.id, {"reason": "not_entered"})
             await db.commit()
-            await self._send_error(participant.id, room.id, "partner_absent", "搭档尚未进入实验。")
+            await self._send_error(participant.id, room.id, "partner_absent", "另一名参与者尚未进入实验。")
             await self._broadcast_partner_state(db, room)
             return
         participants = [booking.participant_id for booking in bookings]
@@ -391,7 +391,7 @@ class RuntimeManager:
                 participant.id,
                 room.id,
                 "partner_absent",
-                "搭档当前不在线，请等待其重新连接。",
+                "另一名参与者当前不在线，请等待其重新连接。",
             )
             await self._broadcast_partner_state(db, room)
             return
@@ -516,7 +516,7 @@ class RuntimeManager:
             await self._send_error(participant.id, room.id, "instruction_incomplete", "请先完成阅读指导语")
             return
         if any(item.instruction_completed_at is None for item in rows):
-            await self._send_error(participant.id, room.id, "partner_instruction", "搭档尚未完成指导语")
+            await self._send_error(participant.id, room.id, "partner_instruction", "另一名参与者尚未完成指导语")
             return
         state = _state(room)
         if participant.id not in state["enter_requests"]:
@@ -533,7 +533,7 @@ class RuntimeManager:
             bookings = await self._active_bookings(db, room.id)
             if sum(1 for booking in bookings if booking.status == BOOKING_ATTENDED) >= 2:
                 await self._send_error(
-                    participant.id, room.id, "partner_present", "搭档已到场，不能退出实验"
+                    participant.id, room.id, "partner_present", "另一名参与者已到场，不能退出实验"
                 )
                 return
         elif room.status not in (ROOM_INSTRUCTIONS, ROOM_PLAYING):
@@ -1441,6 +1441,8 @@ class RuntimeManager:
             "trialIndex": trial_index,
             "gameNumber": trial_index + 1,
             "totalTrials": len(order),
+            "practiceTrials": condition["practiceTrials"],
+            "formalTrials": condition["formalTrials"],
             "isPractice": params["isPractice"] if params else None,
             "formalTrial": params["formalTrial"] if params else None,
             "round": state["round"],
@@ -1582,6 +1584,8 @@ class RuntimeManager:
                     "trialIndex": trial_index,
                     "gameNumber": trial_index + 1,
                     "totalTrials": len(order),
+                    "practiceTrials": condition["practiceTrials"],
+                    "formalTrials": condition["formalTrials"],
                     "isPractice": params["isPractice"],
                     "formalTrial": params["formalTrial"],
                     "round": 1,

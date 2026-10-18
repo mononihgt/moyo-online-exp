@@ -421,6 +421,9 @@
 
 .p-footer-links a,
 .p-footer-links button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--participant-muted);
 }
 

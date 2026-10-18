@@ -6,7 +6,8 @@ export const ADMIN_PASSWORD = "integration-admin-password";
 export const SELF_EXIT_NOTICE =
   "你已主动退出本次实验，本次实验未完成，无实验报酬。你可以重新预约。";
 export const EXIT_TITLE = "确认退出实验？";
-export const EXIT_DETAIL = "退出后本次实验未完成，无实验报酬，搭档也会结束实验。";
+export const EXIT_DETAIL =
+  "退出后本次实验未完成，无实验报酬，另一名参与者也会结束实验。";
 export const WAIT_EXIT_TITLE = "确认退出本次实验？";
 export const WAIT_EXIT_DETAIL =
   "退出后本次实验将结束，本次实验未完成，不产生报酬。你可以返回首页重新预约其他时间段。";
@@ -408,10 +409,10 @@ export async function enterRoom(page: Page): Promise<void> {
 
 export async function waitBothEntered(pageOne: Page, pageTwo: Page): Promise<void> {
   await Promise.all([
-    expect(pageOne.getByTestId("hud-partner")).toContainText("搭档已进入", {
+    expect(pageOne.getByTestId("hud-partner")).toContainText("另一名参与者已进入", {
       timeout: 30000,
     }),
-    expect(pageTwo.getByTestId("hud-partner")).toContainText("搭档已进入", {
+    expect(pageTwo.getByTestId("hud-partner")).toContainText("另一名参与者已进入", {
       timeout: 30000,
     }),
   ]);
@@ -483,8 +484,8 @@ export async function waitForRest(
   pageTwo: Page,
 ): Promise<void> {
   await Promise.all([
-    expect(pageOne.getByTestId("rest-title")).toBeVisible({ timeout: 30000 }),
-    expect(pageTwo.getByTestId("rest-title")).toBeVisible({ timeout: 30000 }),
+    expect(pageOne.getByTestId("rest-view")).toBeVisible({ timeout: 30000 }),
+    expect(pageTwo.getByTestId("rest-view")).toBeVisible({ timeout: 30000 }),
   ]);
 }
 
@@ -494,10 +495,10 @@ export async function waitForQuestionnaire(
 ): Promise<void> {
   await Promise.all([
     expect(
-      pageOne.getByRole("heading", { name: "实验结束", exact: true }),
+      pageOne.getByRole("heading", { name: "请填写后测问卷", exact: true }),
     ).toBeVisible({ timeout: 30000 }),
     expect(
-      pageTwo.getByRole("heading", { name: "实验结束", exact: true }),
+      pageTwo.getByRole("heading", { name: "请填写后测问卷", exact: true }),
     ).toBeVisible({ timeout: 30000 }),
   ]);
 }

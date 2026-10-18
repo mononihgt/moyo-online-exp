@@ -204,7 +204,7 @@ def test_two_bookings_one_absent_archives_no_show(server):
     ws.send("start_matching", roomId=room["id"])
     error = ws.recv_until("error")
     assert error["code"] == "partner_absent"
-    assert error["message"] == "搭档尚未进入实验。"
+    assert error["message"] == "另一名参与者尚未进入实验。"
     archived = ws.recv_until("room_archived", timeout=20)
     assert archived["reason"] == "no_show"
     assert archived["rewardKind"] == "none"
@@ -247,7 +247,7 @@ def test_participant_cannot_exit_when_partner_present(server):
     ws_a.send("start_matching", roomId=room["id"])
     offline_error = ws_a.recv_until("error")
     assert offline_error["code"] == "partner_absent"
-    assert offline_error["message"] == "搭档当前不在线，请等待其重新连接。"
+    assert offline_error["message"] == "另一名参与者当前不在线，请等待其重新连接。"
     ws_a.close()
     _close_participants(context.admin, participant_a, participant_b)
 

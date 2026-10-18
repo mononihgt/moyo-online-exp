@@ -14,18 +14,14 @@ import { GameBoard } from "./GameBoard";
 import type { SocketStatus } from "./RoomSocket";
 import { formatClock, secondsLeft, useNow } from "./time";
 
-function hudTrialLabel(
-  game: GameState,
-  round: number,
-  formalTrialTotal: number | null,
-): string {
+function hudTrialLabel(game: GameState, round: number): string {
   const turnCount = game.turnCount > 0 ? game.turnCount : 0;
   if (game.isPractice === true) {
     return `练习 ${round}/${turnCount}`;
   }
-  if (game.isPractice === false && game.formalTrial !== null) {
-    const formalTotal = formalTrialTotal ?? Math.max(1, game.totalTrials - 1);
-    return `正式 ${game.formalTrial}/${formalTotal} · 回合 ${round}/${turnCount}`;
+  if (game.isPractice === false && game.formalTrials > 0) {
+    const formalPosition = game.gameNumber - game.practiceTrials;
+    return `正式 ${formalPosition}/${game.formalTrials} · 回合 ${round}/${turnCount}`;
   }
   return `回合 ${round}/${turnCount}`;
 }
@@ -38,7 +34,6 @@ export function TurnView({
   partner,
   socketStatus,
   serverOffsetMs,
-  formalTrialTotal,
   submitted,
   exitPending,
   canExit,
@@ -52,7 +47,6 @@ export function TurnView({
   partner: PartnerState;
   socketStatus: SocketStatus;
   serverOffsetMs: number;
-  formalTrialTotal: number | null;
   submitted: boolean;
   exitPending: boolean;
   canExit: boolean;
@@ -96,11 +90,11 @@ export function TurnView({
   const partnerSubmitted = game.partnerSubmitted || partner.submitted === true;
   const partnerText = !partner.online
     ? reconnectRemaining !== null && reconnectRemaining > 0
-      ? `搭档离线，重连剩余 ${formatClock(reconnectRemaining)}`
-      : "搭档离线"
+      ? `另一名参与者离线，重连剩余 ${formatClock(reconnectRemaining)}`
+      : "另一名参与者离线"
     : partnerSubmitted
-      ? "搭档已提交"
-      : "搭档在线";
+      ? "另一名参与者已提交"
+      : "另一名参与者在线";
 
   const toggleCell = (index: number) => {
     if (result !== null || submitted || !socketActive || exitPending) return;
@@ -149,7 +143,7 @@ export function TurnView({
     <>
       <div className="exp-hud">
         <div className="exp-hud-left">
-          <span>{hudTrialLabel(game, displayRound, formalTrialTotal)}</span>
+          <span>{hudTrialLabel(game, displayRound)}</span>
           {result !== null ? (
             <span className="exp-hud-result-tag">结算中</span>
           ) : null}
@@ -230,7 +224,7 @@ export function TurnView({
                   ? " · 你未在时限内提交，系统已自动选择一个格子"
                   : ""}
                 {result.trialEnded
-                  ? " · 本 trial 已结束"
+                  ? " · 本对局已结束"
                   : " · 即将进入下一回合"}
               </p>
             ) : null}
@@ -253,7 +247,7 @@ export function TurnView({
                 : result !== null
                   ? "回合已结算，请等待下一回合。"
                   : submitted
-                    ? "已提交，等待搭档或回合结算。"
+                    ? "已提交，等待另一名参与者或回合结算。"
                     : !socketActive
                       ? "连接中断，正在重新连接…"
                       : selected.length === 0

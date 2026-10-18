@@ -30,7 +30,7 @@ import {
 import type { RosterEntry } from "./support";
 
 const WAIT_PARTNER_NOT_ENTERED_DETAIL =
-  "搭档尚未进入实验。本次实验需要两名参与者。等待窗口结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
+  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待窗口结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
 const WAIT_EXIT_PARTNER_BUTTON =
   "另一名被试可能放鸽子了，我退出本次实验";
 const WAIT_BOTH_ENTERED_DETAIL =
@@ -68,11 +68,11 @@ const COMPLETE_TRANSFER_NOTE =
 
 const COMPLETED_TITLE = "实验已完成";
 const COMPLETED_DETAIL =
-  "你和搭档已完成全部实验并提交后测问卷。你可以查看报酬信息，确认金额、支付状态和支付截止日期。";
+  "双方已完成全部实验并提交后测问卷。你可以查看报酬信息，确认金额、支付状态和支付截止日期。";
 const COMPLETED_REASON_LABEL = "正常完成";
 
 const CONTACT_SCENARIOS = [
-  "搭档缺席、断线后无法重新连接，或实验被意外中止。",
+  "另一名参与者缺席、断线后无法重新连接，或实验被意外中止。",
   "你主动退出后发现状态或报酬记录不正确。",
   "后测问卷无法打开、提交失败，或提交后仍显示待填写。",
   "到场费、报酬金额、支付状态或支付截止日期与预期不符。",
@@ -259,7 +259,7 @@ test("等待阶段搭档未进入时退出并返回首页", async ({
 
   await enterRoom(pageOne);
   await expect(pageOne.getByTestId("hud-partner")).toContainText(
-    "等待搭档进入",
+    "等待另一名参与者进入",
   );
   await expect(pageOne.getByTestId("start-matching")).toBeDisabled();
   await expect(pageOne.getByTestId("waiting-exit")).toHaveText(
@@ -464,6 +464,7 @@ test("休息阶段退出并让搭档看到中止归档页", async ({
     entries,
     startsInSeconds: 20,
     condition: {
+      practiceTrials: 1,
       formalTrials: 2,
       turnCount: 1,
       restSeconds: 60,
@@ -491,10 +492,24 @@ test("休息阶段退出并让搭档看到中止归档页", async ({
   await submitCellPair(pageOne, pageTwo);
   await waitForRest(pageOne, pageTwo);
 
-  await expect(pageOne.getByTestId("rest-title")).toContainText(
-    "第 1 个正式 trial 结束",
+  await expect(pageOne.getByTestId("rest-title")).toHaveText("练习结束");
+  await expect(pageOne.getByTestId("rest-view")).toContainText("对局间休息");
+  await expect(pageOne.getByTestId("rest-ready")).toHaveText(
+    "我休息好了，可以继续",
   );
   await expect(pageOne.getByTestId("exit-experiment")).toBeVisible();
+
+  await Promise.all([
+    pageOne.getByTestId("rest-ready").click(),
+    pageTwo.getByTestId("rest-ready").click(),
+  ]);
+  await expect(pageOne.locator(".exp-hud-left")).toContainText("正式 1/2");
+  await submitCellPair(pageOne, pageTwo);
+  await waitForRest(pageOne, pageTwo);
+  await expect(pageOne.getByTestId("rest-title")).toHaveCount(0);
+  await expect(pageOne.getByTestId("rest-ready")).toHaveText(
+    "我休息好了，可以继续",
+  );
 
   await confirmExperimentExit(pageOne);
   await expectArchiveView(
@@ -503,7 +518,7 @@ test("休息阶段退出并让搭档看到中止归档页", async ({
     ABANDONED_PARTNER_DETAIL,
     { rebook: true, continueQuestionnaire: false },
   );
-  await expect(pageTwo.getByTestId("rest-title")).toHaveCount(0);
+  await expect(pageTwo.getByTestId("rest-view")).toHaveCount(0);
 
   await contextOne.close();
   await contextTwo.close();
@@ -548,6 +563,18 @@ test("问卷阶段归档后按人显示状态并允许补交", async ({
   await submitCellPair(pageOne, pageTwo);
   await waitForQuestionnaire(pageOne, pageTwo);
 
+  await expect(
+    pageOne.getByText("全部对局已完成", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    pageOne.getByText(
+      "请完成实验后测问卷。完成实验并提交问卷后，才会计算实验报酬",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    pageOne.getByText("问卷状态：未成功提交问卷", { exact: true }),
+  ).toBeVisible();
   await expect(pageOne.getByTestId("exit-experiment")).toHaveCount(0);
   await expect(pageTwo.getByTestId("exit-experiment")).toHaveCount(0);
   await expect(pageOne.getByTestId("questionnaire-button")).toBeVisible();

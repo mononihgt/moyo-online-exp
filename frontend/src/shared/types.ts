@@ -413,6 +413,8 @@ export interface GameState {
   trialIndex: number;
   gameNumber: number;
   totalTrials: number;
+  practiceTrials: number;
+  formalTrials: number;
   isPractice: boolean | null;
   formalTrial: number | null;
   round: number;
@@ -512,6 +514,8 @@ export interface TrialStartMessage {
   trialIndex: number;
   gameNumber: number;
   totalTrials: number;
+  practiceTrials: number;
+  formalTrials: number;
   isPractice: boolean;
   formalTrial: number;
   round: number;

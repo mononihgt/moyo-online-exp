@@ -192,7 +192,7 @@ def test_rest_messages_carry_trial_round_and_complete(server):
     import_roster(context.admin, [("休息甲", "13700000801"), ("休息乙", "13700000802")])
     room = context.room(
         starts_in_seconds=2,
-        practice=0,
+        practice=1,
         formal=2,
         turn_count=1,
         turn_seconds=3,
@@ -221,6 +221,7 @@ def test_rest_messages_carry_trial_round_and_complete(server):
     rest_b = ws_b.recv_until("rest")
     assert rest_a["trialIndex"] == 0
     assert rest_a["round"] == 1
+    assert rest_a["completedIsPractice"] is True
     assert rest_b["trialIndex"] == 0
     assert rest_b["round"] == 1
     ws_a.send("rest_ready", roomId=room["id"])
@@ -231,6 +232,16 @@ def test_rest_messages_carry_trial_round_and_complete(server):
     assert complete_a["round"] == 1
     assert complete_b["trialIndex"] == 0
     assert complete_b["round"] == 1
+    trial_start_a = ws_a.recv_until("trial_start")
+    trial_start_b = ws_b.recv_until("trial_start")
+    for trial_start in (trial_start_a, trial_start_b):
+        assert trial_start["trialIndex"] == 1
+        assert trial_start["gameNumber"] == 2
+        assert trial_start["practiceTrials"] == 1
+        assert trial_start["formalTrials"] == 2
+        assert trial_start["isPractice"] is False
+        assert trial_start["gameNumber"] - trial_start["practiceTrials"] == 1
+        assert trial_start["formalTrial"] in (1, 2)
     ws_a.close()
     ws_b.close()
     participant_a.close()

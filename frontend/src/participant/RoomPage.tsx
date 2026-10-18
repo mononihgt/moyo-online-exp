@@ -56,14 +56,6 @@ function fallbackRebook(reason: ArchiveReason | null): boolean {
 function deriveRestFromGame(game: GameState): RestViewData {
   return {
     completedIsPractice: game.isPractice,
-    completedFormalTrial: game.formalTrial,
-    nextTrialIndex: -1,
-    nextIsPractice:
-      game.isPractice === false && game.formalTrial !== null ? false : null,
-    nextFormalTrial:
-      game.isPractice === false && game.formalTrial !== null
-        ? game.formalTrial + 1
-        : null,
     restSeconds: game.restSeconds,
     deadline: game.restDeadline,
     ready: game.restReady,
@@ -76,6 +68,8 @@ function mergeTurn(current: GameState | null, message: TurnMessage): GameState {
     trialIndex: message.trialIndex,
     gameNumber: current?.gameNumber ?? message.trialIndex + 1,
     totalTrials: current?.totalTrials ?? 0,
+    practiceTrials: current?.practiceTrials ?? 0,
+    formalTrials: current?.formalTrials ?? 0,
     isPractice: current?.isPractice ?? null,
     formalTrial: current?.formalTrial ?? null,
     round: message.round,
@@ -101,6 +95,8 @@ function gameFromTrialStart(
     trialIndex: message.trialIndex,
     gameNumber: message.gameNumber,
     totalTrials: message.totalTrials,
+    practiceTrials: message.practiceTrials,
+    formalTrials: message.formalTrials,
     isPractice: message.isPractice,
     formalTrial: message.formalTrial,
     round: message.round,
@@ -130,8 +126,6 @@ export default function RoomPage() {
   const [turn, setTurn] = useState<TurnMessage | null>(null);
   const [result, setResult] = useState<TurnResultMessage | null>(null);
   const [rest, setRest] = useState<RestViewData | null>(null);
-  const [formalTrialTotal, setFormalTrialTotal] = useState<number | null>(null);
-  const firstFormalSeenRef = useRef(false);
   const [instruction, setInstruction] = useState<InstructionState | null>(null);
   const [partner, setPartner] = useState<PartnerState>(EMPTY_PARTNER);
   const [questionnaire, setQuestionnaire] =
@@ -214,12 +208,6 @@ export default function RoomPage() {
           }
           if (message.game) {
             const snapshot = message.game;
-            if (snapshot.isPractice === false && !firstFormalSeenRef.current) {
-              firstFormalSeenRef.current = true;
-              setFormalTrialTotal(
-                Math.max(1, snapshot.totalTrials - 1),
-              );
-            }
             setGame(snapshot);
             setTurn(null);
             setSubmittedLocal(snapshot.submitted);
@@ -322,12 +310,6 @@ export default function RoomPage() {
         }
         case "trial_start": {
           if (!("trialIndex" in message)) break;
-          if (message.isPractice === false && !firstFormalSeenRef.current) {
-            firstFormalSeenRef.current = true;
-            setFormalTrialTotal(
-              message.totalTrials - Math.max(0, message.gameNumber - 1),
-            );
-          }
           setResult(null);
           setRest(null);
           setTurn(null);
@@ -705,7 +687,6 @@ export default function RoomPage() {
           partner={partner}
           socketStatus={socketStatus}
           serverOffsetMs={serverOffsetMs}
-          formalTrialTotal={formalTrialTotal}
           submitted={submittedLocal || game.submitted}
           exitPending={exitPending}
           canExit={canExit}

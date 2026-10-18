@@ -2,9 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarPlus,
   ClipboardCheck,
-  ClipboardList,
   LogOut,
-  Mail,
   PlayCircle,
   RefreshCw,
   XCircle,
@@ -232,14 +230,6 @@ export default function HomePage() {
           <span className="p-topbar-phone">{session.me.phoneMasked}</span>
         </div>
         <div className="p-topbar-actions">
-          <Link className="p-nav-link" to="/history">
-            <ClipboardList size={16} aria-hidden="true" />
-            历史实验
-          </Link>
-          <Link className="p-nav-link" to="/contact">
-            <Mail size={16} aria-hidden="true" />
-            联系主试
-          </Link>
           <button
             type="button"
             className="p-linkish p-topbar-logout"
@@ -494,7 +484,7 @@ export default function HomePage() {
                   可预约场次
                 </h2>
                 <span className="p-muted">
-                  {serverNow !== null ? "时间为北京时间" : ""}
+                  {serverNow !== null ? "Beijing UTC+8" : ""}
                 </span>
               </div>
               {blockingHint !== null ? (
@@ -548,7 +538,7 @@ export default function HomePage() {
                     <p className="p-label">已选择场次</p>
                     <p>{formatDateTime(selectedRoom.startsAt)}</p>
                     <p className="p-muted">
-                      预约后如需改报，请先取消当前预约。实验开始前可以取消。
+                      确认预约后如需修改时间，请先取消当前预约。实验开始前可以取消。
                     </p>
                   </div>
                   <div className="p-btn-row">
