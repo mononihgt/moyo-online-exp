@@ -476,6 +476,15 @@ def test_questionnaire_pending_allows_new_booking_and_manual_archive(server):
     assert all(item["showupPayCents"] == 500 for item in payments)
     participant_me = participant_a.json("GET", "/api/me")["me"]
     assert participant_me["status"] == "eligible"
+    archived_context = participant_a.json(
+        "GET", f"/api/questionnaire/context?roomId={room['id']}"
+    )
+    assert archived_context["roomId"] == room["id"]
+    assert archived_context["url"]
+    my_room = participant_a.json("GET", "/api/my-room")
+    assert any(
+        item["roomId"] == room["id"] for item in my_room["pendingQuestionnaires"]
+    )
     ws_a.close()
     ws_b.close()
     _close_participants(context.admin, participant_a, participant_b)

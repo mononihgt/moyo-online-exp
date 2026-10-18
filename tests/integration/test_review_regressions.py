@@ -609,6 +609,34 @@ def test_concurrent_questionnaire_completion_keeps_single_canonical(server):
 
 
 @pytest.mark.integration
+def test_payment_export_only_contains_completed_questionnaires(server):
+    context = Context(server)
+    import_roster(context.admin, [("导出甲", "13700000211")])
+    room = context.room(starts_in_seconds=2, wait_window_seconds=2)
+    participant = context.participant("导出甲", "13700000211")
+    _book(context, room, participant)
+    wait_until(
+        lambda: participant.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        timeout=20,
+    )
+    ws = WsClient(server, participant.cookie_value("moyo_participant"))
+    ws.send("enter_room", roomId=room["id"])
+    ws.recv_until("room_state")
+    ws.recv_until("room_archived", timeout=20)
+    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
+    assert len(payments) == 1
+    assert payments[0]["showupPayCents"] == 500
+    export = context.admin.request("GET", "/admin/api/payments/export.csv")
+    assert export.status_code == 200
+    text = export.content.decode("utf-8-sig")
+    assert "导出甲" not in text
+    assert "13700000211" not in text
+    ws.close()
+    participant.close()
+    context.admin.close()
+
+
+@pytest.mark.integration
 def test_concurrent_questionnaire_completion_archives_room(server):
     context = Context(server)
     import_roster(context.admin, [("并发甲", "13700000201"), ("并发乙", "13700000202")])

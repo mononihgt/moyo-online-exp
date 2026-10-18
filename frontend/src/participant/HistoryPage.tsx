@@ -21,7 +21,11 @@ function completionState(item: ExperimentRecord): {
   if (item.bookingStatus === "no_show" || item.archiveReason === "no_show") {
     return { label: "未到场", tone: "error" };
   }
-  if (item.roomStatus === "questionnaire") {
+  if (
+    item.questionnaireStatus !== "completed" &&
+    (item.roomStatus === "questionnaire" ||
+      item.archiveReason === "questionnaire_incomplete")
+  ) {
     return { label: "待填写问卷", tone: "warning" };
   }
   if (item.archiveReason === "completed") {
@@ -110,7 +114,7 @@ export default function HistoryPage() {
     <PageFrame>
       <SubpageHeader
         title="历史实验"
-        description="你参与过的实验记录与费用状态。"
+        description="你参与过的实验记录与报酬状态。"
       />
 
       {actionError !== "" ? (
@@ -153,9 +157,11 @@ export default function HistoryPage() {
                   : item.payment.status === "paid"
                     ? "已支付"
                     : "待支付";
-              const canContinueQuestionnaire =
-                item.roomStatus === "questionnaire" &&
-                item.questionnaireStatus !== "completed";
+              const awaitingQuestionnaire =
+                item.questionnaireStatus !== "completed" &&
+                (item.roomStatus === "questionnaire" ||
+                  item.archiveReason === "questionnaire_incomplete");
+              const canContinueQuestionnaire = awaitingQuestionnaire;
               return (
                 <li key={item.roomId} className="history-item">
                   <div className="history-item-head">
@@ -187,9 +193,11 @@ export default function HistoryPage() {
                     <div className="p-detail-row">
                       <dt>报酬</dt>
                       <dd className="p-mono">
-                        {item.payment === null
-                          ? "待处理"
-                          : formatMoney(item.payment.totalCents)}
+                        {awaitingQuestionnaire
+                          ? "待问卷完成"
+                          : item.payment === null
+                            ? "待处理"
+                            : formatMoney(item.payment.totalCents)}
                       </dd>
                     </div>
                     <div className="p-detail-row">
@@ -197,12 +205,14 @@ export default function HistoryPage() {
                       <dd data-testid="payment-status">
                         <StatusChip
                           tone={
-                            item.payment?.status === "paid"
-                              ? "success"
-                              : "warning"
+                            awaitingQuestionnaire
+                              ? "warning"
+                              : item.payment?.status === "paid"
+                                ? "success"
+                                : "warning"
                           }
                         >
-                          {paymentStatus}
+                          {awaitingQuestionnaire ? "待问卷完成" : paymentStatus}
                         </StatusChip>
                       </dd>
                     </div>

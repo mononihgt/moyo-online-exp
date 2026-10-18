@@ -281,7 +281,7 @@ export default function HomePage() {
               {room.status === "questionnaire" &&
               room.questionnaireStatus !== "completed" ? (
                 <div className="p-banner p-banner-warning" role="status">
-                  实验已结束，仍需填写后测问卷。完成后才能确认实验记录与费用。
+                  实验已结束，仍需填写后测问卷。完成后才能确认实验记录与报酬。
                 </div>
               ) : null}
 
@@ -381,7 +381,7 @@ export default function HomePage() {
               </h2>
               <p className="p-muted">
                 {session.me.isCompleted
-                  ? "你已完成全部实验，无法再预约新的场次。你可以查看历史实验与费用记录。"
+                  ? "你已完成全部实验，无法再预约新的场次。你可以查看历史实验与报酬记录。"
                   : session.me.isDisabled
                     ? "你的账号当前已停用，无法预约新的场次。如有疑问，请联系实验主试。"
                     : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}

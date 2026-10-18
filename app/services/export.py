@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..constants import SCHEMA_VERSION, TIMEZONE
+from ..constants import QUESTIONNAIRE_COMPLETED, SCHEMA_VERSION, TIMEZONE
 from ..models import (
     Booking,
     ConditionVersion,
@@ -590,11 +590,12 @@ async def build_payment_export_csv(db: AsyncSession) -> bytes:
         select(Payment, Participant, Room, RoomParticipant)
         .join(Participant, Participant.id == Payment.participant_id)
         .join(Room, Room.id == Payment.room_id)
-        .outerjoin(
+        .join(
             RoomParticipant,
             (RoomParticipant.room_id == Payment.room_id)
             & (RoomParticipant.participant_id == Payment.participant_id),
         )
+        .where(RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED)
         .order_by(Room.starts_at, Participant.name)
     )
     header = [

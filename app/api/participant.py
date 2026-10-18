@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from ..config import get_settings
 from ..constants import (
@@ -8,6 +8,7 @@ from ..constants import (
     BOOKING_CANCELED,
     PARTICIPANT_ELIGIBLE,
     QUESTIONNAIRE_COMPLETED,
+    ROOM_ARCHIVED,
     ROOM_FULL,
     ROOM_OPEN,
     ROOM_QUESTIONNAIRE,
@@ -178,8 +179,14 @@ async def my_room(participant: ParticipantDep, db: DbSession):
         .join(RoomParticipant, RoomParticipant.room_id == Room.id)
         .where(
             RoomParticipant.participant_id == participant.id,
-            Room.status == ROOM_QUESTIONNAIRE,
             RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
+            or_(
+                Room.status == ROOM_QUESTIONNAIRE,
+                and_(
+                    Room.status == ROOM_ARCHIVED,
+                    Room.archive_reason == "questionnaire_incomplete",
+                ),
+            ),
         )
         .order_by(Room.starts_at.desc())
     )
@@ -280,8 +287,10 @@ async def questionnaire_context(
     room = await db.get(Room, room_id)
     if room is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "房间不存在")
-    if room.status != ROOM_QUESTIONNAIRE:
+    if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前实验尚未进入问卷阶段")
+    if room.status == ROOM_ARCHIVED and room.archive_reason not in ("questionnaire_incomplete", "completed"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前实验已结束")
     row_query = await db.execute(
         select(RoomParticipant).where(
             RoomParticipant.room_id == room.id, RoomParticipant.participant_id == participant.id
