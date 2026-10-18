@@ -56,6 +56,9 @@ function fallbackRebook(reason: ArchiveReason | null): boolean {
 function deriveRestFromGame(game: GameState): RestViewData {
   return {
     completedIsPractice: game.isPractice,
+    completedFormalTrial: game.formalTrial,
+    formalTrials: game.formalTrials,
+    finalSoldiers: game.finalSoldiers,
     restSeconds: game.restSeconds,
     deadline: game.restDeadline,
     ready: game.restReady,
@@ -83,6 +86,7 @@ function mergeTurn(current: GameState | null, message: TurnMessage): GameState {
     submitted: message.submitted,
     partnerSubmitted: message.partnerSubmitted,
     restReady: {},
+    finalSoldiers: null,
   };
 }
 
@@ -110,6 +114,7 @@ function gameFromTrialStart(
     submitted: false,
     partnerSubmitted: false,
     restReady: {},
+    finalSoldiers: null,
   };
 }
 
@@ -302,6 +307,10 @@ export default function RoomPage() {
               : {
                   ...current,
                   phase: "rest",
+                  isPractice: message.completedIsPractice,
+                  formalTrial: message.completedFormalTrial,
+                  formalTrials: message.formalTrials,
+                  finalSoldiers: message.finalSoldiers,
                   restDeadline: message.deadline,
                   restReady: message.ready,
                 },

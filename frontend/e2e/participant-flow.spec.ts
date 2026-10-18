@@ -494,6 +494,10 @@ test("休息阶段退出并让搭档看到中止归档页", async ({
 
   await expect(pageOne.getByTestId("rest-title")).toHaveText("练习结束");
   await expect(pageOne.getByTestId("rest-view")).toContainText("对局间休息");
+  await expect(pageOne.getByTestId("rest-summary")).toBeVisible();
+  await expect(pageOne.getByTestId("rest-trial-chip")).toHaveText("练习局");
+  await expect(pageOne.getByTestId("rest-score-player2")).toHaveText(/^\d+$/);
+  await expect(pageOne.getByTestId("rest-score-player1")).toHaveText(/^\d+$/);
   await expect(pageOne.getByTestId("rest-ready")).toHaveText(
     "我休息好了，可以继续",
   );
@@ -507,6 +511,11 @@ test("休息阶段退出并让搭档看到中止归档页", async ({
   await submitCellPair(pageOne, pageTwo);
   await waitForRest(pageOne, pageTwo);
   await expect(pageOne.getByTestId("rest-title")).toHaveCount(0);
+  await expect(pageOne.getByTestId("rest-trial-chip")).toHaveText(
+    /对局\s*1\/2/,
+  );
+  await expect(pageOne.getByTestId("rest-score-player2")).toHaveText(/^\d+$/);
+  await expect(pageOne.getByTestId("rest-score-player1")).toHaveText(/^\d+$/);
   await expect(pageOne.getByTestId("rest-ready")).toHaveText(
     "我休息好了，可以继续",
   );

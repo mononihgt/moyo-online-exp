@@ -1455,6 +1455,7 @@ class RuntimeManager:
             "restDeadline": state["rest_deadline"],
             "submitted": str(role_row.role) in state["submissions"],
             "restReady": state["rest_ready"],
+            "finalSoldiers": self._final_soldiers(state) if state["phase"] == PHASE_REST else None,
         }
         if role_row.role == ROLE_PLAYER_1:
             payload["partnerSubmitted"] = "2" in state["submissions"]
@@ -1532,6 +1533,13 @@ class RuntimeManager:
                     },
                 )
 
+    def _final_soldiers(self, state: dict) -> dict[str, int]:
+        board = _board_from_payload(state["board"])
+        return {
+            "player1": total_soldiers(board, 1),
+            "player2": total_soldiers(board, 2),
+        }
+
     def _rest_payload(self, state: dict, room: Room) -> dict:
         condition = room.config_snapshot["condition"]
         order = room.trial_plan_json["order"]
@@ -1549,6 +1557,8 @@ class RuntimeManager:
             "nextIsPractice": next_params["isPractice"] if next_params else None,
             "nextFormalTrial": next_params["formalTrial"] if next_params else None,
             "restSeconds": condition["restSeconds"],
+            "formalTrials": condition["formalTrials"],
+            "finalSoldiers": self._final_soldiers(state),
             "deadline": state["rest_deadline"],
             "ready": state["rest_ready"],
         }

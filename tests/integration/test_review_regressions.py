@@ -480,7 +480,7 @@ def test_reconnect_during_rest_does_not_receive_turn(server):
             clientMsgId=f"rest-{role}",
         )
     ws_a.recv_until("rest")
-    ws_b.recv_until("rest")
+    rest_b = ws_b.recv_until("rest")
     ws_b.close()
     wait_until(
         lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")["restDeadline"]
@@ -492,6 +492,8 @@ def test_reconnect_during_rest_does_not_receive_turn(server):
     state_b = ws_b.recv_until("room_state")
     assert state_b["game"]["phase"] == "rest"
     assert state_b["game"]["restDeadline"] is not None
+    assert state_b["game"]["finalSoldiers"] == rest_b["finalSoldiers"]
+    assert set(state_b["game"]["finalSoldiers"]) == {"player1", "player2"}
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
         try:

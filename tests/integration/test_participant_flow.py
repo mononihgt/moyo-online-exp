@@ -222,6 +222,11 @@ def test_rest_messages_carry_trial_round_and_complete(server):
     assert rest_a["trialIndex"] == 0
     assert rest_a["round"] == 1
     assert rest_a["completedIsPractice"] is True
+    assert rest_a["completedFormalTrial"] == 0
+    assert rest_a["formalTrials"] == 2
+    assert set(rest_a["finalSoldiers"]) == {"player1", "player2"}
+    assert all(isinstance(value, int) for value in rest_a["finalSoldiers"].values())
+    assert rest_a["finalSoldiers"] == rest_b["finalSoldiers"]
     assert rest_b["trialIndex"] == 0
     assert rest_b["round"] == 1
     ws_a.send("rest_ready", roomId=room["id"])

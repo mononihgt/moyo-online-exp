@@ -408,6 +408,11 @@ export interface InstructionState {
   bothEnterRequested: boolean;
 }
 
+export interface TrialScores {
+  player1: number;
+  player2: number;
+}
+
 export interface GameState {
   phase: "turn" | "rest" | "questionnaire" | string;
   trialIndex: number;
@@ -428,6 +433,7 @@ export interface GameState {
   submitted: boolean;
   partnerSubmitted: boolean;
   restReady: Record<string, boolean>;
+  finalSoldiers: TrialScores | null;
 }
 
 export interface RoomStateMessage {
@@ -504,6 +510,8 @@ export interface RestMessage {
   nextIsPractice: boolean | null;
   nextFormalTrial: number | null;
   restSeconds: number;
+  formalTrials: number;
+  finalSoldiers: TrialScores | null;
   deadline: string | null;
   ready: Record<string, boolean>;
 }
