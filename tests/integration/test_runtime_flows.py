@@ -204,7 +204,7 @@ def test_two_bookings_one_absent_archives_no_show(server):
 
 
 @pytest.mark.integration
-def test_participant_exit_archives_abandoned_and_allows_rebooking(server):
+def test_participant_cannot_exit_when_partner_present(server):
     context = Context(server)
     import_roster(context.admin, [("退出甲", "13700000021"), ("搭档乙", "13700000022")])
     room = context.room(starts_in_seconds=2)
@@ -216,15 +216,38 @@ def test_participant_exit_archives_abandoned_and_allows_rebooking(server):
     ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
     _enter_both(ws_a, ws_b, room["id"], context.admin)
     ws_a.send("exit_room", roomId=room["id"])
-    archived = ws_a.recv_until("room_archived", timeout=10)
-    assert archived["reason"] == "abandoned"
-    assert ws_b.recv_until("room_archived", timeout=10)["reason"] == "abandoned"
-    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 2
-    assert all(item["showupPayCents"] == 500 for item in payments)
-    assert participant_a.json("GET", "/api/my-room")["room"] is None
+    error = ws_a.recv_until("error", timeout=10)
+    assert error["code"] == "partner_present"
+    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    assert detail["room"]["status"] == "waiting"
+    assert participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting"
     ws_a.close()
     ws_b.close()
+    _close_participants(context.admin, participant_a, participant_b)
+
+
+@pytest.mark.integration
+def test_participant_exit_with_absent_partner_archives_abandoned(server):
+    context = Context(server)
+    import_roster(context.admin, [("退出丙", "13700000023"), ("缺席丁", "13700000024")])
+    room = context.room(starts_in_seconds=2)
+    participant_a = context.participant("退出丙", "13700000023")
+    participant_b = context.participant("缺席丁", "13700000024")
+    _book(context, room, participant_a, participant_b)
+    wait_until(lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting", timeout=20)
+    ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
+    ws_a.send("enter_room", roomId=room["id"])
+    state = ws_a.recv_until("room_state", timeout=10)
+    assert state["partner"]["entered"] is False
+    ws_a.send("exit_room", roomId=room["id"])
+    archived = ws_a.recv_until("room_archived", timeout=10)
+    assert archived["reason"] == "abandoned"
+    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
+    by_name = {item["name"]: item for item in payments}
+    assert by_name["退出丙"]["showupPayCents"] == 500
+    assert by_name["缺席丁"]["showupPayCents"] == 0
+    assert participant_a.json("GET", "/api/my-room")["room"] is None
+    ws_a.close()
     _close_participants(context.admin, participant_a, participant_b)
 
 

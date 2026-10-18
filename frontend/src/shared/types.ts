@@ -298,6 +298,8 @@ export interface RoomDetail {
   bookings: AdminBooking[];
   participants: AdminRoomParticipant[];
   payments: Payment[];
+  jatosAdminUrl: string | null;
+  jatosStudyCode: string | null;
 }
 
 export interface RoomMonitor {

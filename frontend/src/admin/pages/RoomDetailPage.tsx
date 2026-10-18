@@ -9,6 +9,7 @@ import {
   Copy,
   Database,
   Download,
+  ExternalLink,
   Eye,
   FileJson,
   LayoutDashboard,
@@ -1423,16 +1424,32 @@ export function RoomDetailPage() {
               <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
                 参与者数据状态
               </h2>
-              <button
-                type="button"
-                className="admin-btn admin-btn-secondary admin-btn-sm"
-                onClick={() => void resendQuestionnaire()}
-                disabled={actionBusy !== null || room.status !== "questionnaire"}
-              >
-                <Send size={14} />
-                获取问卷链接
-              </button>
+              <div className="admin-btn-row">
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-secondary admin-btn-sm"
+                  onClick={() => void resendQuestionnaire()}
+                  disabled={actionBusy !== null || room.status !== "questionnaire"}
+                >
+                  <Send size={14} />
+                  获取问卷链接
+                </button>
+                {detail.jatosAdminUrl ? (
+                  <a
+                    className="admin-btn admin-btn-secondary admin-btn-sm"
+                    href={detail.jatosAdminUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <ExternalLink size={14} />
+                    打开 JATOS 后台
+                  </a>
+                ) : null}
+              </div>
             </div>
+            {detail.jatosStudyCode ? (
+              <p className="admin-hint">JATOS study code: {detail.jatosStudyCode}</p>
+            ) : null}
             {detail.participants.length === 0 ? (
               <EmptyState title="暂无参与者" description="进入指导语后会记录参与者。" />
             ) : (

@@ -81,10 +81,11 @@ from ..services.instructions import (
     serialize_instruction,
     update_instruction,
 )
-from ..services.jatos import build_questionnaire_url
+from ..services.jatos import build_questionnaire_url, jatos_config
+from ..services.locking import room_lock
 from ..services.media import save_image, serialize_media
 from ..services.participants import import_completed, import_roster
-from ..services.payments import apply_override, serialize_payment
+from ..services.payments import UNSET, apply_override, serialize_payment, upsert_payment
 from ..services.questionnaire_flow import complete_questionnaire
 from ..services.questionnaires import (
     QuestionnaireValidationError,
@@ -112,6 +113,17 @@ router = APIRouter(prefix="/admin/api")
 
 def _audit(db, admin, action: str, target_type: str, target_id: str, payload: dict | None = None) -> None:
     add_audit(db, admin.id, action, target_type, target_id, payload)
+
+
+def _audit_import_report(report: dict) -> dict:
+    safe = {key: value for key, value in report.items() if key not in ("rows", "errors")}
+    for key in ("rows", "errors"):
+        if key in report:
+            safe[key] = [
+                {field: value for field, value in row.items() if field != "name"}
+                for row in report[key]
+            ]
+    return safe
 
 
 @router.get("/dashboard")
@@ -190,7 +202,7 @@ async def import_participants(
 ):
     data = await file.read()
     report = await import_roster(db, data, file.filename or "roster.csv")
-    _audit(db, admin, "participants_import", "participant", "bulk", report)
+    _audit(db, admin, "participants_import", "participant", "bulk", _audit_import_report(report))
     await db.commit()
     return report
 
@@ -201,7 +213,14 @@ async def import_completed_participants(
 ):
     data = await file.read()
     report = await import_completed(db, data, file.filename or "completed.csv")
-    _audit(db, admin, "participants_import_completed", "participant", "bulk", report)
+    _audit(
+        db,
+        admin,
+        "participants_import_completed",
+        "participant",
+        "bulk",
+        _audit_import_report(report),
+    )
     await db.commit()
     return report
 
@@ -625,6 +644,7 @@ async def _room_detail(db, room: Room) -> dict:
         serialize_payment(payment, role_row.analysis_code if role_row else None)
         for payment, role_row in payments_rows.all()
     ]
+    jatos_base_url, jatos_study_code = await jatos_config(db)
     return {
         "room": summary,
         "config": room_config_dict(room),
@@ -636,24 +656,30 @@ async def _room_detail(db, room: Room) -> dict:
         "bookings": bookings,
         "participants": participants,
         "payments": payments,
+        "jatosAdminUrl": f"{jatos_base_url}/jatos" if jatos_base_url else None,
+        "jatosStudyCode": jatos_study_code or None,
     }
 
 
 @router.patch("/rooms/{room_id}", dependencies=[Depends(require_csrf)])
 async def patch_room(room_id: str, payload: RoomPatch, admin: AdminDep, db: DbSession):
-    room = await _get_room(db, room_id)
-    room = await update_room(db, room, payload.model_dump(exclude_unset=True))
-    _audit(db, admin, "room_updated", "room", room.id, payload.model_dump(exclude_unset=True))
-    await db.commit()
+    async with room_lock(room_id):
+        await db.commit()
+        room = await _get_room(db, room_id)
+        room = await update_room(db, room, payload.model_dump(exclude_unset=True))
+        _audit(db, admin, "room_updated", "room", room.id, payload.model_dump(exclude_unset=True))
+        await db.commit()
     return {"room": await room_summary(db, room)}
 
 
 @router.post("/rooms/{room_id}/publish", dependencies=[Depends(require_csrf)])
 async def post_publish_room(room_id: str, admin: AdminDep, db: DbSession):
-    room = await _get_room(db, room_id)
-    room = await publish_room(db, room)
-    _audit(db, admin, "room_published", "room", room.id)
-    await db.commit()
+    async with room_lock(room_id):
+        await db.commit()
+        room = await _get_room(db, room_id)
+        room = await publish_room(db, room)
+        _audit(db, admin, "room_published", "room", room.id)
+        await db.commit()
     return {"room": await room_summary(db, room)}
 
 
@@ -661,22 +687,26 @@ async def post_publish_room(room_id: str, admin: AdminDep, db: DbSession):
 async def post_cancel_room(room_id: str, admin: AdminDep, db: DbSession):
     from ..services.rooms import cancel_room
 
-    room = await _get_room(db, room_id)
-    await cancel_room(db, room)
-    _audit(db, admin, "room_cancelled", "room", room.id)
-    await db.commit()
+    async with room_lock(room_id):
+        await db.commit()
+        room = await _get_room(db, room_id)
+        await cancel_room(db, room)
+        _audit(db, admin, "room_cancelled", "room", room.id)
+        await db.commit()
     await runtime_manager.notify_room(room.id)
     return {"room": await room_summary(db, room)}
 
 
 @router.post("/rooms/{room_id}/archive", dependencies=[Depends(require_csrf)])
 async def post_archive_room(room_id: str, payload: RoomAction, admin: AdminDep, db: DbSession):
-    room = await _get_room(db, room_id)
-    reason = payload.reason or _default_archive_reason(room)
-    _validate_archive_reason(reason)
-    await archive_room(db, room, reason)
-    _audit(db, admin, "room_archived", "room", room.id, {"reason": reason})
-    await db.commit()
+    async with room_lock(room_id):
+        await db.commit()
+        room = await _get_room(db, room_id)
+        reason = payload.reason or _default_archive_reason(room)
+        _validate_archive_reason(reason)
+        await archive_room(db, room, reason)
+        _audit(db, admin, "room_archived", "room", room.id, {"reason": reason})
+        await db.commit()
     await runtime_manager.notify_room(room.id)
     return {"room": await room_summary(db, room)}
 
@@ -696,35 +726,40 @@ def _validate_archive_reason(reason: str) -> None:
 
 @router.post("/rooms/{room_id}/bookings", dependencies=[Depends(require_csrf)])
 async def add_booking(room_id: str, payload: BookingCreate, admin: AdminDep, db: DbSession):
-    room = await _get_room(db, room_id)
-    participant = await db.get(Participant, payload.participant_id)
-    if participant is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
-    if participant.status != "eligible":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "参与者当前状态不允许报名")
-    booking = await book_room(db, room, participant, allow_after_start=True)
-    _audit(db, admin, "booking_added", "room", room.id, {"participantId": participant.id})
-    await db.commit()
+    async with room_lock(room_id):
+        await db.commit()
+        room = await _get_room(db, room_id)
+        participant = await db.get(Participant, payload.participant_id)
+        if participant is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
+        if participant.status != "eligible":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "参与者当前状态不允许报名")
+        booking = await book_room(db, room, participant, allow_after_start=True)
+        _audit(db, admin, "booking_added", "room", room.id, {"participantId": participant.id})
+        await db.commit()
     return {"bookingId": booking.id}
 
 
 @router.delete("/rooms/{room_id}/bookings/{booking_id}", dependencies=[Depends(require_csrf)])
 async def remove_booking(room_id: str, booking_id: str, admin: AdminDep, db: DbSession):
-    room = await _get_room(db, room_id)
-    booking = await db.get(Booking, booking_id)
-    if booking is None or booking.room_id != room.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
-    if room.status in (ROOM_INSTRUCTIONS, ROOM_PLAYING, ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间状态不允许移除预约")
-    if booking.status not in (BOOKING_BOOKED, BOOKING_ATTENDED):
-        raise HTTPException(status.HTTP_409_CONFLICT, "预约当前状态不允许移除")
-    booking.status = BOOKING_CANCELED
-    booking.canceled_at = utcnow()
-    if room.status == ROOM_FULL:
-        room.status = ROOM_OPEN
-    add_event(db, room, "booking_canceled", booking.participant_id, {"by": "admin"})
-    _audit(db, admin, "booking_removed", "room", room.id, {"bookingId": booking.id})
-    await db.commit()
+    async with room_lock(room_id):
+        await db.commit()
+        room = await _get_room(db, room_id)
+        booking = await db.get(Booking, booking_id)
+        if booking is None or booking.room_id != room.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
+        if room.status in (ROOM_INSTRUCTIONS, ROOM_PLAYING, ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
+            raise HTTPException(status.HTTP_409_CONFLICT, "当前房间状态不允许移除预约")
+        if booking.status not in (BOOKING_BOOKED, BOOKING_ATTENDED):
+            raise HTTPException(status.HTTP_409_CONFLICT, "预约当前状态不允许移除")
+        booking.status = BOOKING_CANCELED
+        booking.canceled_at = utcnow()
+        if room.status == ROOM_FULL:
+            room.status = ROOM_OPEN
+        add_event(db, room, "booking_canceled", booking.participant_id, {"by": "admin"})
+        _audit(db, admin, "booking_removed", "room", room.id, {"bookingId": booking.id})
+        await db.commit()
+    await runtime_manager.notify_room(room_id)
     return {"removed": True}
 
 
@@ -803,116 +838,134 @@ async def monitor_room(room_id: str, admin: AdminDep, db: DbSession):
 
 @router.post("/rooms/{room_id}/actions", dependencies=[Depends(require_csrf)])
 async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: DbSession):
-    room = await _get_room(db, room_id)
-    action = payload.action
-    if action == "force_archive":
-        reason = payload.reason or _default_archive_reason(room)
-        _validate_archive_reason(reason)
-        await archive_room(db, room, reason)
-        _audit(db, admin, "room_force_archived", "room", room.id, {"reason": reason})
+    notify = False
+    async with room_lock(room_id):
         await db.commit()
-        await runtime_manager.notify_room(room.id)
-        return {"ok": True, "reason": reason}
-    if action == "extend_wait":
-        if room.status != ROOM_WAITING:
-            raise HTTPException(status.HTTP_409_CONFLICT, "只有等待阶段可以延长等待窗口")
-        if payload.minutes is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供延长分钟数")
-        room.wait_window_seconds += payload.minutes * 60
-        await add_config_revision(db, room)
-        add_event(db, room, "admin_action", payload={"action": action, "minutes": payload.minutes})
-        _audit(db, admin, "wait_window_extended", "room", room.id, {"minutes": payload.minutes})
-        await db.commit()
-        await runtime_manager.notify_room(room.id)
-        return {"ok": True, "waitWindowSeconds": room.wait_window_seconds}
-    if action == "resend_questionnaire":
-        if room.status != ROOM_QUESTIONNAIRE:
-            raise HTTPException(status.HTTP_409_CONFLICT, "房间不在问卷阶段")
-        rows_query = await db.execute(
-            select(RoomParticipant).where(RoomParticipant.room_id == room.id)
-        )
-        rows = list(rows_query.scalars().all())
-        if payload.participant_id:
-            rows = [row for row in rows if row.participant_id == payload.participant_id]
-        if not rows:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到参与者")
-        links = []
-        for row in rows:
-            url = await build_questionnaire_url(db, room, row)
-            links.append({"participantId": row.participant_id, "url": url})
-        add_event(db, room, "admin_action", payload={"action": action})
-        _audit(db, admin, "questionnaire_resent", "room", room.id)
-        await db.commit()
-        return {"links": links}
-    if action == "mark_absent":
-        if payload.participant_id is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
-        booking = (
-            await db.execute(
-                select(Booking).where(
-                    Booking.room_id == room.id, Booking.participant_id == payload.participant_id
+        room = await _get_room(db, room_id)
+        action = payload.action
+        if action == "force_archive":
+            reason = payload.reason or _default_archive_reason(room)
+            _validate_archive_reason(reason)
+            await archive_room(db, room, reason)
+            _audit(db, admin, "room_force_archived", "room", room.id, {"reason": reason})
+            await db.commit()
+            result = {"ok": True, "reason": reason}
+            notify = True
+        elif action == "extend_wait":
+            if room.status != ROOM_WAITING:
+                raise HTTPException(status.HTTP_409_CONFLICT, "只有等待阶段可以延长等待窗口")
+            if payload.minutes is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供延长分钟数")
+            room.wait_window_seconds += payload.minutes * 60
+            await add_config_revision(db, room)
+            add_event(db, room, "admin_action", payload={"action": action, "minutes": payload.minutes})
+            _audit(db, admin, "wait_window_extended", "room", room.id, {"minutes": payload.minutes})
+            await db.commit()
+            result = {"ok": True, "waitWindowSeconds": room.wait_window_seconds}
+            notify = True
+        elif action == "resend_questionnaire":
+            if room.status != ROOM_QUESTIONNAIRE:
+                raise HTTPException(status.HTTP_409_CONFLICT, "房间不在问卷阶段")
+            rows_query = await db.execute(
+                select(RoomParticipant).where(RoomParticipant.room_id == room.id)
+            )
+            rows = list(rows_query.scalars().all())
+            if payload.participant_id:
+                rows = [row for row in rows if row.participant_id == payload.participant_id]
+            if not rows:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到参与者")
+            links = []
+            for row in rows:
+                url = await build_questionnaire_url(db, room, row)
+                links.append({"participantId": row.participant_id, "url": url})
+            add_event(db, room, "admin_action", payload={"action": action})
+            _audit(db, admin, "questionnaire_resent", "room", room.id)
+            await db.commit()
+            result = {"links": links}
+        elif action == "mark_absent":
+            if payload.participant_id is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
+            booking = (
+                await db.execute(
+                    select(Booking).where(
+                        Booking.room_id == room.id, Booking.participant_id == payload.participant_id
+                    )
+                )
+            ).scalars().first()
+            if booking is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
+            if booking.status not in (BOOKING_BOOKED, BOOKING_ATTENDED):
+                raise HTTPException(status.HTTP_409_CONFLICT, "预约当前状态不允许标记缺席")
+            booking.status = BOOKING_NO_SHOW
+            payment_query = await db.execute(
+                select(Payment).where(
+                    Payment.room_id == room.id,
+                    Payment.participant_id == payload.participant_id,
                 )
             )
-        ).scalars().first()
-        if booking is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
-        booking.status = BOOKING_NO_SHOW
-        add_event(db, room, "admin_action", payload={"action": action, "participantId": payload.participant_id})
-        _audit(db, admin, "participant_marked_absent", "room", room.id, {"participantId": payload.participant_id})
-        await db.commit()
-        return {"ok": True}
-    if action == "mark_completed":
-        if payload.participant_id is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
-        participant = await db.get(Participant, payload.participant_id)
-        if participant is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
-        participant.status = PARTICIPANT_COMPLETED
-        add_event(db, room, "admin_action", payload={"action": action, "participantId": participant.id})
-        _audit(db, admin, "participant_marked_completed", "participant", participant.id)
-        await db.commit()
-        return {"ok": True}
-    if action == "disable_participant":
-        if payload.participant_id is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
-        participant = await db.get(Participant, payload.participant_id)
-        if participant is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
-        participant.status = PARTICIPANT_DISABLED
-        add_event(db, room, "admin_action", payload={"action": action, "participantId": participant.id})
-        _audit(db, admin, "participant_disabled", "participant", participant.id)
-        await db.commit()
-        return {"ok": True}
-    if action == "import_jatos_result":
-        if payload.participant_id is None or not payload.jatos_study_result_id or not payload.jatos_component_result_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 JATOS 结果字段")
-        if payload.answers is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少问卷答案")
-        row = (
-            await db.execute(
-                select(RoomParticipant).where(
-                    RoomParticipant.room_id == room.id,
-                    RoomParticipant.participant_id == payload.participant_id,
+            payment = payment_query.scalars().first()
+            if payment is not None and payment.status != PAYMENT_PAID:
+                await upsert_payment(db, room, payload.participant_id, booking=booking)
+            add_event(db, room, "admin_action", payload={"action": action, "participantId": payload.participant_id})
+            _audit(db, admin, "participant_marked_absent", "room", room.id, {"participantId": payload.participant_id})
+            await db.commit()
+            result = {"ok": True}
+            notify = True
+        elif action == "mark_completed":
+            if payload.participant_id is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
+            participant = await db.get(Participant, payload.participant_id)
+            if participant is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
+            participant.status = PARTICIPANT_COMPLETED
+            add_event(db, room, "admin_action", payload={"action": action, "participantId": participant.id})
+            _audit(db, admin, "participant_marked_completed", "participant", participant.id)
+            await db.commit()
+            result = {"ok": True}
+        elif action == "disable_participant":
+            if payload.participant_id is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
+            participant = await db.get(Participant, payload.participant_id)
+            if participant is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
+            participant.status = PARTICIPANT_DISABLED
+            add_event(db, room, "admin_action", payload={"action": action, "participantId": participant.id})
+            _audit(db, admin, "participant_disabled", "participant", participant.id)
+            await db.commit()
+            result = {"ok": True}
+        elif action == "import_jatos_result":
+            if payload.participant_id is None or not payload.jatos_study_result_id or not payload.jatos_component_result_id:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 JATOS 结果字段")
+            if payload.answers is None:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少问卷答案")
+            row = (
+                await db.execute(
+                    select(RoomParticipant).where(
+                        RoomParticipant.room_id == room.id,
+                        RoomParticipant.participant_id == payload.participant_id,
+                    )
                 )
+            ).scalars().first()
+            if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不属于该房间")
+            result = await complete_questionnaire(
+                db,
+                room,
+                row,
+                answers=payload.answers,
+                jatos_worker_id=payload.jatos_worker_id,
+                jatos_study_result_id=payload.jatos_study_result_id,
+                jatos_component_result_id=payload.jatos_component_result_id,
+                source="admin",
             )
-        ).scalars().first()
-        if row is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不属于该房间")
-        result = await complete_questionnaire(
-            db,
-            room,
-            row,
-            answers=payload.answers,
-            jatos_worker_id=payload.jatos_worker_id,
-            jatos_study_result_id=payload.jatos_study_result_id,
-            jatos_component_result_id=payload.jatos_component_result_id,
-            source="admin",
-        )
-        _audit(db, admin, "jatos_result_imported", "room", room.id, {"participantId": payload.participant_id})
-        await db.commit()
-        await runtime_manager.notify_room(room.id)
-        return result
-    raise HTTPException(status.HTTP_400_BAD_REQUEST, "未知操作")
+            _audit(db, admin, "jatos_result_imported", "room", room.id, {"participantId": payload.participant_id})
+            await db.commit()
+            notify = True
+        else:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "未知操作")
+    if notify:
+        await runtime_manager.notify_room(room_id)
+    return result
 
 
 @router.get("/rooms/{room_id}/export.json")
@@ -978,11 +1031,17 @@ async def patch_payment(payment_id: str, payload: PaymentPatch, admin: AdminDep,
     if payment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "付款记录不存在")
     previous_status = payment.status
-    apply_override(payment, payload.override_amount_cents, payload.admin_note, payload.status)
+    fields = payload.model_dump(exclude_unset=True)
+    apply_override(
+        payment,
+        override_amount_cents=fields.get("override_amount_cents", UNSET),
+        note=fields.get("admin_note", UNSET),
+        new_status=payload.status,
+    )
     if payload.status == PAYMENT_PAID and previous_status != PAYMENT_PAID:
         room = await db.get(Room, payment.room_id)
         add_event(db, room, "payment_paid", payment.participant_id, {"totalCents": payment.total_cents})
-    _audit(db, admin, "payment_updated", "payment", payment.id, payload.model_dump(exclude_none=True))
+    _audit(db, admin, "payment_updated", "payment", payment.id, fields)
     await db.commit()
     return {"payment": serialize_payment(payment)}
 

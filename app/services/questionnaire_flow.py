@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,9 +23,17 @@ from ..models import (
 from ..timeutil import isoformat_utc, utcnow
 from .events import add_event
 from .jatos import build_questionnaire_token, read_questionnaire_token
+from .locking import room_lock
 from .payments import serialize_payment, upsert_payment
 from .questionnaires import serialize_questionnaire, validate_answers
 from .rooms import archive_room
+
+
+@asynccontextmanager
+async def _room_write_lock(db: AsyncSession, room_id: str):
+    async with room_lock(room_id):
+        await db.commit()
+        yield
 
 
 async def load_context(db: AsyncSession, token: str) -> tuple[Room, RoomParticipant, QuestionnaireVersion]:
@@ -45,6 +55,12 @@ async def load_context(db: AsyncSession, token: str) -> tuple[Room, RoomParticip
 
 
 async def questionnaire_context(db: AsyncSession, token: str) -> dict:
+    payload = read_questionnaire_token(token)
+    async with _room_write_lock(db, payload["roomId"]):
+        return await _questionnaire_context_locked(db, token)
+
+
+async def _questionnaire_context_locked(db: AsyncSession, token: str) -> dict:
     room, room_participant, questionnaire = await load_context(db, token)
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间尚未进入问卷阶段")
@@ -95,6 +111,12 @@ async def _canonical_response(db: AsyncSession, room_id: str, participant_id: st
 
 
 async def save_draft(db: AsyncSession, token: str, answers: dict) -> dict:
+    payload = read_questionnaire_token(token)
+    async with _room_write_lock(db, payload["roomId"]):
+        return await _save_draft_locked(db, token, answers)
+
+
+async def _save_draft_locked(db: AsyncSession, token: str, answers: dict) -> dict:
     room, room_participant, questionnaire = await load_context(db, token)
     if room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED:
         raise HTTPException(status.HTTP_409_CONFLICT, "问卷已经提交")
@@ -207,6 +229,12 @@ async def complete_questionnaire(
 
 
 async def complete_with_token(db: AsyncSession, token: str, payload: dict) -> dict:
+    token_payload = read_questionnaire_token(token)
+    async with _room_write_lock(db, token_payload["roomId"]):
+        return await _complete_with_token_locked(db, token, payload)
+
+
+async def _complete_with_token_locked(db: AsyncSession, token: str, payload: dict) -> dict:
     room, room_participant, _questionnaire = await load_context(db, token)
     if room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED:
         canonical = await _canonical_response(db, room.id, room_participant.participant_id)
@@ -226,6 +254,13 @@ async def complete_with_token(db: AsyncSession, token: str, payload: dict) -> di
 
 
 async def complete_with_participant(
+    db: AsyncSession, participant: Participant, room_id: str, payload: dict
+) -> dict:
+    async with _room_write_lock(db, room_id):
+        return await _complete_with_participant_locked(db, participant, room_id, payload)
+
+
+async def _complete_with_participant_locked(
     db: AsyncSession, participant: Participant, room_id: str, payload: dict
 ) -> dict:
     room = await db.get(Room, room_id)

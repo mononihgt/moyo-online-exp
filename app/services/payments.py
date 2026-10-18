@@ -75,7 +75,7 @@ async def upsert_payment(
     payment = existing_query.scalars().first()
 
     completed = room_participant is not None and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
-    attended = booking is not None and (booking.status == BOOKING_ATTENDED or booking.attended_at is not None)
+    attended = booking is not None and booking.status == BOOKING_ATTENDED
     no_show = booking is None or booking.status == BOOKING_NO_SHOW
 
     base = 0
@@ -142,16 +142,34 @@ def serialize_payment(payment: Payment, analysis_code: str | None = None) -> dic
     }
 
 
-def apply_override(payment: Payment, override_amount_cents: int | None, note: str | None, new_status: str | None) -> None:
-    if override_amount_cents is not None and not (note or "").strip():
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "覆盖金额必须填写备注")
-    payment.override_amount_cents = override_amount_cents
-    payment.admin_note = note
-    payment.total_cents = (
-        override_amount_cents
-        if override_amount_cents is not None
-        else payment.base_pay_cents + payment.performance_pay_cents + payment.showup_pay_cents
-    )
+UNSET = object()
+
+
+def apply_override(
+    payment: Payment,
+    *,
+    override_amount_cents: int | None | object = UNSET,
+    note: str | None | object = UNSET,
+    new_status: str | None = None,
+) -> None:
+    setting_override = override_amount_cents is not UNSET
+    setting_note = note is not UNSET
+    if setting_override or setting_note:
+        resolved_override = (
+            override_amount_cents if setting_override else payment.override_amount_cents
+        )
+        resolved_note = note if setting_note else payment.admin_note
+        if resolved_override is not None and not (resolved_note or "").strip():
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "覆盖金额必须填写备注")
+    if setting_override:
+        payment.override_amount_cents = override_amount_cents
+        payment.total_cents = (
+            override_amount_cents
+            if override_amount_cents is not None
+            else payment.base_pay_cents + payment.performance_pay_cents + payment.showup_pay_cents
+        )
+    if setting_note:
+        payment.admin_note = note
     if new_status is not None:
         if new_status == PAYMENT_PAID:
             payment.status = PAYMENT_PAID

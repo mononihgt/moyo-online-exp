@@ -204,7 +204,7 @@ class RuntimeManager:
                 await db.commit()
                 await self._send_snapshot(db, room, participant.id)
                 await self._broadcast_partner_state(db, room)
-                if resumed:
+                if resumed and state["phase"] == PHASE_TURN:
                     await self._broadcast_turn(db, room, state)
                 return room.id
 
@@ -349,7 +349,7 @@ class RuntimeManager:
             await db.commit()
             await self._send_error(participant.id, room.id, "partner_missing", "另一名被试尚未报名")
             return
-        if any(booking.attended_at is None for booking in bookings):
+        if any(booking.status != BOOKING_ATTENDED for booking in bookings):
             add_event(db, room, "partner_absent", participant.id, {"reason": "not_entered"})
             await db.commit()
             await self._send_error(participant.id, room.id, "partner_absent", "另一名被试尚未进入实验")
@@ -499,6 +499,10 @@ class RuntimeManager:
         if room.status != ROOM_WAITING:
             await self._send_error(participant.id, room.id, "invalid_state", "当前状态不能退出")
             return
+        bookings = await self._active_bookings(db, room.id)
+        if sum(1 for booking in bookings if booking.status == BOOKING_ATTENDED) >= 2:
+            await self._send_error(participant.id, room.id, "partner_present", "搭档已到场，不能退出实验")
+            return
         add_event(db, room, "participant_exited", participant.id)
         await archive_room(db, room, ARCHIVE_ABANDONED)
         await db.commit()
@@ -614,7 +618,18 @@ class RuntimeManager:
         state["phase"] = PHASE_TURN
         state["trial_index"] = 0
         state["enter_requests"] = []
-        state["disconnected"] = {}
+        now = utcnow()
+        connected = set(self.connections.get(room.id, {}))
+        state["disconnected"] = {
+            participant_id: due
+            for participant_id, due in state["disconnected"].items()
+            if participant_id not in connected
+        }
+        for row in await self._room_participant_rows(db, room.id):
+            if row.participant_id not in connected and row.participant_id not in state["disconnected"]:
+                state["disconnected"][row.participant_id] = isoformat_utc(
+                    now + timedelta(seconds=room.reconnect_window_seconds)
+                )
         add_event(db, room, "game_started")
         await self._start_next_trial(db, room, state)
         await db.commit()
@@ -672,8 +687,7 @@ class RuntimeManager:
         state["trial_index"] = trial_index
         state["round"] = 1
         state["submissions"] = {}
-        state["turn_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=condition["turnSeconds"]))
-        state["turn_paused_remaining"] = None
+        self._set_turn_deadline(state, condition["turnSeconds"])
         state["turn_generation"] = state.get("turn_generation", 0) + 1
         state["recovery_count"] = 0
         state["rest_deadline"] = None
@@ -683,7 +697,8 @@ class RuntimeManager:
         state["num_of_war"] = 0
         state["trial_started_at"] = isoformat_utc(utcnow())
         add_event(db, room, "trial_started", payload={"trialIndex": trial_index, "sourceIndex": source_index})
-        self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=condition["turnSeconds"]))
+        if state["turn_deadline"] is not None:
+            self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=condition["turnSeconds"]))
         _save_state(room, state)
         await db.flush()
 
@@ -804,10 +819,10 @@ class RuntimeManager:
             )
         else:
             state["round"] = round_number + 1
-            state["turn_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=condition["turnSeconds"]))
-            state["turn_paused_remaining"] = None
+            self._set_turn_deadline(state, condition["turnSeconds"])
             state["turn_generation"] += 1
-            self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=condition["turnSeconds"]))
+            if state["turn_deadline"] is not None:
+                self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=condition["turnSeconds"]))
             result["nextRound"] = state["round"]
             result["deadline"] = state["turn_deadline"]
         _save_state(room, state)
@@ -901,10 +916,10 @@ class RuntimeManager:
         if state["trial_index"] + 1 >= total_trials:
             await self._enter_questionnaire(db, room, state)
         else:
-            state["rest_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=condition["restSeconds"]))
-            state["rest_paused_remaining"] = None
+            self._set_rest_deadline(state, condition["restSeconds"])
             state["rest_ready"] = {}
-            self._record_timer(db, room, "rest", utcnow() + timedelta(seconds=condition["restSeconds"]))
+            if state["rest_deadline"] is not None:
+                self._record_timer(db, room, "rest", utcnow() + timedelta(seconds=condition["restSeconds"]))
         _save_state(room, state)
 
     async def _enter_questionnaire(self, db: AsyncSession, room: Room, state: dict) -> None:
@@ -975,7 +990,7 @@ class RuntimeManager:
                 if room.status == ROOM_WAITING:
                     wait_deadline = room.starts_at + timedelta(seconds=room.wait_window_seconds)
                     if now >= wait_deadline:
-                        bookings = await self._active_bookings(db, room.id)
+                        bookings = await self._room_bookings(db, room.id)
                         reason = archive_reason_for_wait_expiry(bookings)
                         await archive_room(db, room, reason)
                         await db.commit()
@@ -1101,6 +1116,22 @@ class RuntimeManager:
             )
         state["instruction"]["connected_since"].pop(participant_id, None)
 
+    def _set_turn_deadline(self, state: dict, seconds: int) -> None:
+        if state["disconnected"]:
+            state["turn_deadline"] = None
+            state["turn_paused_remaining"] = float(seconds)
+            return
+        state["turn_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=seconds))
+        state["turn_paused_remaining"] = None
+
+    def _set_rest_deadline(self, state: dict, seconds: int) -> None:
+        if state["disconnected"]:
+            state["rest_deadline"] = None
+            state["rest_paused_remaining"] = float(seconds)
+            return
+        state["rest_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=seconds))
+        state["rest_paused_remaining"] = None
+
     def _pause_game_clock(self, state: dict) -> None:
         now = utcnow()
         if state["phase"] == PHASE_TURN and state["turn_deadline"] is not None:
@@ -1172,10 +1203,17 @@ class RuntimeManager:
     async def _mark_all_disconnected(
         self, db: AsyncSession, room: Room, state: dict, now: datetime
     ) -> None:
-        due = isoformat_utc(now + timedelta(seconds=room.reconnect_window_seconds))
+        rows = await self._room_participant_rows(db, room.id)
+        if room.status == ROOM_INSTRUCTIONS:
+            for row in rows:
+                accumulated = float(state["instruction"]["accumulated"].get(row.participant_id, 0))
+                state["instruction"]["accumulated"][row.participant_id] = max(
+                    accumulated, float(row.instruction_connected_seconds)
+                )
         state["instruction"]["connected_since"] = {}
-        for row in await self._room_participant_rows(db, room.id):
-            state["disconnected"][row.participant_id] = due
+        due = isoformat_utc(now + timedelta(seconds=room.reconnect_window_seconds))
+        for row in rows:
+            state["disconnected"].setdefault(row.participant_id, due)
 
     async def _room_participant_rows(self, db: AsyncSession, room_id: str) -> list[RoomParticipant]:
         rows = await db.execute(select(RoomParticipant).where(RoomParticipant.room_id == room_id))
@@ -1187,6 +1225,10 @@ class RuntimeManager:
             .where(Booking.room_id == room_id, Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)))
             .order_by(Booking.created_at)
         )
+        return list(rows.scalars().all())
+
+    async def _room_bookings(self, db: AsyncSession, room_id: str) -> list[Booking]:
+        rows = await db.execute(select(Booking).where(Booking.room_id == room_id))
         return list(rows.scalars().all())
 
     async def _current_trial(self, db: AsyncSession, room_id: str, trial_index: int) -> GameTrial | None:
@@ -1268,7 +1310,11 @@ class RuntimeManager:
         partner = {
             "online": bool(partner_id and partner_id in self.connections.get(room.id, {})),
             "entered": bool(
-                partner_id and any(booking.participant_id == partner_id and booking.attended_at is not None for booking in bookings)
+                partner_id
+                and any(
+                    booking.participant_id == partner_id and booking.status == BOOKING_ATTENDED
+                    for booking in bookings
+                )
             ),
             "startRequested": bool(partner_id and partner_id in state["start_requests"]),
             "instructionCompleted": bool(partner_row and partner_row.instruction_completed_at is not None),
@@ -1512,7 +1558,9 @@ class RuntimeManager:
         bookings = await self._active_bookings(db, room.id)
         role_by_pid = {row.participant_id: row for row in rows}
         participant_ids = list(dict.fromkeys([row.participant_id for row in rows] + [b.participant_id for b in bookings]))
-        attended_ids = {booking.participant_id for booking in bookings if booking.attended_at is not None}
+        attended_ids = {
+            booking.participant_id for booking in bookings if booking.status == BOOKING_ATTENDED
+        }
         for participant_id in participant_ids:
             partner_id = next((pid for pid in participant_ids if pid != participant_id), None)
             partner_row = role_by_pid.get(partner_id) if partner_id else None

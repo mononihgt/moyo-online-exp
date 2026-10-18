@@ -61,6 +61,10 @@ export function WaitingView({
     return () => window.removeEventListener("keydown", handleKey);
   }, [confirmingExit]);
 
+  useEffect(() => {
+    if (roomState.partner.entered) setConfirmingExit(false);
+  }, [roomState.partner.entered]);
+
   return (
     <div className="exp-waiting-stage">
       <section className="p-wait-card exp-waiting-card" aria-labelledby="waiting-title">
@@ -141,17 +145,19 @@ export function WaitingView({
         </p>
       </section>
 
-      <div className="exp-exit-bar">
-        <button
-          type="button"
-          className="p-btn p-btn-quiet exp-exit-button"
-          data-testid="exit-room"
-          onClick={() => setConfirmingExit(true)}
-        >
-          <DoorOpen size={16} aria-hidden="true" />
-          另一名被试可能放鸽子了，我退出本次实验
-        </button>
-      </div>
+      {!roomState.partner.entered ? (
+        <div className="exp-exit-bar">
+          <button
+            type="button"
+            className="p-btn p-btn-quiet exp-exit-button"
+            data-testid="exit-room"
+            onClick={() => setConfirmingExit(true)}
+          >
+            <DoorOpen size={16} aria-hidden="true" />
+            另一名被试可能放鸽子了，我退出本次实验
+          </button>
+        </div>
+      ) : null}
 
       {confirmingExit ? (
         <div className="exp-modal-backdrop" role="presentation">

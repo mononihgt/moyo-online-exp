@@ -1,5 +1,6 @@
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
@@ -21,6 +22,7 @@ from ..constants import (
     ROOM_QUESTIONNAIRE,
     ROOM_STATUSES,
     ROOM_WAITING,
+    VERSION_ARCHIVED,
     VERSION_PUBLISHED,
 )
 from ..models import (
@@ -48,7 +50,7 @@ async def _get_version(db: AsyncSession, model, version_id: str, label: str):
     version = await db.get(model, version_id)
     if version is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label}不存在")
-    if version.status != VERSION_PUBLISHED:
+    if version.status not in (VERSION_PUBLISHED, VERSION_ARCHIVED):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label}尚未发布")
     return version
 
@@ -218,22 +220,39 @@ async def book_room(
     active = await blocking_booking_for_participant(db, participant.id)
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "你已有有效预约，请先取消当前预约")
-    await db.execute(select(Room.id).where(Room.id == room.id).with_for_update())
-    count = await booked_count(db, room.id)
+    await db.refresh(room, with_for_update=True)
+    if room.status not in allowed_statuses:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该房间当前不可报名")
+    if utcnow() >= room.starts_at and not allow_after_start:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该房间已过报名截止时间")
+    count_result = await db.execute(
+        select(Booking.id)
+        .where(
+            Booking.room_id == room.id,
+            Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)),
+        )
+        .with_for_update()
+    )
+    count = len(count_result.scalars().all())
     if count >= CAPACITY:
         raise HTTPException(status.HTTP_409_CONFLICT, "该房间已满")
     existing = await db.execute(
-        select(Booking).where(
+        select(Booking)
+        .where(
             Booking.room_id == room.id,
             Booking.participant_id == participant.id,
             Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)),
         )
+        .with_for_update()
     )
     if existing.scalars().first() is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "你已报名该房间")
     booking = Booking(room_id=room.id, participant_id=participant.id, status=BOOKING_BOOKED)
     db.add(booking)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "你已有有效预约，请先取消当前预约") from exc
     count += 1
     if room.status in (ROOM_OPEN, ROOM_FULL):
         room.status = ROOM_FULL if count >= CAPACITY else ROOM_OPEN
@@ -242,6 +261,8 @@ async def book_room(
 
 
 async def cancel_booking(db: AsyncSession, room: Room, booking: Booking) -> None:
+    await db.refresh(room, with_for_update=True)
+    await db.refresh(booking, with_for_update=True)
     if room.status not in (ROOM_OPEN, ROOM_FULL):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间状态不允许取消预约")
     if utcnow() >= room.starts_at:
@@ -343,11 +364,10 @@ async def cancel_room(db: AsyncSession, room: Room) -> None:
 
 
 def archive_reason_for_wait_expiry(bookings: list[Booking]) -> str:
-    attended = [booking for booking in bookings if booking.attended_at is not None]
-    booked = [booking for booking in bookings if booking.status in (BOOKING_BOOKED, BOOKING_ATTENDED)]
-    if len(booked) < 2:
+    remaining = [booking for booking in bookings if booking.status != BOOKING_CANCELED]
+    if len(remaining) < 2:
         return ARCHIVE_NOT_FULL
-    if len(attended) < 2:
+    if any(booking.status != BOOKING_ATTENDED for booking in remaining):
         return ARCHIVE_NO_SHOW
     return ARCHIVE_ABANDONED
 
