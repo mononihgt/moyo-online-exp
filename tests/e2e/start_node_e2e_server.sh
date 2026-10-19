@@ -7,7 +7,7 @@ export TEST_MYSQL_HOST="${TEST_MYSQL_HOST:-127.0.0.1}"
 export TEST_MYSQL_PORT="${TEST_MYSQL_PORT:-3307}"
 export TEST_MYSQL_USER="${TEST_MYSQL_USER:-moyo}"
 export TEST_MYSQL_PASSWORD="${TEST_MYSQL_PASSWORD:-moyo_dev_password}"
-export TEST_MYSQL_DATABASE="${TEST_MYSQL_DATABASE:-moyo_test_e2e}"
+export TEST_MYSQL_DATABASE="${TEST_MYSQL_DATABASE:-moyo_test}"
 
 uv run python tests/e2e/prepare_node_e2e.py
 

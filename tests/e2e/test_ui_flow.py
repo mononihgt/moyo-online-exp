@@ -185,15 +185,7 @@ def test_two_browser_contexts_full_participant_flow_and_admin_smoke(ui_server):
         "instruction_p2": instruction_2["id"],
         "questionnaire_id": questionnaire["id"],
     }
-    room = create_room(
-        admin,
-        **materials,
-        starts_in_seconds=15,
-        wait_window_seconds=90,
-        reconnect_window_seconds=20,
-        label="界面测试房间",
-    )
-    draft_room = create_room(
+    create_room(
         admin,
         **materials,
         starts_in_seconds=7200,
@@ -202,7 +194,7 @@ def test_two_browser_contexts_full_participant_flow_and_admin_smoke(ui_server):
         label="界面草稿房间",
         publish=False,
     )
-    close_room = create_room(
+    create_room(
         admin,
         **materials,
         starts_in_seconds=7200,
@@ -210,7 +202,7 @@ def test_two_browser_contexts_full_participant_flow_and_admin_smoke(ui_server):
         reconnect_window_seconds=20,
         label="界面关闭预约房间",
     )
-    open_room = create_room(
+    create_room(
         admin,
         **materials,
         starts_in_seconds=7200,
@@ -237,6 +229,16 @@ def test_two_browser_contexts_full_participant_flow_and_admin_smoke(ui_server):
         page_b = context_b.new_page()
         _login_and_consent(page_a, server.base_url, "界面甲", "13400000001")
         _login_and_consent(page_b, server.base_url, "界面乙", "13400000002")
+        room = create_room(
+            admin,
+            **materials,
+            starts_in_seconds=15,
+            wait_window_seconds=90,
+            reconnect_window_seconds=20,
+            label="界面测试房间",
+        )
+        page_a.reload(wait_until="domcontentloaded")
+        page_b.reload(wait_until="domcontentloaded")
         _book_room(page_a, room["id"])
         _book_room(page_b, room["id"])
         page_a.reload(wait_until="domcontentloaded")

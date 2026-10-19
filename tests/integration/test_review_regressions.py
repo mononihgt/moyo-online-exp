@@ -36,7 +36,6 @@ from test_runtime_flows import (
     _monitor,
     _next_trial,
     _play_to_questionnaire,
-    _png_bytes,
     _questionnaire_token,
     _receive_rest,
     _start_game,
@@ -713,7 +712,7 @@ def test_instruction_prefix_and_role_validation(server):
         spawns={"A": 0, "B": 1},
         description=f"校验乙{uuid.uuid4().hex[:6]}",
     )
-    first_role1 = create_instruction(context.admin, first["id"], 1, "甲玩家1")
+    create_instruction(context.admin, first["id"], 1, "甲玩家1")
     first_role2 = create_instruction(context.admin, first["id"], 2, "甲玩家2")
     second_role1 = create_instruction(context.admin, second["id"], 1, "乙玩家1")
 

@@ -24,7 +24,6 @@ from conftest import (
     import_roster,
     questionnaire_answers,
     upload_media,
-    valid_identity_answers,
     wait_until,
 )
 
@@ -765,6 +764,7 @@ def test_timeout_auto_selects_and_resolves(server):
     turn_a = game.ws_a.recv_until("turn")
     turn_b = game.ws_b.recv_until("turn")
     assert turn_a["round"] == 2
+    assert turn_b["round"] == 2
 
     result_a = game.ws_a.recv_until("turn_result", timeout=10)
     result_b = game.ws_b.recv_until("turn_result", timeout=10)
@@ -1584,6 +1584,7 @@ def test_idempotent_and_stale_submissions(server):
     _send_selection(game.ws_b, ack_b, cells_b, "normal-submit")
     result_a = game.ws_a.recv_until("turn_result")
     result_b = game.ws_b.recv_until("turn_result")
+    assert result_b["round"] == result_a["round"]
     assert result_a["selections"][f"player{game.role_a}"] == sorted(cells_a)
     assert result_a["selections"][f"player{game.role_b}"] == sorted(cells_b)
     assert result_a["trialEnded"] is False
