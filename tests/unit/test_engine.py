@@ -14,70 +14,97 @@ from app.game.engine import (
 import reference_legacy
 
 
-def _cells(rows, cols, owner_fn, soldier_fn, reinforcement_a=0, reinforcement_b=0):
-    result = []
-    for row in range(rows):
-        for col in range(cols):
-            result.append(
-                {
-                    "row": row,
-                    "col": col,
-                    "initialOwner": owner_fn(row, col),
-                    "initialSoldiers": soldier_fn(row, col),
-                    "reinforcementA": reinforcement_a(row, col)
-                    if callable(reinforcement_a)
-                    else reinforcement_a,
-                    "reinforcementB": reinforcement_b(row, col)
-                    if callable(reinforcement_b)
-                    else reinforcement_b,
-                }
-            )
-    return result
-
-
-@pytest.mark.parametrize("rows,cols", [(5, 7), (7, 5), (3, 4)])
-def test_initial_board_uses_row_major_indices_and_forces_bases(rows, cols):
+@pytest.mark.parametrize("rows,cols", [(2, 2), (5, 7), (7, 5), (3, 4)])
+def test_initial_board_places_only_spawn_cells(rows, cols):
     total = rows * cols
-    base_a = 0
-    base_b = total - 1
+    spawn_a = cols - 1
+    spawn_b = cols
 
-    def owner(row, col):
-        return 1 if col < cols // 2 else 2
-
-    def soldiers(row, col):
-        return (row * cols + col) % 7
-
-    cells = _cells(rows, cols, owner, soldiers)
-    cells[base_a]["initialOwner"] = 2
-    cells[base_a]["initialSoldiers"] = 0
-    cells[base_b]["initialOwner"] = 1
-    cells[base_b]["initialSoldiers"] = 0
-    cells.reverse()
-
-    board = initial_board(cells, base_a, base_b, 11, 13)
+    board = initial_board(rows, cols, spawn_a, spawn_b, 11, 13)
 
     assert board.rows == rows
     assert board.cols == cols
     assert len(board.owners) == total
     assert len(board.soldiers) == total
     for index in range(total):
-        row, col = divmod(index, cols)
-        if index == base_a:
+        if index == spawn_a:
             assert board.owners[index] == 1
             assert board.soldiers[index] == 11
-        elif index == base_b:
+        elif index == spawn_b:
             assert board.owners[index] == 2
             assert board.soldiers[index] == 13
         else:
-            assert board.owners[index] == owner(row, col)
-            assert board.soldiers[index] == soldiers(row, col)
+            assert board.owners[index] == 0
+            assert board.soldiers[index] == 0
 
 
-@pytest.mark.parametrize("base_a,base_b", [(-1, 11), (0, 12), (12, 11), (5, 5)])
-def test_initial_board_rejects_invalid_base_indices(base_a, base_b):
-    cells = _cells(3, 4, lambda row, col: 0, lambda row, col: 0)
+def test_initial_board_uses_given_spawn_indices():
+    board = initial_board(3, 4, 7, 11, 8, 7)
+    assert board.owners[7] == 1
+    assert board.soldiers[7] == 8
+    assert board.owners[11] == 2
+    assert board.soldiers[11] == 7
+    assert board.owners.count(1) == 1
+    assert board.owners.count(2) == 1
+
+
+@pytest.mark.parametrize("spawn_a,spawn_b", [(-1, 11), (0, 12), (12, 11), (5, 5)])
+def test_initial_board_rejects_invalid_spawn_indices(spawn_a, spawn_b):
     with pytest.raises(ValueError):
-        initial_board(cells, base_a, base_b, 5, 5)
+        initial_board(3, 4, spawn_a, spawn_b, 5, 5)
+
+
+@pytest.mark.parametrize(
+    "rows,cols,soldiers_a,soldiers_b",
+    [
+        (0, 4, 5, 5),
+        (3, 0, 5, 5),
+        (3, 4, -1, 5),
+        (3, 4, 5, -1),
+        (3, 4, 5.5, 5),
+        (3, 4, 5, True),
+    ],
+)
+def test_initial_board_rejects_invalid_values(rows, cols, soldiers_a, soldiers_b):
+    with pytest.raises(ValueError):
+        initial_board(rows, cols, 0, 1, soldiers_a, soldiers_b)
+
+
+def test_uniform_reinforcement_adds_spawn_value_to_every_owned_cell():
+    # 统一增援：每个己方格子每回合都增加当前行的出生兵力数值。
+    board = Board(
+        rows=2,
+        cols=3,
+        owners=(1, 1, 0, 2, 2, 0),
+        soldiers=(5, 5, 0, 7, 7, 0),
+    )
+    zero = resolve_turn(
+        board,
+        [0, 1],
+        [3, 4],
+        seed=11,
+        base_a_index=0,
+        base_b_index=3,
+        reinforcement_a=[0] * 6,
+        reinforcement_b=[0] * 6,
+    )
+    full = resolve_turn(
+        board,
+        [0, 1],
+        [3, 4],
+        seed=11,
+        base_a_index=0,
+        base_b_index=3,
+        reinforcement_a=[7] * 6,
+        reinforcement_b=[8] * 6,
+    )
+
+    assert zero.war_location == ()
+    assert full.war_location == ()
+    assert full.board.owners == (1, 1, 0, 2, 2, 0)
+    expected = (7, 7, 0, 8, 8, 0)
+    for index in range(6):
+        assert full.board.soldiers[index] - zero.board.soldiers[index] == expected[index]
 
 
 def test_valid_selection_normalizes_indices():
@@ -123,8 +150,7 @@ def test_annihilation_detection_and_forced_turn_on_non_square(rows, cols):
     total = rows * cols
     base_b = total - 1
     base_a = base_b - cols
-    cells = _cells(rows, cols, lambda row, col: 0, lambda row, col: 0)
-    board = initial_board(cells, base_a, base_b, 12, 1)
+    board = initial_board(rows, cols, base_a, base_b, 12, 1)
 
     result = resolve_turn(
         board,
@@ -222,8 +248,7 @@ def test_resolve_turn_applies_reinforcement_per_cell(rows, cols):
 def test_resolve_turn_accepts_64_bit_seed():
     rows, cols = 3, 4
     total = rows * cols
-    cells = _cells(rows, cols, lambda row, col: 0, lambda row, col: 0)
-    board = initial_board(cells, 7, 11, 8, 7)
+    board = initial_board(rows, cols, 7, 11, 8, 7)
     seed = 0xF3A91C0D5E7B2468
 
     first = resolve_turn(
@@ -374,12 +399,9 @@ def _non_square_round(board, round_number, rows, cols, reinforcement_a, reinforc
 @pytest.mark.parametrize("rows,cols", [(5, 7), (7, 5), (3, 4)])
 def test_non_square_multiple_rounds_and_determinism(rows, cols):
     total = rows * cols
-
-    def owner(row, col):
-        return 1 if col < cols // 2 else 2
-
-    cells = _cells(rows, cols, owner, lambda row, col: 4 if owner(row, col) else 0)
-    board = initial_board(cells, 0, total - 1, 8, 7)
+    owners = tuple(1 if col < cols // 2 else 2 for row in range(rows) for col in range(cols))
+    soldiers = tuple(4 if owner else 0 for owner in owners)
+    board = Board(rows=rows, cols=cols, owners=owners, soldiers=soldiers)
     reinforcement_a = [1] * total
     reinforcement_b = [1] * total
 
@@ -516,25 +538,11 @@ _SCENARIOS = [
 
 
 def _build_six_by_six(scenario):
-    cells = []
-    for index, owner in enumerate(scenario["owners"]):
-        row, col = divmod(index, 6)
-        cells.append(
-            {
-                "row": row,
-                "col": col,
-                "initialOwner": owner,
-                "initialSoldiers": scenario["soldiers"][index],
-                "reinforcementA": scenario["reinforcement_a"],
-                "reinforcementB": scenario["reinforcement_b"],
-            }
-        )
-    return initial_board(
-        cells,
-        scenario["base_a"],
-        scenario["base_b"],
-        scenario["base_a_soldiers"],
-        scenario["base_b_soldiers"],
+    return Board(
+        rows=6,
+        cols=6,
+        owners=tuple(scenario["owners"]),
+        soldiers=tuple(scenario["soldiers"]),
     )
 
 

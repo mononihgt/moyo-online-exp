@@ -14,18 +14,25 @@ from ..constants import (
 )
 from ..models import (
     Participant,
+    ParticipantIdentity,
     QuestionnaireDraft,
     QuestionnaireResponse,
     QuestionnaireVersion,
     Room,
     RoomParticipant,
 )
+from ..security import encrypt_identity
 from ..timeutil import isoformat_utc, utcnow
 from .events import add_event
 from .jatos import build_questionnaire_token, read_questionnaire_token
 from .locking import room_lock
 from .payments import serialize_payment, upsert_payment
-from .questionnaires import serialize_questionnaire, validate_answers
+from .questionnaires import (
+    QuestionnaireValidationError,
+    protected_question_ids,
+    serialize_questionnaire,
+    split_protected_answers,
+)
 from .rooms import archive_room
 
 
@@ -34,6 +41,60 @@ async def _room_write_lock(db: AsyncSession, room_id: str):
     async with room_lock(room_id):
         await db.commit()
         yield
+
+
+def _strip_protected_answers(schema: dict, answers: dict | None) -> dict | None:
+    if not isinstance(answers, dict):
+        return answers
+    protected_ids = set(protected_question_ids(schema))
+    return {key: value for key, value in answers.items() if key not in protected_ids}
+
+
+def _split_answers(
+    schema: dict, answers: dict, *, enforce_required: bool
+) -> tuple[dict, dict | None]:
+    try:
+        return split_protected_answers(schema, answers, enforce_required=enforce_required)
+    except QuestionnaireValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+async def _upsert_identity(
+    db: AsyncSession,
+    room: Room,
+    room_participant: RoomParticipant,
+    identity: dict,
+) -> None:
+    row = await db.execute(
+        select(ParticipantIdentity).where(
+            ParticipantIdentity.room_id == room.id,
+            ParticipantIdentity.participant_id == room_participant.participant_id,
+        )
+    )
+    existing = row.scalars().first()
+    now = utcnow()
+    real_name_encrypted = encrypt_identity(identity["real_name"])
+    alipay_phone_encrypted = encrypt_identity(identity["alipay_phone"])
+    document_number_encrypted = encrypt_identity(identity["document_number"])
+    if existing is None:
+        db.add(
+            ParticipantIdentity(
+                room_id=room.id,
+                participant_id=room_participant.participant_id,
+                real_name_encrypted=real_name_encrypted,
+                alipay_phone_encrypted=alipay_phone_encrypted,
+                document_type=identity["document_type"],
+                document_number_encrypted=document_number_encrypted,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return
+    existing.real_name_encrypted = real_name_encrypted
+    existing.alipay_phone_encrypted = alipay_phone_encrypted
+    existing.document_type = identity["document_type"]
+    existing.document_number_encrypted = document_number_encrypted
+    existing.updated_at = now
 
 
 async def load_context(db: AsyncSession, token: str) -> tuple[Room, RoomParticipant, QuestionnaireVersion]:
@@ -92,8 +153,16 @@ async def _questionnaire_context_locked(db: AsyncSession, token: str) -> dict:
         "analysisCode": room_participant.analysis_code,
         "completed": room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
         "questionnaire": serialize_questionnaire(questionnaire),
-        "draftAnswers": draft_row.answers_json if draft_row is not None and existing is None else None,
-        "existingAnswers": existing.answers_json if existing is not None else None,
+        "draftAnswers": (
+            _strip_protected_answers(questionnaire.schema_json, draft_row.answers_json)
+            if draft_row is not None and existing is None
+            else None
+        ),
+        "existingAnswers": (
+            _strip_protected_answers(questionnaire.schema_json, existing.answers_json)
+            if existing is not None
+            else None
+        ),
         "redirectUrl": f"{settings.public_base_url.rstrip('/')}/complete?room={room.id}",
     }
 
@@ -126,7 +195,9 @@ async def _save_draft_locked(db: AsyncSession, token: str, answers: dict) -> dic
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间不在问卷阶段")
-    validate_answers(questionnaire.schema_json, answers, enforce_required=False)
+    sanitized_answers, _identity = _split_answers(
+        questionnaire.schema_json, answers, enforce_required=False
+    )
     row = await db.execute(
         select(QuestionnaireDraft).where(
             QuestionnaireDraft.room_id == room.id,
@@ -138,11 +209,11 @@ async def _save_draft_locked(db: AsyncSession, token: str, answers: dict) -> dic
         draft = QuestionnaireDraft(
             room_id=room.id,
             participant_id=room_participant.participant_id,
-            answers_json=answers,
+            answers_json=sanitized_answers,
         )
         db.add(draft)
     else:
-        draft.answers_json = answers
+        draft.answers_json = sanitized_answers
         draft.updated_at = utcnow()
     await db.commit()
     return {"saved": True, "updatedAt": isoformat_utc(draft.updated_at)}
@@ -173,7 +244,11 @@ async def complete_questionnaire(
     )
     existing_attempt = existing_attempt_query.scalars().first()
     questionnaire = await db.get(QuestionnaireVersion, room.questionnaire_version_id)
-    validate_answers(questionnaire.schema_json, answers)
+    sanitized_answers, identity = _split_answers(
+        questionnaire.schema_json, answers, enforce_required=True
+    )
+    if identity is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少受保护身份字段")
 
     if existing_attempt is not None:
         redirect = f"{get_settings().public_base_url.rstrip('/')}/complete?room={room.id}"
@@ -187,7 +262,7 @@ async def complete_questionnaire(
         jatos_worker_id=jatos_worker_id,
         jatos_study_result_id=jatos_study_result_id,
         jatos_component_result_id=jatos_component_result_id,
-        answers_json=answers,
+        answers_json=sanitized_answers,
         canonical=canonical is None,
         source=source,
         completed_at=utcnow(),
@@ -205,6 +280,7 @@ async def complete_questionnaire(
         await db.delete(draft)
 
     if canonical is None:
+        await _upsert_identity(db, room, room_participant, identity)
         room_participant.questionnaire_status = QUESTIONNAIRE_COMPLETED
         room_participant.completed_at = utcnow()
         add_event(

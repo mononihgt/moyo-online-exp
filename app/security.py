@@ -61,6 +61,21 @@ def decrypt_phone(value: str, settings: Settings | None = None) -> str:
         raise ValueError("手机号密文无法解密") from exc
 
 
+def _identity_fernet(settings: Settings | None = None) -> Fernet:
+    return Fernet((settings or get_settings()).identity_encryption_key.encode("utf-8"))
+
+
+def encrypt_identity(value: str, settings: Settings | None = None) -> str:
+    return _identity_fernet(settings).encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_identity(value: str, settings: Settings | None = None) -> str:
+    try:
+        return _identity_fernet(settings).decrypt(value.encode("utf-8")).decode("utf-8")
+    except InvalidToken as exc:
+        raise ValueError("身份信息密文无法解密") from exc
+
+
 def hash_password(password: str) -> str:
     return _PASSWORD_HASHER.hash(password)
 

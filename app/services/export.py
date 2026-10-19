@@ -6,22 +6,16 @@ import re
 import zipfile
 from pathlib import Path
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..constants import (
-    ARCHIVE_TECHNICAL_ABORT,
-    QUESTIONNAIRE_COMPLETED,
-    SCHEMA_VERSION,
-    TIMEZONE,
-)
+from ..constants import SCHEMA_VERSION, TIMEZONE
 from ..models import (
     Booking,
-    ConditionVersion,
     GameTrial,
     InstructionVersion,
+    MapGroupVersion,
     MediaAsset,
-    Participant,
     Payment,
     QuestionnaireResponse,
     QuestionnaireVersion,
@@ -31,19 +25,25 @@ from ..models import (
     RoomParticipant,
     Turn,
 )
-from ..security import decrypt_phone
 from ..timeutil import isoformat_utc, utcnow
-from .conditions import serialize_condition_snapshot
+from .map_groups import serialize_map_group_snapshot
 from .media import media_absolute_path
 from .payments import serialize_payment
-from .questionnaires import serialize_questionnaire
+from .questionnaires import protected_question_ids, serialize_questionnaire
 
 _ASSET_REF = re.compile(r"asset://([0-9a-fA-F-]{36})")
 _SENSITIVE_PAYLOAD_KEYS = {
     "name",
+    "realName",
     "phone",
     "phoneHash",
     "phoneEncrypted",
+    "alipayPhone",
+    "alipayPhoneEncrypted",
+    "documentNumber",
+    "documentNumberEncrypted",
+    "identityDocument",
+    "realNameEncrypted",
     "token",
     "jatosToken",
     "password",
@@ -116,6 +116,40 @@ def _turn_payload(turn: Turn) -> dict:
     }
 
 
+def _trial_params(raw: dict | None) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    return {
+        "soldiersA": data.get("soldiersA", data.get("baseSoldiersA", data.get("initialSoldiersA"))),
+        "soldiersB": data.get("soldiersB", data.get("baseSoldiersB", data.get("initialSoldiersB"))),
+    }
+
+
+def _trial_plan_payload(plan: dict | None) -> dict:
+    if not isinstance(plan, dict) or not plan:
+        return {}
+    order = []
+    for position, item in enumerate(plan.get("order") or []):
+        if isinstance(item, dict):
+            entry = {
+                "trialIndex": item.get("trialIndex", item.get("trial_index", position)),
+                "sourceIndex": item.get("sourceIndex", item.get("source_index")),
+            }
+            if "isPractice" in item:
+                entry["isPractice"] = item["isPractice"]
+            if "formalTrial" in item:
+                entry["formalTrial"] = item["formalTrial"]
+            if "params" in item:
+                entry["params"] = _trial_params(item["params"])
+            order.append(entry)
+        else:
+            order.append({"trialIndex": position, "sourceIndex": item})
+    return {
+        "seed": plan.get("seed"),
+        "order": order,
+        "generatedAt": plan.get("generatedAt"),
+    }
+
+
 async def _room_instructions(db: AsyncSession, room: Room) -> dict:
     if room.config_snapshot:
         instructions = room.config_snapshot.get("instructions", {})
@@ -123,6 +157,7 @@ async def _room_instructions(db: AsyncSession, room: Room) -> dict:
             role: {
                 "versionId": data.get("versionId") or data.get("id"),
                 "name": data.get("name"),
+                "mapGroupPrefix": data.get("mapGroupPrefix"),
                 "role": data.get("role"),
                 "minReadingSeconds": data.get("minReadingSeconds"),
                 "contentMarkdown": data.get("contentMarkdown"),
@@ -139,6 +174,7 @@ async def _room_instructions(db: AsyncSession, room: Room) -> dict:
         f"player{role}": {
             "versionId": version.id,
             "name": version.name,
+            "mapGroupPrefix": version.map_group_prefix,
             "role": version.role,
             "minReadingSeconds": version.min_reading_seconds,
             "contentMarkdown": version.markdown,
@@ -152,13 +188,18 @@ async def _room_instructions(db: AsyncSession, room: Room) -> dict:
 async def _room_questionnaire(db: AsyncSession, room: Room) -> dict:
     if room.config_snapshot and room.config_snapshot.get("questionnaire"):
         data = room.config_snapshot["questionnaire"]
+        schema = data.get("schema")
+        protected = data.get("protectedQuestionIds")
+        if protected is None and isinstance(schema, dict):
+            protected = protected_question_ids(schema)
         return {
             "versionId": data.get("versionId") or data.get("id"),
             "name": data.get("name"),
             "version": data.get("version"),
             "contentHash": data.get("contentHash"),
             "publishedAt": data.get("publishedAt"),
-            "schema": data.get("schema"),
+            "schema": schema,
+            "protectedQuestionIds": protected or [],
         }
     version = await db.get(QuestionnaireVersion, room.questionnaire_version_id)
     data = serialize_questionnaire(version)
@@ -169,21 +210,22 @@ async def _room_questionnaire(db: AsyncSession, room: Room) -> dict:
         "contentHash": data["contentHash"],
         "publishedAt": data["publishedAt"],
         "schema": data["schema"],
+        "protectedQuestionIds": data["protectedQuestionIds"],
     }
 
 
-async def _room_condition(db: AsyncSession, room: Room) -> dict:
-    if room.config_snapshot and room.config_snapshot.get("condition"):
-        return room.config_snapshot["condition"]
-    condition = await db.get(ConditionVersion, room.condition_version_id)
-    return serialize_condition_snapshot(condition)
+async def _room_map_group(db: AsyncSession, room: Room) -> dict:
+    if room.config_snapshot and room.config_snapshot.get("mapGroup"):
+        return room.config_snapshot["mapGroup"]
+    map_group = await db.get(MapGroupVersion, room.map_group_version_id)
+    return serialize_map_group_snapshot(map_group)
 
 
 async def build_archive_snapshot(db: AsyncSession, room: Room) -> dict:
-    condition = await _room_condition(db, room)
+    map_group = await _room_map_group(db, room)
     instructions = await _room_instructions(db, room)
     questionnaire = await _room_questionnaire(db, room)
-    assets, media_entries = await _collect_media(db, condition, instructions)
+    assets, media_entries = await _collect_media(db, map_group, instructions)
     for asset in assets:
         if not media_absolute_path(asset).exists():
             raise RuntimeError(f"归档快照引用的媒体文件缺失: {asset.id}")
@@ -195,18 +237,15 @@ async def build_archive_snapshot(db: AsyncSession, room: Room) -> dict:
             "startsAt": isoformat_utc(room.starts_at),
             "archivedAt": isoformat_utc(room.archived_at),
             "archiveReason": room.archive_reason,
-            "conditionVersionId": room.condition_version_id,
+            "mapGroupVersionId": room.map_group_version_id,
             "instructionVersionP1Id": room.instruction_version_p1_id,
             "instructionVersionP2Id": room.instruction_version_p2_id,
             "questionnaireVersionId": room.questionnaire_version_id,
-            "basePayCents": room.base_pay_cents,
-            "performanceRateCents": room.performance_rate_cents,
-            "showupPayCents": room.showup_pay_cents,
             "waitWindowSeconds": room.wait_window_seconds,
             "reconnectWindowSeconds": room.reconnect_window_seconds,
             "configLockedAt": isoformat_utc(room.config_locked_at),
         },
-        "condition": condition,
+        "mapGroup": map_group,
         "instructions": instructions,
         "questionnaire": questionnaire,
         "media": media_entries,
@@ -215,9 +254,10 @@ async def build_archive_snapshot(db: AsyncSession, room: Room) -> dict:
 
 async def build_room_export(db: AsyncSession, room: Room) -> dict:
     snapshot = room.archive_snapshot_json if isinstance(room.archive_snapshot_json, dict) else {}
-    condition = snapshot.get("condition") or await _room_condition(db, room)
+    map_group = snapshot.get("mapGroup") or await _room_map_group(db, room)
     instructions = snapshot.get("instructions") or await _room_instructions(db, room)
     questionnaire = snapshot.get("questionnaire") or await _room_questionnaire(db, room)
+    protected_ids = set(questionnaire.get("protectedQuestionIds") or [])
     media_entries = snapshot.get("media")
     revisions_query = await db.execute(
         select(RoomConfigRevision)
@@ -232,6 +272,7 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         "id": room.id,
         "internalLabel": room.internal_label,
         "startsAt": isoformat_utc(room.starts_at),
+        "publishedAt": isoformat_utc(room.published_at),
         "archivedAt": isoformat_utc(room.archived_at),
         "status": room.status,
         "archiveReason": room.archive_reason,
@@ -240,9 +281,7 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         "reconnectWindowSeconds": room.reconnect_window_seconds,
         "configLockedAt": isoformat_utc(room.config_locked_at),
         "archiveSnapshotAt": snapshot.get("createdAt"),
-        "basePayCents": room.base_pay_cents,
-        "performanceRateCents": room.performance_rate_cents,
-        "showupPayCents": room.showup_pay_cents,
+        "mapGroupVersionId": room.map_group_version_id,
         "configRevisions": revisions,
     }
 
@@ -264,6 +303,12 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
     for response in responses_query.scalars().all():
         responses_by_participant.setdefault(response.participant_id, []).append(response)
     analysis_codes = {row.participant_id: row.analysis_code for row in room_participants}
+
+    def _sanitized_answers(response: QuestionnaireResponse | None) -> dict | None:
+        if response is None or not isinstance(response.answers_json, dict):
+            return None
+        return {key: value for key, value in response.answers_json.items() if key not in protected_ids}
+
     participant_payloads = []
     for participant_id in sorted(participant_ids):
         row = next((item for item in room_participants if item.participant_id == participant_id), None)
@@ -272,12 +317,12 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         canonical = next((response for response in responses if response.canonical), None)
         instruction_payload = None
         if row is not None:
-            version_id = instructions[f"player{row.role}"]["versionId"]
+            instruction = instructions.get(f"player{row.role}") or {}
             instruction_payload = {
-                "versionId": version_id,
+                "versionId": instruction.get("versionId"),
                 "startedAt": isoformat_utc(row.instruction_started_at),
                 "completedAt": isoformat_utc(row.instruction_completed_at),
-                "minReadingSeconds": instructions[f"player{row.role}"]["minReadingSeconds"],
+                "minReadingSeconds": instruction.get("minReadingSeconds"),
                 "connectedSeconds": row.instruction_connected_seconds,
             }
         questionnaire_payload = None
@@ -299,7 +344,7 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
                     }
                     for response in responses
                 ],
-                "answers": canonical.answers_json if canonical else None,
+                "answers": _sanitized_answers(canonical),
             }
         participant_payloads.append(
             {
@@ -330,7 +375,8 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
                 "sourceIndex": trial.source_index,
                 "isPractice": trial.is_practice,
                 "formalTrial": trial.formal_trial,
-                "params": trial.params_json,
+                "params": _trial_params(trial.params_json),
+                "seed": trial.seed,
                 "startedAt": isoformat_utc(trial.started_at),
                 "endedAt": isoformat_utc(trial.ended_at),
                 "winner": trial.winner,
@@ -375,16 +421,16 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         payments.append(data)
 
     if media_entries is None:
-        _media_assets, media_entries = await _collect_media(db, condition, instructions)
+        _media_assets, media_entries = await _collect_media(db, map_group, instructions)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "exportedAt": isoformat_utc(utcnow()),
         "room": room_payload,
-        "condition": condition,
+        "mapGroup": map_group,
         "instructions": instructions,
         "questionnaire": questionnaire,
         "participants": participant_payloads,
-        "trialPlan": room.trial_plan_json,
+        "trialPlan": _trial_plan_payload(room.trial_plan_json),
         "trials": trial_payloads,
         "events": events,
         "payments": payments,
@@ -392,12 +438,12 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
     }
 
 
-async def _collect_media(db: AsyncSession, condition: dict, instructions: dict) -> tuple[list[MediaAsset], list[dict]]:
+async def _collect_media(db: AsyncSession, map_group: dict, instructions: dict) -> tuple[list[MediaAsset], list[dict]]:
     asset_ids: set[str] = set()
-    for player in ("player1", "player2"):
-        for visual in condition.get("visuals", {}).get(player, []):
-            if visual.get("backgroundAssetId"):
-                asset_ids.add(visual["backgroundAssetId"])
+    for item in map_group.get("maps", []):
+        for cell in item.get("cells") or []:
+            if cell:
+                asset_ids.add(cell)
     for instruction in instructions.values():
         asset_ids.update(_ASSET_REF.findall(instruction.get("contentMarkdown") or ""))
     if not asset_ids:
@@ -416,6 +462,9 @@ async def _collect_media(db: AsyncSession, condition: dict, instructions: dict) 
                 "filename": asset.filename,
                 "contentType": asset.content_type,
                 "sha256": "sha256:" + asset.sha256,
+                "sizeBytes": asset.size_bytes,
+                "width": asset.width,
+                "height": asset.height,
                 "path": f"media/{asset.id}{extension}",
             }
         )
@@ -581,6 +630,7 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
         "versionId": export["questionnaire"]["versionId"],
         "version": export["questionnaire"]["version"],
         "contentHash": export["questionnaire"]["contentHash"],
+        "protectedQuestionIds": export["questionnaire"].get("protectedQuestionIds") or [],
         "responses": [
             {
                 "analysisCode": participant["analysisCode"],
@@ -635,6 +685,8 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
             "participants": len(export["participants"]),
             "trials": len(export["trials"]),
             "turns": sum(len(trial["turns"]) for trial in export["trials"]),
+            "events": len(export["events"]),
+            "payments": len(export["payments"]),
         },
     }
     files["manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
@@ -644,62 +696,3 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
         for path in sorted(files):
             archive.writestr(path, files[path])
     return buffer.getvalue()
-
-
-async def build_payment_export_csv(db: AsyncSession) -> bytes:
-    rows = await db.execute(
-        select(Payment, Participant, Room, RoomParticipant)
-        .join(Participant, Participant.id == Payment.participant_id)
-        .join(Room, Room.id == Payment.room_id)
-        .join(
-            RoomParticipant,
-            (RoomParticipant.room_id == Payment.room_id)
-            & (RoomParticipant.participant_id == Payment.participant_id),
-        )
-        .where(
-            or_(
-                RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
-                Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
-            )
-        )
-        .order_by(Room.starts_at, Participant.name)
-    )
-    header = [
-        "analysisCode",
-        "participantId",
-        "name",
-        "phone",
-        "roomId",
-        "roomStartsAt",
-        "basePayCents",
-        "performancePayCents",
-        "showupPayCents",
-        "overrideAmountCents",
-        "totalCents",
-        "status",
-        "deadlineAt",
-        "paidAt",
-        "note",
-    ]
-    data_rows = []
-    for payment, participant, room, role_row in rows.all():
-        data_rows.append(
-            [
-                role_row.analysis_code if role_row else None,
-                participant.id,
-                participant.name,
-                decrypt_phone(participant.phone_encrypted),
-                room.id,
-                isoformat_utc(room.starts_at),
-                payment.base_pay_cents,
-                payment.performance_pay_cents,
-                payment.showup_pay_cents,
-                payment.override_amount_cents,
-                payment.total_cents,
-                payment.status,
-                isoformat_utc(payment.deadline_at),
-                isoformat_utc(payment.paid_at),
-                payment.admin_note,
-            ]
-        )
-    return _csv_bytes(header, data_rows)

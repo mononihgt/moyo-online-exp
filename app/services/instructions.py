@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import VERSION_ARCHIVED, VERSION_DRAFT, VERSION_PUBLISHED
-from ..models import InstructionVersion, MediaAsset
+from ..models import InstructionVersion, MapGroupVersion, MediaAsset
 from ..timeutil import isoformat_utc, utcnow
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False, "linkify": False}).enable("table").enable("strikethrough")
@@ -24,6 +24,12 @@ _ALLOWED_ATTRIBUTES = {
     "th": {"align"},
     "td": {"align"},
 }
+
+
+def instruction_name(map_group_prefix: str, role: int) -> str:
+    if role not in (1, 2):
+        raise ValueError("role 必须是 1 或 2")
+    return f"{map_group_prefix}-{'A' if role == 1 else 'B'}"
 
 
 def validate_instruction(markdown: str, role: int, min_reading_seconds: int) -> None:
@@ -65,6 +71,7 @@ def render_markdown(markdown: str) -> str:
 def instruction_content_hash(payload: dict) -> str:
     canonical = {
         "name": payload["name"],
+        "mapGroupPrefix": payload["map_group_prefix"],
         "role": payload["role"],
         "markdown": payload["markdown"],
         "minReadingSeconds": payload["min_reading_seconds"],
@@ -78,6 +85,7 @@ def serialize_instruction(instruction: InstructionVersion, include_html: bool = 
         "versionId": instruction.id,
         "id": instruction.id,
         "name": instruction.name,
+        "mapGroupPrefix": instruction.map_group_prefix,
         "version": instruction.version,
         "role": instruction.role,
         "minReadingSeconds": instruction.min_reading_seconds,
@@ -98,18 +106,39 @@ async def next_instruction_version(db: AsyncSession, name: str) -> int:
     return max(versions) + 1 if versions else 1
 
 
+async def _map_group_for_instruction(db: AsyncSession, map_group_version_id: str) -> MapGroupVersion:
+    map_group = await db.get(MapGroupVersion, map_group_version_id)
+    if map_group is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "地图组版本不存在")
+    if map_group.status not in (VERSION_PUBLISHED, VERSION_ARCHIVED):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "地图组版本尚未发布")
+    return map_group
+
+
 async def create_instruction(db: AsyncSession, data: dict) -> InstructionVersion:
-    validate_instruction(data["markdown"], data["role"], data["min_reading_seconds"])
-    await validate_instruction_assets(db, data["markdown"])
-    version = await next_instruction_version(db, data["name"])
+    role = data["role"]
+    markdown = data["markdown"]
+    min_reading_seconds = data["min_reading_seconds"]
+    validate_instruction(markdown, role, min_reading_seconds)
+    await validate_instruction_assets(db, markdown)
+    map_group = await _map_group_for_instruction(db, data["map_group_version_id"])
+    name = instruction_name(map_group.name, role)
+    payload = {
+        "name": name,
+        "map_group_prefix": map_group.name,
+        "role": role,
+        "markdown": markdown,
+        "min_reading_seconds": min_reading_seconds,
+    }
     instruction = InstructionVersion(
-        name=data["name"],
-        version=version,
-        role=data["role"],
-        markdown=data["markdown"],
-        min_reading_seconds=data["min_reading_seconds"],
+        name=name,
+        map_group_prefix=map_group.name,
+        version=await next_instruction_version(db, name),
+        role=role,
+        markdown=markdown,
+        min_reading_seconds=min_reading_seconds,
         status=VERSION_DRAFT,
-        content_hash=instruction_content_hash(data),
+        content_hash=instruction_content_hash(payload),
     )
     db.add(instruction)
     await db.flush()
@@ -119,18 +148,21 @@ async def create_instruction(db: AsyncSession, data: dict) -> InstructionVersion
 async def update_instruction(db: AsyncSession, instruction: InstructionVersion, patch: dict) -> InstructionVersion:
     if instruction.status != VERSION_DRAFT:
         raise HTTPException(status.HTTP_409_CONFLICT, "已发布的指导语版本不可修改，请创建新版本")
-    payload = {
-        "name": patch.get("name", instruction.name),
-        "role": instruction.role,
-        "markdown": patch.get("markdown", instruction.markdown),
-        "min_reading_seconds": patch.get("min_reading_seconds", instruction.min_reading_seconds),
-    }
-    validate_instruction(payload["markdown"], payload["role"], payload["min_reading_seconds"])
-    await validate_instruction_assets(db, payload["markdown"])
-    instruction.name = payload["name"]
-    instruction.markdown = payload["markdown"]
-    instruction.min_reading_seconds = payload["min_reading_seconds"]
-    instruction.content_hash = instruction_content_hash(payload)
+    markdown = patch.get("markdown", instruction.markdown)
+    min_reading_seconds = patch.get("min_reading_seconds", instruction.min_reading_seconds)
+    validate_instruction(markdown, instruction.role, min_reading_seconds)
+    await validate_instruction_assets(db, markdown)
+    instruction.markdown = markdown
+    instruction.min_reading_seconds = min_reading_seconds
+    instruction.content_hash = instruction_content_hash(
+        {
+            "name": instruction.name,
+            "map_group_prefix": instruction.map_group_prefix,
+            "role": instruction.role,
+            "markdown": markdown,
+            "min_reading_seconds": min_reading_seconds,
+        }
+    )
     await db.flush()
     return instruction
 
@@ -149,5 +181,14 @@ async def publish_instruction(db: AsyncSession, instruction: InstructionVersion)
         previous.status = VERSION_ARCHIVED
     instruction.status = VERSION_PUBLISHED
     instruction.published_at = utcnow()
+    instruction.content_hash = instruction_content_hash(
+        {
+            "name": instruction.name,
+            "map_group_prefix": instruction.map_group_prefix,
+            "role": instruction.role,
+            "markdown": instruction.markdown,
+            "min_reading_seconds": instruction.min_reading_seconds,
+        }
+    )
     await db.flush()
     return instruction

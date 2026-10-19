@@ -19,8 +19,8 @@ from .db import dispose_engine, get_session_factory, init_engine
 from .logging_config import configure_logging
 from .models import AdminUser
 from .security import CSRF_COOKIE, hash_password, new_csrf_token
-from .services.conditions import seed_presets
 from .services.runtime import runtime_manager
+from .services.troop_profiles import seed_built_in_troop_profile
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ async def _seed_admin() -> None:
 
 async def _seed_data() -> None:
     async with get_session_factory()() as db:
-        await seed_presets(db)
+        await seed_built_in_troop_profile(db)
 
 
 @asynccontextmanager

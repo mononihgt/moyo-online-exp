@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import random
 import re
@@ -18,36 +17,49 @@ class TrialPlanEntry:
     params: dict
 
 
-def generate_trial_plan(trial_params, practice_trials, formal_trials, randomize_formal, seed):
-    practice_trials = _require_non_negative_int(practice_trials, "practice_trials")
-    formal_trials = _require_non_negative_int(formal_trials, "formal_trials")
-    if formal_trials < 1:
-        raise ValueError("formal_trials 至少为 1")
+def generate_trial_plan(profile_rows, practice_trials, formal_trials, randomize_formal, seed):
+    practice_trials = _require_int(practice_trials, "practice_trials")
+    if practice_trials != 1:
+        raise ValueError("practice_trials 必须等于 1")
     if not isinstance(randomize_formal, bool):
         raise ValueError("randomize_formal 必须是布尔值")
-    seed = _require_non_negative_int(seed, "seed")
+    seed = _require_seed(seed, "seed")
 
-    if not isinstance(trial_params, (list, tuple)):
-        raise ValueError("trial_params 必须是列表")
-    params_list = list(trial_params)
-    expected = practice_trials + formal_trials
-    if len(params_list) != expected:
-        raise ValueError(
-            "trial_params 长度必须等于 practice_trials + formal_trials"
+    if not isinstance(profile_rows, (list, tuple)):
+        raise ValueError("profile_rows 必须是列表")
+    rows = list(profile_rows)
+    if len(rows) < 2:
+        raise ValueError("profile_rows 必须包含练习行和至少一行正式配置")
+    formal_trials = _require_int(formal_trials, "formal_trials")
+    if formal_trials != len(rows) - 1:
+        raise ValueError("formal_trials 必须等于 profile_rows 长度减一")
+
+    normalized = []
+    for position, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError("profile_rows 第 %d 项必须是 dict" % position)
+        for field in ("soldiersA", "soldiersB"):
+            if field not in row:
+                raise ValueError("profile_rows 第 %d 项缺少字段: %s" % (position, field))
+        normalized.append(
+            {
+                "soldiersA": _require_positive_int(
+                    row["soldiersA"], "profile_rows 第 %d 项的 soldiersA" % position
+                ),
+                "soldiersB": _require_positive_int(
+                    row["soldiersB"], "profile_rows 第 %d 项的 soldiersB" % position
+                ),
+            }
         )
 
-    for position, item in enumerate(params_list):
-        _validate_trial_params(item, position, practice_trials)
-
-    source_indices = list(range(expected))
-    formal_sources = source_indices[practice_trials:]
+    # 练习行固定在最前，正式行按房间种子随机排列，数值随原始行一起移动。
+    formal_sources = list(range(1, len(normalized)))
     if randomize_formal:
         random.Random(seed).shuffle(formal_sources)
-    order = source_indices[:practice_trials] + formal_sources
+    order = [0] + formal_sources
 
     plan = []
     for trial_index, source_index in enumerate(order):
-        item = params_list[source_index]
         is_practice = trial_index < practice_trials
         plan.append(
             TrialPlanEntry(
@@ -55,11 +67,7 @@ def generate_trial_plan(trial_params, practice_trials, formal_trials, randomize_
                 source_index=source_index,
                 is_practice=is_practice,
                 formal_trial=0 if is_practice else trial_index - practice_trials + 1,
-                params={
-                    "baseSoldiersA": int(item["baseSoldiersA"]),
-                    "baseSoldiersB": int(item["baseSoldiersB"]),
-                    "reinforcementOverrides": copy.deepcopy(item["reinforcementOverrides"]),
-                },
+                params=dict(normalized[source_index]),
             )
         )
     return plan
@@ -86,45 +94,6 @@ def turn_seed(room_seed, trial_index, round_number, recovery_count):
     payload = "%d:%d:%d:%d" % (room_seed, trial_index, round_number, recovery_count)
     digest = hashlib.sha256(payload.encode("ascii")).digest()
     return int.from_bytes(digest[:8], "big")
-
-
-def _validate_trial_params(item, position, practice_trials):
-    if not isinstance(item, dict):
-        raise ValueError("trial_params 的每一项必须是 dict")
-    required = (
-        "sourceIndex",
-        "isPractice",
-        "formalTrial",
-        "baseSoldiersA",
-        "baseSoldiersB",
-        "reinforcementOverrides",
-    )
-    for field in required:
-        if field not in item:
-            raise ValueError("trial_params 第 %d 项缺少字段: %s" % (position, field))
-
-    source_index = _require_non_negative_int(item["sourceIndex"], "sourceIndex")
-    if source_index != position:
-        raise ValueError("trial_params 第 %d 项的 sourceIndex 必须等于 %d" % (position, position))
-
-    is_practice = item["isPractice"]
-    if not isinstance(is_practice, bool):
-        raise ValueError("trial_params 第 %d 项的 isPractice 必须是布尔值" % position)
-    expected_practice = position < practice_trials
-    if is_practice != expected_practice:
-        raise ValueError("trial_params 第 %d 项的 isPractice 标记不一致" % position)
-
-    formal_trial = _require_non_negative_int(item["formalTrial"], "formalTrial")
-    expected_formal = 0 if is_practice else position - practice_trials + 1
-    if formal_trial != expected_formal:
-        raise ValueError("trial_params 第 %d 项的 formalTrial 标记不一致" % position)
-
-    _require_positive_int(item["baseSoldiersA"], "baseSoldiersA")
-    _require_positive_int(item["baseSoldiersB"], "baseSoldiersB")
-
-    overrides = item["reinforcementOverrides"]
-    if overrides is not None and not isinstance(overrides, dict):
-        raise ValueError("trial_params 第 %d 项的 reinforcementOverrides 必须是 dict 或 None" % position)
 
 
 def _require_int(value, name):

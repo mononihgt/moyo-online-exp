@@ -13,9 +13,14 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .constants import CONDITION_SCHEMA_VERSION, PAYMENT_PENDING, QUESTIONNAIRE_NOT_STARTED
+from .constants import (
+    DEFAULT_RECONNECT_WINDOW_SECONDS,
+    DEFAULT_WAIT_WINDOW_SECONDS,
+    PAYMENT_PENDING,
+    QUESTIONNAIRE_NOT_STARTED,
+)
 from .db import Base
 from .timeutil import utcnow
 
@@ -52,36 +57,116 @@ class ConsentVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
 
-class ConditionVersion(Base):
-    __tablename__ = "condition_versions"
+class TroopProfile(Base):
+    __tablename__ = "troop_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    built_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+
+class TroopProfileVersion(Base):
+    __tablename__ = "troop_profile_versions"
     __table_args__ = (
-        UniqueConstraint("name", "version", name="uq_condition_versions_name_version"),
-        Index("ix_condition_versions_status", "status"),
+        UniqueConstraint("troop_profile_id", "version", name="uq_troop_profile_versions_profile_version"),
+        Index("ix_troop_profile_versions_status", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    troop_profile_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("troop_profiles.id", ondelete="RESTRICT"), nullable=False
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=CONDITION_SCHEMA_VERSION)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    rows: Mapped[int] = mapped_column(Integer, nullable=False)
-    cols: Mapped[int] = mapped_column(Integer, nullable=False)
-    cells_json: Mapped[list] = mapped_column(JSON, nullable=False)
-    visuals_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    base_a_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    base_b_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    trial_params_json: Mapped[list] = mapped_column(JSON, nullable=False)
-    practice_trials: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    formal_trials: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
-    turn_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
-    rest_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
-    randomize_formal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    rows_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    practice_trials: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    formal_trials: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    troop_profile: Mapped[TroopProfile] = relationship(lazy="selectin")
+
+
+class MapGroupVersion(Base):
+    __tablename__ = "map_group_versions"
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_map_group_versions_name_version"),
+        Index("ix_map_group_versions_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(String(10), nullable=False)
+    rows: Mapped[int] = mapped_column(Integer, nullable=False)
+    cols: Mapped[int] = mapped_column(Integer, nullable=False)
+    spawn_a_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    spawn_b_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    troop_profile_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("troop_profile_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    practice_trials: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    formal_trials: Mapped[int] = mapped_column(Integer, nullable=False)
+    practice_turn_cap: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    practice_turn_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    formal_turn_cap: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    formal_turn_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    rest_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    randomize_formal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    base_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=4500)
+    performance_rate_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    performance_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
+    showup_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    troop_profile_version: Mapped[TroopProfileVersion] = relationship(lazy="selectin")
+    maps: Mapped[list["Map"]] = relationship(lazy="selectin", cascade="all, delete-orphan")
+
+
+class Map(Base):
+    __tablename__ = "maps"
+    __table_args__ = (
+        UniqueConstraint("map_group_version_id", "slot", name="uq_maps_group_slot"),
+        UniqueConstraint("map_group_version_id", "name", name="uq_maps_group_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    map_group_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("map_group_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    slot: Mapped[str] = mapped_column(String(10), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str] = mapped_column(String(200), nullable=False)
+    size_token: Mapped[str] = mapped_column(String(20), nullable=False)
+    factor_level: Mapped[str] = mapped_column(String(200), nullable=False)
+    player_suffix: Mapped[str] = mapped_column(String(10), nullable=False)
+    cells_json: Mapped[list] = mapped_column(JSON, nullable=False)
+
+
+class ParticipantIdentity(Base):
+    __tablename__ = "participant_identities"
+    __table_args__ = (
+        UniqueConstraint("room_id", "participant_id", name="uq_participant_identities_room_participant"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="RESTRICT"), nullable=False
+    )
+    participant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("participants.id", ondelete="RESTRICT"), nullable=False
+    )
+    real_name_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    alipay_phone_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    document_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    document_number_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
 
 class InstructionVersion(Base):
@@ -89,11 +174,13 @@ class InstructionVersion(Base):
     __table_args__ = (
         UniqueConstraint("name", "version", name="uq_instruction_versions_name_version"),
         Index("ix_instruction_versions_status", "status"),
+        Index("ix_instruction_versions_map_group_prefix", "map_group_prefix"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    map_group_prefix: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[int] = mapped_column(Integer, nullable=False)
     markdown: Mapped[str] = mapped_column(Text, nullable=False)
     min_reading_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
@@ -132,8 +219,8 @@ class Room(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     archive_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    condition_version_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("condition_versions.id", ondelete="RESTRICT"), nullable=False
+    map_group_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("map_group_versions.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     instruction_version_p1_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("instruction_versions.id", ondelete="RESTRICT"), nullable=False
@@ -144,11 +231,12 @@ class Room(Base):
     questionnaire_version_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("questionnaire_versions.id", ondelete="RESTRICT"), nullable=False
     )
-    base_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    performance_rate_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    showup_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    wait_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=900)
-    reconnect_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
+    wait_window_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=DEFAULT_WAIT_WINDOW_SECONDS
+    )
+    reconnect_window_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=DEFAULT_RECONNECT_WINDOW_SECONDS
+    )
     config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     archive_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     config_locked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -158,6 +246,8 @@ class Room(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    map_group_version: Mapped[MapGroupVersion] = relationship(lazy="selectin")
 
 
 class RoomConfigRevision(Base):

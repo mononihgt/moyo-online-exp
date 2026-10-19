@@ -17,14 +17,22 @@ from ..constants import (
     BOOKING_NO_SHOW,
     PARTICIPANT_COMPLETED,
     PARTICIPANT_ELIGIBLE,
+    PAYMENT_PENDING,
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
+    ROOM_CAPACITY,
     ROOM_DRAFT,
     ROOM_FULL,
     ROOM_INSTRUCTIONS,
     ROOM_OPEN,
     ROOM_PLAYING,
     ROOM_QUESTIONNAIRE,
+    ROOM_SECTION_ARCHIVED,
+    ROOM_SECTION_DRAFT,
+    ROOM_SECTION_IN_PROGRESS,
+    ROOM_SECTION_OPEN,
+    ROOM_SECTION_UNPAID,
+    ROOM_SECTIONS,
     ROOM_STATUSES,
     ROOM_WAITING,
     VERSION_ARCHIVED,
@@ -32,9 +40,10 @@ from ..constants import (
 )
 from ..models import (
     Booking,
-    ConditionVersion,
     InstructionVersion,
+    MapGroupVersion,
     Participant,
+    Payment,
     QuestionnaireVersion,
     Room,
     RoomConfigRevision,
@@ -42,14 +51,18 @@ from ..models import (
     RoomTimer,
 )
 from ..timeutil import isoformat_utc, utcnow
-from .conditions import serialize_condition_snapshot
 from .events import add_event
 from .instructions import serialize_instruction
+from .map_groups import map_group_payment, serialize_map, serialize_map_group_snapshot
 from .participants import current_consent_version
 from .payments import upsert_payment
-from .questionnaires import serialize_questionnaire
+from .questionnaires import (
+    QuestionnaireValidationError,
+    serialize_questionnaire,
+    validate_room_questionnaire_schema,
+)
 
-CAPACITY = 2
+CAPACITY = ROOM_CAPACITY
 
 
 async def _get_version(db: AsyncSession, model, version_id: str, label: str):
@@ -62,34 +75,71 @@ async def _get_version(db: AsyncSession, model, version_id: str, label: str):
 
 
 async def validate_room_config(db: AsyncSession, room: Room) -> None:
-    condition = await _get_version(db, ConditionVersion, room.condition_version_id, "条件版本")
+    map_group = await _get_version(db, MapGroupVersion, room.map_group_version_id, "地图组版本")
     instruction_a = await _get_version(db, InstructionVersion, room.instruction_version_p1_id, "玩家1指导语")
     instruction_b = await _get_version(db, InstructionVersion, room.instruction_version_p2_id, "玩家2指导语")
-    await _get_version(db, QuestionnaireVersion, room.questionnaire_version_id, "问卷版本")
+    questionnaire = await _get_version(db, QuestionnaireVersion, room.questionnaire_version_id, "问卷版本")
     if instruction_a.role != 1:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "玩家1指导语的 role 必须是 1")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "玩家1指导语的角色必须是 1")
     if instruction_b.role != 2:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "玩家2指导语的 role 必须是 2")
-    if condition.rows * condition.cols > 100:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "条件网格超过 100 格")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "玩家2指导语的角色必须是 2")
+    if instruction_a.map_group_prefix != map_group.name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "玩家1指导语的名称前缀必须与地图组名称一致")
+    if instruction_b.map_group_prefix != map_group.name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "玩家2指导语的名称前缀必须与地图组名称一致")
+    try:
+        validate_room_questionnaire_schema(questionnaire.schema_json)
+    except QuestionnaireValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     if room.wait_window_seconds < 1 or room.reconnect_window_seconds < 1:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "等待窗口和重连窗口必须大于 0")
+    room.map_group_version = map_group
 
 
 def room_config_dict(room: Room) -> dict:
     return {
         "startsAt": isoformat_utc(room.starts_at),
-        "conditionVersionId": room.condition_version_id,
+        "mapGroupVersionId": room.map_group_version_id,
         "instructionVersionP1Id": room.instruction_version_p1_id,
         "instructionVersionP2Id": room.instruction_version_p2_id,
         "questionnaireVersionId": room.questionnaire_version_id,
-        "basePayCents": room.base_pay_cents,
-        "performanceRateCents": room.performance_rate_cents,
-        "showupPayCents": room.showup_pay_cents,
         "waitWindowSeconds": room.wait_window_seconds,
         "reconnectWindowSeconds": room.reconnect_window_seconds,
         "internalLabel": room.internal_label,
     }
+
+
+def payment_from_map_group_snapshot(data: dict | None) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    map_group = data.get("mapGroup")
+    if not isinstance(map_group, dict):
+        return None
+    payment = map_group.get("payment")
+    if not isinstance(payment, dict):
+        return None
+    return {
+        "basePayCents": int(payment.get("basePayCents", 0)),
+        "performanceRateCents": int(payment.get("performanceRateCents", 0)),
+        "performanceCapCents": int(payment.get("performanceCapCents", 0)),
+        "showupPayCents": int(payment.get("showupPayCents", 0)),
+    }
+
+
+def get_room_payment(room: Room, snapshot: dict | None = None) -> dict:
+    if snapshot is not None:
+        payment = payment_from_map_group_snapshot(snapshot)
+        if payment is not None:
+            return payment
+    payment = payment_from_map_group_snapshot(room.config_snapshot)
+    if payment is not None:
+        return payment
+    payment = payment_from_map_group_snapshot(room.archive_snapshot_json)
+    if payment is not None:
+        return payment
+    if room.map_group_version is None:
+        raise RuntimeError("房间未绑定地图组，无法读取费用参数")
+    return map_group_payment(room.map_group_version)
 
 
 async def add_config_revision(db: AsyncSession, room: Room) -> None:
@@ -106,13 +156,10 @@ def _room_from_config(data: dict) -> Room:
         internal_label=data["internal_label"],
         starts_at=data["starts_at"],
         status=ROOM_DRAFT,
-        condition_version_id=data["condition_version_id"],
+        map_group_version_id=data["map_group_version_id"],
         instruction_version_p1_id=data["instruction_version_p1_id"],
         instruction_version_p2_id=data["instruction_version_p2_id"],
         questionnaire_version_id=data["questionnaire_version_id"],
-        base_pay_cents=data["base_pay_cents"],
-        performance_rate_cents=data["performance_rate_cents"],
-        showup_pay_cents=data["showup_pay_cents"],
         wait_window_seconds=data["wait_window_seconds"],
         reconnect_window_seconds=data["reconnect_window_seconds"],
     )
@@ -128,29 +175,35 @@ async def create_room(db: AsyncSession, data: dict) -> Room:
 
 
 async def update_room(db: AsyncSession, room: Room, patch: dict) -> Room:
-    if room.status in (ROOM_ARCHIVED, ROOM_PLAYING, ROOM_QUESTIONNAIRE, ROOM_INSTRUCTIONS):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间状态不允许修改配置")
+    now = utcnow()
     changed = False
     if "starts_at" in patch and patch["starts_at"] is not None:
-        if room.status not in (ROOM_DRAFT, ROOM_OPEN, ROOM_FULL):
-            raise HTTPException(status.HTTP_409_CONFLICT, "房间已进入等待阶段，开始时间已锁定")
+        if room.status != ROOM_DRAFT:
+            raise HTTPException(status.HTTP_409_CONFLICT, "仅草稿房间可以修改开始时间")
         room.starts_at = patch["starts_at"]
         changed = True
-    for field in (
+    config_fields = (
         "internal_label",
-        "condition_version_id",
+        "map_group_version_id",
         "instruction_version_p1_id",
         "instruction_version_p2_id",
         "questionnaire_version_id",
-        "base_pay_cents",
-        "performance_rate_cents",
-        "showup_pay_cents",
         "wait_window_seconds",
         "reconnect_window_seconds",
-    ):
-        if field in patch and patch[field] is not None:
-            setattr(room, field, patch[field])
-            changed = True
+    )
+    config_patch = {
+        field: patch[field]
+        for field in config_fields
+        if field in patch and patch[field] is not None
+    }
+    if config_patch:
+        if room.status == ROOM_ARCHIVED:
+            raise HTTPException(status.HTTP_409_CONFLICT, "房间已归档，不可修改配置")
+        if room.status not in (ROOM_DRAFT, ROOM_OPEN, ROOM_FULL) or now >= room.starts_at:
+            raise HTTPException(status.HTTP_409_CONFLICT, "房间开始后不可修改配置")
+        for field, value in config_patch.items():
+            setattr(room, field, value)
+        changed = True
     if not changed:
         return room
     await validate_room_config(db, room)
@@ -160,13 +213,26 @@ async def update_room(db: AsyncSession, room: Room, patch: dict) -> Room:
 
 async def publish_room(db: AsyncSession, room: Room) -> Room:
     if room.status != ROOM_DRAFT:
-        raise HTTPException(status.HTTP_409_CONFLICT, "只有草稿房间可以发布")
+        raise HTTPException(status.HTTP_409_CONFLICT, "只有草稿房间可以开放预约")
     await validate_room_config(db, room)
     if room.starts_at <= utcnow():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "开始时间必须晚于当前时间")
     room.status = ROOM_OPEN
     room.published_at = utcnow()
     add_event(db, room, "room_published")
+    return room
+
+
+async def close_booking(db: AsyncSession, room: Room) -> Room:
+    await db.refresh(room, with_for_update=True)
+    if room.status not in (ROOM_OPEN, ROOM_FULL):
+        raise HTTPException(status.HTTP_409_CONFLICT, "只有开放预约的房间可以关闭预约")
+    if utcnow() >= room.starts_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "房间开始后不可关闭预约")
+    if await booked_count(db, room.id) > 0:
+        raise HTTPException(status.HTTP_409_CONFLICT, "存在有效预约，无法关闭预约")
+    room.status = ROOM_DRAFT
+    add_event(db, room, "booking_closed")
     return room
 
 
@@ -246,7 +312,7 @@ def participant_reward_kind(
         room.archive_reason == ARCHIVE_TECHNICAL_ABORT
         and booking is not None
         and booking.status == BOOKING_ATTENDED
-        and room.showup_pay_cents > 0
+        and get_room_payment(room)["showupPayCents"] > 0
     ):
         return "showup"
     return "none"
@@ -356,13 +422,13 @@ async def transition_to_waiting(db: AsyncSession, room: Room) -> bool:
 
 
 async def lock_config(db: AsyncSession, room: Room) -> dict:
-    condition = await db.get(ConditionVersion, room.condition_version_id)
+    map_group = await db.get(MapGroupVersion, room.map_group_version_id)
     instruction_a = await db.get(InstructionVersion, room.instruction_version_p1_id)
     instruction_b = await db.get(InstructionVersion, room.instruction_version_p2_id)
     questionnaire = await db.get(QuestionnaireVersion, room.questionnaire_version_id)
     snapshot = {
         "room": room_config_dict(room),
-        "condition": serialize_condition_snapshot(condition),
+        "mapGroup": serialize_map_group_snapshot(map_group),
         "instructions": {
             "player1": serialize_instruction(instruction_a, include_html=False),
             "player2": serialize_instruction(instruction_b, include_html=False),
@@ -373,7 +439,7 @@ async def lock_config(db: AsyncSession, room: Room) -> dict:
     room.config_snapshot = snapshot
     room.config_locked_at = utcnow()
     room.status = ROOM_INSTRUCTIONS
-    add_event(db, room, "config_locked", payload={"conditionVersionId": condition.id})
+    add_event(db, room, "config_locked", payload={"mapGroupVersionId": map_group.id})
     await db.flush()
     return snapshot
 
@@ -404,7 +470,7 @@ async def archive_room(db: AsyncSession, room: Room, reason: str) -> None:
             pass
     participants_query = await db.execute(select(RoomParticipant).where(RoomParticipant.room_id == room.id))
     room_participants = {item.participant_id: item for item in participants_query.scalars().all()}
-    if reason == ARCHIVE_TECHNICAL_ABORT and room.showup_pay_cents > 0:
+    if reason == ARCHIVE_TECHNICAL_ABORT and get_room_payment(room)["showupPayCents"] > 0:
         for booking in bookings:
             if booking.status != BOOKING_ATTENDED:
                 continue
@@ -443,10 +509,18 @@ def archive_reason_for_wait_expiry(bookings: list[Booking]) -> str:
 
 async def room_summary(db: AsyncSession, room: Room) -> dict:
     count = await booked_count(db, room.id)
-    condition = await db.get(ConditionVersion, room.condition_version_id)
+    map_group = await db.get(MapGroupVersion, room.map_group_version_id)
+    profile_version = map_group.troop_profile_version
+    profile = profile_version.troop_profile
     instruction_a = await db.get(InstructionVersion, room.instruction_version_p1_id)
     instruction_b = await db.get(InstructionVersion, room.instruction_version_p2_id)
     questionnaire = await db.get(QuestionnaireVersion, room.questionnaire_version_id)
+    payment = payment_from_map_group_snapshot(room.config_snapshot)
+    if payment is None:
+        payment = payment_from_map_group_snapshot(room.archive_snapshot_json)
+    if payment is None:
+        payment = map_group_payment(map_group)
+    maps = serialize_map(map_group)
     return {
         "id": room.id,
         "internalLabel": room.internal_label,
@@ -455,15 +529,39 @@ async def room_summary(db: AsyncSession, room: Room) -> dict:
         "archiveReason": room.archive_reason,
         "bookedCount": count,
         "capacity": CAPACITY,
-        "condition": {"id": condition.id, "name": condition.name, "version": condition.version},
+        "mapGroup": {
+            "id": map_group.id,
+            "versionId": map_group.id,
+            "name": map_group.name,
+            "version": map_group.version,
+            "mode": map_group.mode,
+            "rows": map_group.rows,
+            "cols": map_group.cols,
+            "practiceTrials": map_group.practice_trials,
+            "formalTrials": map_group.formal_trials,
+            "maps": [
+                {
+                    "slot": item["slot"],
+                    "name": item["name"],
+                    "description": item["description"],
+                    "factorLevel": item["factorLevel"],
+                }
+                for item in maps
+            ],
+            "troopProfile": {
+                "id": profile.id,
+                "versionId": profile_version.id,
+                "name": profile.name,
+                "version": profile_version.version,
+                "builtIn": profile.built_in,
+            },
+            "payment": payment,
+        },
         "instructions": {
             "player1": {"id": instruction_a.id, "name": instruction_a.name, "version": instruction_a.version},
             "player2": {"id": instruction_b.id, "name": instruction_b.name, "version": instruction_b.version},
         },
         "questionnaire": {"id": questionnaire.id, "name": questionnaire.name, "version": questionnaire.version},
-        "basePayCents": room.base_pay_cents,
-        "performanceRateCents": room.performance_rate_cents,
-        "showupPayCents": room.showup_pay_cents,
         "waitWindowSeconds": room.wait_window_seconds,
         "reconnectWindowSeconds": room.reconnect_window_seconds,
         "configLockedAt": isoformat_utc(room.config_locked_at),
@@ -477,3 +575,63 @@ def validate_room_status(value: str) -> str:
     if value not in ROOM_STATUSES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "房间状态无效")
     return value
+
+
+def validate_room_section(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value not in ROOM_SECTIONS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "房间分区无效")
+    return value
+
+
+def _pending_payment_exists():
+    return (
+        select(Payment.id)
+        .where(Payment.room_id == Room.id, Payment.status == PAYMENT_PENDING)
+        .exists()
+    )
+
+
+async def list_rooms_by_section(
+    db: AsyncSession, section: str | None, limit: int = 100
+) -> list[Room]:
+    section = validate_room_section(section)
+    statement = select(Room)
+    if section == ROOM_SECTION_DRAFT:
+        statement = statement.where(Room.status == ROOM_DRAFT)
+    elif section == ROOM_SECTION_OPEN:
+        statement = statement.where(Room.status.in_((ROOM_OPEN, ROOM_FULL)))
+    elif section == ROOM_SECTION_IN_PROGRESS:
+        statement = statement.where(
+            Room.status.in_((ROOM_WAITING, ROOM_INSTRUCTIONS, ROOM_PLAYING, ROOM_QUESTIONNAIRE))
+        )
+    elif section == ROOM_SECTION_UNPAID:
+        statement = statement.where(Room.status == ROOM_ARCHIVED, _pending_payment_exists())
+    elif section == ROOM_SECTION_ARCHIVED:
+        statement = statement.where(Room.status == ROOM_ARCHIVED, ~_pending_payment_exists())
+    rows = await db.execute(statement.order_by(Room.starts_at.desc()).limit(limit))
+    return list(rows.scalars().all())
+
+
+async def count_room_sections(db: AsyncSession) -> dict:
+    status_rows = await db.execute(select(Room.status, func.count(Room.id)).group_by(Room.status))
+    counts = {status_value: count for status_value, count in status_rows.all()}
+    unpaid = (
+        await db.execute(
+            select(func.count(Room.id)).where(Room.status == ROOM_ARCHIVED, _pending_payment_exists())
+        )
+    ).scalar_one()
+    archived_total = counts.get(ROOM_ARCHIVED, 0)
+    return {
+        ROOM_SECTION_DRAFT: counts.get(ROOM_DRAFT, 0),
+        ROOM_SECTION_OPEN: counts.get(ROOM_OPEN, 0) + counts.get(ROOM_FULL, 0),
+        ROOM_SECTION_IN_PROGRESS: sum(counts.get(value, 0) for value in (
+            ROOM_WAITING,
+            ROOM_INSTRUCTIONS,
+            ROOM_PLAYING,
+            ROOM_QUESTIONNAIRE,
+        )),
+        ROOM_SECTION_UNPAID: unpaid,
+        ROOM_SECTION_ARCHIVED: archived_total - unpaid,
+    }

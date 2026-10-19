@@ -1,4 +1,5 @@
-from decimal import ROUND_HALF_UP, Decimal
+import logging
+from decimal import ROUND_FLOOR, Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -13,25 +14,91 @@ from ..constants import (
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
 )
-from ..models import Booking, GameTrial, Payment, Room, RoomParticipant
+from ..models import Booking, GameTrial, MapGroupVersion, Payment, Room, RoomParticipant
 from ..timeutil import isoformat_utc, utcnow, week_deadline_utc
 from .events import add_event
 
+logger = logging.getLogger(__name__)
 
-def compute_performance_cents(room: Room, trials: list[GameTrial], role: int) -> int:
-    finals: list[int] = []
+
+def _payment_from_snapshot(snapshot: dict | None) -> dict | None:
+    if not isinstance(snapshot, dict):
+        return None
+    map_group = snapshot.get("mapGroup")
+    if not isinstance(map_group, dict):
+        return None
+    payment = map_group.get("payment")
+    if not isinstance(payment, dict):
+        return None
+    return {
+        "basePayCents": int(payment.get("basePayCents", 0)),
+        "performanceRateCents": int(payment.get("performanceRateCents", 0)),
+        "performanceCapCents": int(payment.get("performanceCapCents", 0)),
+        "showupPayCents": int(payment.get("showupPayCents", 0)),
+    }
+
+
+def _payment_from_version(version: MapGroupVersion) -> dict:
+    return {
+        "basePayCents": version.base_pay_cents,
+        "performanceRateCents": version.performance_rate_cents,
+        "performanceCapCents": version.performance_cap_cents,
+        "showupPayCents": version.showup_pay_cents,
+    }
+
+
+def _snapshot_payment(room: Room) -> dict | None:
+    for snapshot in (room.config_snapshot, room.archive_snapshot_json):
+        payment = _payment_from_snapshot(snapshot)
+        if payment is not None:
+            return payment
+    return None
+
+
+def payment_parameters(room: Room, map_group: MapGroupVersion | None = None) -> dict:
+    payment = _snapshot_payment(room)
+    if payment is not None:
+        return payment
+    if map_group is None:
+        # 直接读取已加载的关系，避免在异步上下文触发惰性加载
+        map_group = room.__dict__.get("map_group_version")
+    if map_group is None:
+        raise RuntimeError("房间缺少冻结的地图组快照，且地图组版本未加载")
+    return _payment_from_version(map_group)
+
+
+async def load_payment_parameters(db: AsyncSession, room: Room) -> dict:
+    payment = _snapshot_payment(room)
+    if payment is not None:
+        return payment
+    map_group = room.__dict__.get("map_group_version")
+    if map_group is None:
+        map_group = await db.get(MapGroupVersion, room.map_group_version_id)
+    if map_group is None:
+        raise RuntimeError("房间绑定的地图组版本不存在")
+    return _payment_from_version(map_group)
+
+
+def compute_performance_cents(
+    room: Room, trials: list[GameTrial], role: int, payment: dict | None = None
+) -> int | None:
+    if payment is None:
+        payment = payment_parameters(room)
     key = "player1" if role == 1 else "player2"
+    finals: list[int] = []
     for trial in trials:
         if trial.is_practice or trial.ended_at is None or not trial.summary_json:
             continue
-        final_soldiers = trial.summary_json.get("finalSoldiers", {})
+        final_soldiers = trial.summary_json.get("finalSoldiers") or {}
         if key in final_soldiers:
             finals.append(int(final_soldiers[key]))
     if not finals:
-        return 0
+        return None
     mean = Decimal(sum(finals)) / Decimal(len(finals))
-    amount = mean * Decimal(room.performance_rate_cents)
-    return int(amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    performance_yuan = (mean * Decimal(payment["performanceRateCents"]) / Decimal(100)).to_integral_value(
+        rounding=ROUND_FLOOR
+    )
+    return min(payment["performanceCapCents"], int(performance_yuan) * 100)
 
 
 def payment_deadline(room: Room, completed_at):
@@ -65,37 +132,45 @@ async def upsert_payment(
         )
         room_participant = query.scalars().first()
 
-    existing_query = await db.execute(
-        select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant_id)
-    )
-    payment = existing_query.scalars().first()
-
     completed = room_participant is not None and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
     attended = booking is not None and booking.status == BOOKING_ATTENDED
-    settings = get_settings()
 
     base = 0
     performance = 0
     showup = 0
     if completed:
+        params = await load_payment_parameters(db, room)
         trials_query = await db.execute(
             select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
         )
         trials = list(trials_query.scalars().all())
-        base = room.base_pay_cents
-        performance = compute_performance_cents(room, trials, room_participant.role)
+        performance_cents = compute_performance_cents(room, trials, room_participant.role, payment=params)
+        if performance_cents is None:
+            logger.error(
+                "房间 %s 参与者 %s 没有已结束的正式对局，跳过完成付款计算",
+                room.id,
+                participant_id,
+            )
+            return None
+        base = params["basePayCents"]
+        performance = performance_cents
         deadline = payment_deadline(room, room_participant.completed_at)
-    elif (
-        room.status == ROOM_ARCHIVED
-        and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
-        and attended
-        and room.showup_pay_cents > 0
-    ):
-        showup = room.showup_pay_cents
+    elif room.status == ROOM_ARCHIVED and room.archive_reason == ARCHIVE_TECHNICAL_ABORT:
+        if not attended:
+            return None
+        params = await load_payment_parameters(db, room)
+        if params["showupPayCents"] <= 0:
+            return None
+        showup = params["showupPayCents"]
+        settings = get_settings()
         deadline = week_deadline_utc(room.archived_at or utcnow(), settings.timezone)
     else:
         return None
 
+    existing_query = await db.execute(
+        select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant_id)
+    )
+    payment = existing_query.scalars().first()
     if payment is None:
         payment = Payment(
             room_id=room.id,
@@ -113,9 +188,7 @@ async def upsert_payment(
     )
     payment.deadline_at = deadline
     payment.computed_at = utcnow()
-    if payment.status == PAYMENT_PAID:
-        payment.status = PAYMENT_PAID
-    else:
+    if payment.status != PAYMENT_PAID:
         payment.status = PAYMENT_PENDING
     await db.flush()
     add_event(

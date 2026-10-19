@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key-change-in-production"
     phone_hmac_key: str = "dev-phone-hmac-key-change-in-production"
     phone_encryption_key: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    identity_encryption_key: str = "odEQ9io8t2uipKkgvVyIY3UXIYGua3wrE8fnS3662sE="
     database_url: str = "mysql+aiomysql://moyo:moyo_dev_password@127.0.0.1:3307/moyo?charset=utf8mb4"
     admin_username: str = "admin"
     admin_initial_password: str = "admin-initial-password"

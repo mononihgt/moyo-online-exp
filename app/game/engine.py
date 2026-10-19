@@ -50,60 +50,23 @@ def valid_selection(cells, rows, cols):
     return sorted(result)
 
 
-def initial_board(cells, base_a_index, base_b_index, base_soldiers_a, base_soldiers_b):
-    try:
-        items = list(cells)
-    except TypeError:
-        raise ValueError("cells 必须是可迭代对象") from None
-    if not items:
-        raise ValueError("cells 不能为空")
-
-    parsed = {}
-    max_row = -1
-    max_col = -1
-    for cell in items:
-        if not isinstance(cell, dict):
-            raise ValueError("cells 的每一项必须是 dict")
-        for field in ("row", "col", "initialOwner", "initialSoldiers"):
-            if field not in cell:
-                raise ValueError("cell 缺少字段: %s" % field)
-        row = _require_non_negative_int(cell["row"], "cell.row")
-        col = _require_non_negative_int(cell["col"], "cell.col")
-        key = (row, col)
-        if key in parsed:
-            raise ValueError("cells 中存在重复坐标: (%d, %d)" % (row, col))
-        parsed[key] = cell
-        max_row = max(max_row, row)
-        max_col = max(max_col, col)
-
-    rows = max_row + 1
-    cols = max_col + 1
+def initial_board(rows, cols, spawn_a_index, spawn_b_index, soldiers_a, soldiers_b):
+    rows, cols = _validate_size(rows, cols)
     total = rows * cols
-    if len(items) != total or len(parsed) != total:
-        raise ValueError("cells 必须完整覆盖 rows * cols 的每一格")
+    spawn_a_index = _check_index(spawn_a_index, total, "spawn_a_index")
+    spawn_b_index = _check_index(spawn_b_index, total, "spawn_b_index")
+    if spawn_a_index == spawn_b_index:
+        raise ValueError("出生格 A 和出生格 B 不能重合")
+    soldiers_a = _require_non_negative_int(soldiers_a, "soldiers_a")
+    soldiers_b = _require_non_negative_int(soldiers_b, "soldiers_b")
 
+    # 初始棋盘全部中立，只有两个出生格分别属于玩家 1 和玩家 2。
     owners = [0 for _ in range(total)]
     soldiers = [0 for _ in range(total)]
-    for (row, col), cell in parsed.items():
-        index = row * cols + col
-        owner = _require_non_negative_int(cell["initialOwner"], "cell.initialOwner")
-        if owner not in (0, 1, 2):
-            raise ValueError("initialOwner 只能取 0、1、2")
-        soldier_count = _require_non_negative_int(cell["initialSoldiers"], "cell.initialSoldiers")
-        owners[index] = owner
-        soldiers[index] = soldier_count
-
-    base_a_index = _check_index(base_a_index, total, "base_a_index")
-    base_b_index = _check_index(base_b_index, total, "base_b_index")
-    if base_a_index == base_b_index:
-        raise ValueError("基地 A 和基地 B 不能重合")
-    base_soldiers_a = _require_non_negative_int(base_soldiers_a, "base_soldiers_a")
-    base_soldiers_b = _require_non_negative_int(base_soldiers_b, "base_soldiers_b")
-
-    owners[base_a_index] = 1
-    soldiers[base_a_index] = base_soldiers_a
-    owners[base_b_index] = 2
-    soldiers[base_b_index] = base_soldiers_b
+    owners[spawn_a_index] = 1
+    soldiers[spawn_a_index] = soldiers_a
+    owners[spawn_b_index] = 2
+    soldiers[spawn_b_index] = soldiers_b
 
     return Board(rows=rows, cols=cols, owners=tuple(owners), soldiers=tuple(soldiers))
 

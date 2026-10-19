@@ -17,6 +17,9 @@ from ..constants import (
     BOOKING_BOOKED,
     END_REASON_ANNIHILATION,
     END_REASON_TURN_LIMIT,
+    MAP_MODE_BOTH,
+    MAP_SLOT_BOTH,
+    MAP_SLOT_BY_ROLE,
     PHASE_INSTRUCTIONS,
     PHASE_QUESTIONNAIRE,
     PHASE_REST,
@@ -135,6 +138,26 @@ def _board_from_payload(payload: dict) -> Board:
 
 def _role_map(rows) -> dict[int, RoomParticipant]:
     return {row.role: row for row in rows}
+
+
+def _trial_parameter_payload(params: dict) -> dict:
+    return {
+        "initialSoldiersA": params["soldiersA"],
+        "initialSoldiersB": params["soldiersB"],
+        "reinforcementA": params["soldiersA"],
+        "reinforcementB": params["soldiersB"],
+        "sourceIndex": params["sourceIndex"],
+    }
+
+
+def _role_visuals(map_group: dict, role: int) -> list[dict]:
+    if role not in (1, 2):
+        raise ValueError("role 必须是 1 或 2")
+    slot = MAP_SLOT_BOTH if map_group["mode"] == MAP_MODE_BOTH else MAP_SLOT_BY_ROLE[role]
+    selected = next((item for item in map_group["maps"] if item["slot"] == slot), None)
+    if selected is None:
+        raise RuntimeError("地图组缺少角色对应的地图")
+    return [{"color": None, "backgroundAssetId": cell} for cell in selected["cells"]]
 
 
 class RuntimeManager:
@@ -635,13 +658,13 @@ class RuntimeManager:
             await self._broadcast_rest(db, room, state)
 
     async def _begin_game(self, db: AsyncSession, room: Room, state: dict) -> None:
-        condition = room.config_snapshot["condition"]
+        map_group = self._map_group(room)
         seed = secrets.randbits(63)
         plan = generate_trial_plan(
-            condition["trialParams"],
-            condition["practiceTrials"],
-            condition["formalTrials"],
-            condition["randomizeFormal"],
+            map_group["profile"]["rows"],
+            map_group["practiceTrials"],
+            map_group["formalTrials"],
+            map_group["randomizeFormal"],
             seed,
         )
         room.trial_plan_json = {
@@ -671,7 +694,7 @@ class RuntimeManager:
         await self._broadcast_trial_start(db, room, state, announce_game_start=True)
 
     async def _start_next_trial(self, db: AsyncSession, room: Room, state: dict) -> None:
-        condition = room.config_snapshot["condition"]
+        map_group = self._map_group(room)
         order = room.trial_plan_json["order"]
         if state["phase"] == PHASE_REST:
             rows = await self._room_participant_rows(db, room.id)
@@ -691,13 +714,14 @@ class RuntimeManager:
             await self._enter_questionnaire(db, room, state)
             return
         source_index = order[trial_index]
-        params = condition["trialParams"][source_index]
+        params = self._trial_params(room, trial_index)
         board = initial_board(
-            condition["cells"],
-            condition["baseAIndex"],
-            condition["baseBIndex"],
-            params["baseSoldiersA"],
-            params["baseSoldiersB"],
+            map_group["rows"],
+            map_group["cols"],
+            map_group["spawns"]["A"],
+            map_group["spawns"]["B"],
+            params["soldiersA"],
+            params["soldiersB"],
         )
         seed_hex = room.trial_plan_json["seed"]
         trial = GameTrial(
@@ -707,7 +731,11 @@ class RuntimeManager:
             source_index=source_index,
             is_practice=params["isPractice"],
             formal_trial=params["formalTrial"],
-            params_json=params,
+            params_json={
+                "soldiersA": params["soldiersA"],
+                "soldiersB": params["soldiersB"],
+                "sourceIndex": source_index,
+            },
             seed=seed_hex,
             initial_state_json=_board_payload(board),
             started_at=utcnow(),
@@ -731,11 +759,12 @@ class RuntimeManager:
                 forced=False,
             )
         )
+        _, turn_seconds = self._trial_settings(room, trial_index)
         state["phase"] = PHASE_TURN
         state["trial_index"] = trial_index
         state["round"] = 1
         state["submissions"] = {}
-        self._set_turn_deadline(state, condition["turnSeconds"])
+        self._set_turn_deadline(state, turn_seconds)
         state["turn_generation"] = state.get("turn_generation", 0) + 1
         state["recovery_count"] = 0
         state["rest_deadline"] = None
@@ -744,17 +773,29 @@ class RuntimeManager:
         state["board"] = _board_payload(board)
         state["num_of_war"] = 0
         state["trial_started_at"] = isoformat_utc(utcnow())
-        add_event(db, room, "trial_started", payload={"trialIndex": trial_index, "sourceIndex": source_index})
+        add_event(
+            db,
+            room,
+            "trial_started",
+            payload={
+                "trialIndex": trial_index,
+                "sourceIndex": source_index,
+                "isPractice": params["isPractice"],
+            },
+        )
         if state["turn_deadline"] is not None:
-            self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=condition["turnSeconds"]))
+            self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=turn_seconds))
         _save_state(room, state)
         await db.flush()
 
     async def _resolve_current_round(self, db: AsyncSession, room: Room, state: dict) -> dict:
-        condition = room.config_snapshot["condition"]
+        map_group = self._map_group(room)
         board = _board_from_payload(state["board"])
-        params = condition["trialParams"][room.trial_plan_json["order"][state["trial_index"]]]
-        grids = self._reinforcement_grids(condition, params)
+        params = self._trial_params(room, state["trial_index"])
+        if params is None:
+            raise RuntimeError("当前对局计划不存在")
+        turn_cap, turn_seconds = self._trial_settings(room, state["trial_index"])
+        grids = self._reinforcement_grids(map_group, params)
         submission_a = state["submissions"].get("1")
         submission_b = state["submissions"].get("2")
         if submission_a is None or submission_b is None:
@@ -772,8 +813,8 @@ class RuntimeManager:
             submission_a["cells"],
             submission_b["cells"],
             seed=seed,
-            base_a_index=condition["baseAIndex"],
-            base_b_index=condition["baseBIndex"],
+            base_a_index=map_group["spawns"]["A"],
+            base_b_index=map_group["spawns"]["B"],
             reinforcement_a=grids[0],
             reinforcement_b=grids[1],
         )
@@ -843,6 +884,7 @@ class RuntimeManager:
             "board": _board_payload(resolution.board),
             "trialEnded": False,
             "resultDisplayMs": result_animation_ms,
+            **_trial_parameter_payload(params),
         }
         without_territory = player_without_territory(resolution.board)
         if without_territory is not None:
@@ -857,7 +899,7 @@ class RuntimeManager:
                 end_turn=round_number,
                 result_animation_ms=result_animation_ms,
             )
-        elif round_number >= condition["turnCount"]:
+        elif round_number >= turn_cap:
             result["trialEnded"] = True
             await self._finalize_trial(
                 db,
@@ -870,10 +912,10 @@ class RuntimeManager:
                 result_animation_ms=result_animation_ms,
             )
         else:
-            next_turn_seconds = condition["turnSeconds"] + result_animation_ms // 1000
+            next_turn_seconds = turn_seconds + result_animation_ms // 1000
             state["round"] = round_number + 1
             self._set_turn_deadline(
-                state, next_turn_seconds, paused_seconds=condition["turnSeconds"]
+                state, next_turn_seconds, paused_seconds=turn_seconds
             )
             state["turn_generation"] += 1
             if state["turn_deadline"] is not None:
@@ -895,13 +937,16 @@ class RuntimeManager:
         end_turn: int,
         result_animation_ms: int = 0,
     ) -> None:
-        condition = room.config_snapshot["condition"]
-        params = condition["trialParams"][room.trial_plan_json["order"][state["trial_index"]]]
-        grids = self._reinforcement_grids(condition, params)
+        map_group = self._map_group(room)
+        params = self._trial_params(room, state["trial_index"])
+        if params is None:
+            raise RuntimeError("当前对局计划不存在")
+        turn_cap, _ = self._trial_settings(room, state["trial_index"])
+        grids = self._reinforcement_grids(map_group, params)
         board = final_board
         forced_rounds = 0
         if end_reason == END_REASON_ANNIHILATION:
-            for round_number in range(end_turn + 1, condition["turnCount"] + 1):
+            for round_number in range(end_turn + 1, turn_cap + 1):
                 seed = turn_seed(
                     seed_from_hex(room.trial_plan_json["seed"]),
                     state["trial_index"],
@@ -911,8 +956,8 @@ class RuntimeManager:
                 resolution = resolve_forced_turn(
                     board,
                     seed=seed,
-                    base_a_index=condition["baseAIndex"],
-                    base_b_index=condition["baseBIndex"],
+                    base_a_index=map_group["spawns"]["A"],
+                    base_b_index=map_group["spawns"]["B"],
                     reinforcement_a=grids[0],
                     reinforcement_b=grids[1],
                 )
@@ -955,7 +1000,7 @@ class RuntimeManager:
             "winner": winner,
             "endReason": end_reason,
             "endTurn": end_turn,
-            "completedRounds": condition["turnCount"],
+            "completedRounds": turn_cap,
             "forcedRounds": forced_rounds,
             "finalSoldiers": final_soldiers,
         }
@@ -963,7 +1008,7 @@ class RuntimeManager:
         trial.winner = winner
         trial.end_reason = end_reason
         trial.end_turn = end_turn
-        trial.completed_rounds = condition["turnCount"]
+        trial.completed_rounds = turn_cap
         trial.forced_rounds = forced_rounds
         trial.summary_json = summary
         state["board"] = _board_payload(board)
@@ -972,9 +1017,9 @@ class RuntimeManager:
         if state["trial_index"] + 1 >= total_trials:
             await self._enter_questionnaire(db, room, state)
         else:
-            rest_seconds = condition["restSeconds"] + result_animation_ms // 1000
+            rest_seconds = map_group["restSeconds"] + result_animation_ms // 1000
             self._set_rest_deadline(
-                state, rest_seconds, paused_seconds=condition["restSeconds"]
+                state, rest_seconds, paused_seconds=map_group["restSeconds"]
             )
             state["rest_ready"] = {}
             if state["rest_deadline"] is not None:
@@ -1218,17 +1263,20 @@ class RuntimeManager:
             state["rest_deadline"] = None
 
     def _resume_game_clock(self, state: dict, now: datetime, room: Room) -> None:
-        condition = room.config_snapshot["condition"] if room.config_snapshot else None
+        map_group = room.config_snapshot.get("mapGroup") if room.config_snapshot else None
         if state["phase"] == PHASE_TURN and state["turn_deadline"] is None:
             remaining = state["turn_paused_remaining"]
             if remaining is None:
-                remaining = condition["turnSeconds"] if condition else 30
+                if map_group is not None:
+                    _, remaining = self._trial_settings(room, state["trial_index"])
+                else:
+                    remaining = 30
             state["turn_deadline"] = isoformat_utc(now + timedelta(seconds=remaining))
             state["turn_paused_remaining"] = None
         elif state["phase"] == PHASE_REST and state["rest_deadline"] is None:
             remaining = state["rest_paused_remaining"]
             if remaining is None:
-                remaining = condition["restSeconds"] if condition else 60
+                remaining = map_group["restSeconds"] if map_group else 60
             state["rest_deadline"] = isoformat_utc(now + timedelta(seconds=remaining))
             state["rest_paused_remaining"] = None
 
@@ -1259,12 +1307,17 @@ class RuntimeManager:
                     state["phase"] = PHASE_INSTRUCTIONS
                     await self._mark_all_disconnected(db, room, state, now)
                 elif room.status == ROOM_PLAYING:
-                    condition = room.config_snapshot["condition"] if room.config_snapshot else None
+                    map_group = room.config_snapshot.get("mapGroup") if room.config_snapshot else None
                     if state["phase"] == PHASE_TURN:
-                        state["turn_paused_remaining"] = condition["turnSeconds"] if condition else 30
+                        turn_seconds = map_group["formalTurnSeconds"] if map_group else 30
+                        if map_group is not None:
+                            params = self._trial_params(room, state["trial_index"])
+                            if params is not None and params["isPractice"]:
+                                turn_seconds = map_group["practiceTurnSeconds"]
+                        state["turn_paused_remaining"] = turn_seconds
                         state["turn_deadline"] = None
                     elif state["phase"] == PHASE_REST:
-                        state["rest_paused_remaining"] = condition["restSeconds"] if condition else 60
+                        state["rest_paused_remaining"] = map_group["restSeconds"] if map_group else 60
                         state["rest_deadline"] = None
                     state["turn_generation"] += 1
                     state["recovery_count"] += 1
@@ -1311,19 +1364,43 @@ class RuntimeManager:
         )
         return rows.scalars().first()
 
-    def _reinforcement_grids(self, condition: dict, params: dict) -> tuple[list[int], list[int]]:
-        total = condition["rows"] * condition["cols"]
-        grid_a = [int(cell["reinforcementA"]) for cell in condition["cells"]]
-        grid_b = [int(cell["reinforcementB"]) for cell in condition["cells"]]
-        overrides = params.get("reinforcementOverrides")
-        if overrides:
-            for entry in overrides.get("player1") or []:
-                grid_a[int(entry["cellIndex"])] = int(entry["value"])
-            for entry in overrides.get("player2") or []:
-                grid_b[int(entry["cellIndex"])] = int(entry["value"])
-        if len(grid_a) != total or len(grid_b) != total:
-            raise RuntimeError("增援矩阵长度与网格不一致")
-        return grid_a, grid_b
+    def _map_group(self, room: Room) -> dict:
+        snapshot = room.config_snapshot or {}
+        map_group = snapshot.get("mapGroup")
+        if map_group is None:
+            raise RuntimeError("房间缺少地图组配置快照")
+        return map_group
+
+    def _trial_params(self, room: Room, trial_index: int) -> dict | None:
+        order = room.trial_plan_json["order"] if room.trial_plan_json else []
+        if trial_index < 0 or trial_index >= len(order):
+            return None
+        map_group = self._map_group(room)
+        source_index = order[trial_index]
+        rows = map_group["profile"]["rows"]
+        if source_index < 0 or source_index >= len(rows):
+            raise RuntimeError("对局计划的 sourceIndex 超出配置方案范围")
+        is_practice = trial_index < map_group["practiceTrials"]
+        row = rows[source_index]
+        return {
+            "sourceIndex": source_index,
+            "isPractice": is_practice,
+            "formalTrial": 0 if is_practice else trial_index - map_group["practiceTrials"] + 1,
+            "soldiersA": int(row["soldiersA"]),
+            "soldiersB": int(row["soldiersB"]),
+        }
+
+    def _trial_settings(self, room: Room, trial_index: int) -> tuple[int, int]:
+        map_group = self._map_group(room)
+        params = self._trial_params(room, trial_index)
+        if params is not None and params["isPractice"]:
+            return map_group["practiceTurnCap"], map_group["practiceTurnSeconds"]
+        return map_group["formalTurnCap"], map_group["formalTurnSeconds"]
+
+    def _reinforcement_grids(self, map_group: dict, params: dict) -> tuple[list[int], list[int]]:
+        total = map_group["rows"] * map_group["cols"]
+        # 当前配置按“每个己方格 + 当前行兵力”结算，双方各自使用统一的增援值。
+        return [params["soldiersA"]] * total, [params["soldiersB"]] * total
 
     def _all_connected(self, room_id: str, role_rows: dict[int, RoomParticipant]) -> bool:
         connections = self.connections.get(room_id, {})
@@ -1448,33 +1525,44 @@ class RuntimeManager:
         await self._send_json(room.id, participant_id, payload)
 
     def _game_payload(self, room: Room, state: dict, role_row: RoomParticipant) -> dict:
-        condition = room.config_snapshot["condition"]
+        map_group = self._map_group(room)
         order = room.trial_plan_json["order"] if room.trial_plan_json else []
         trial_index = state["trial_index"]
-        source_index = order[trial_index] if trial_index < len(order) else None
-        params = condition["trialParams"][source_index] if source_index is not None else None
-        visuals = condition["visuals"][f"player{role_row.role}"]
+        params = self._trial_params(room, trial_index)
+        turn_cap, turn_seconds = self._trial_settings(room, trial_index)
         payload = {
             "phase": state["phase"],
             "trialIndex": trial_index,
             "gameNumber": trial_index + 1,
             "totalTrials": len(order),
-            "practiceTrials": condition["practiceTrials"],
-            "formalTrials": condition["formalTrials"],
+            "practiceTrials": map_group["practiceTrials"],
+            "formalTrials": map_group["formalTrials"],
             "isPractice": params["isPractice"] if params else None,
             "formalTrial": params["formalTrial"] if params else None,
             "round": state["round"],
-            "turnCount": condition["turnCount"],
-            "turnSeconds": condition["turnSeconds"],
-            "restSeconds": condition["restSeconds"],
+            "turnCount": turn_cap,
+            "turnSeconds": turn_seconds,
+            "restSeconds": map_group["restSeconds"],
             "board": state["board"],
-            "visuals": visuals,
+            "visuals": _role_visuals(map_group, role_row.role),
             "turnDeadline": state["turn_deadline"],
             "restDeadline": state["rest_deadline"],
             "submitted": str(role_row.role) in state["submissions"],
             "restReady": state["rest_ready"],
             "finalSoldiers": self._final_soldiers(state) if state["phase"] == PHASE_REST else None,
         }
+        if params is not None:
+            payload.update(_trial_parameter_payload(params))
+        else:
+            payload.update(
+                {
+                    "initialSoldiersA": None,
+                    "initialSoldiersB": None,
+                    "reinforcementA": None,
+                    "reinforcementB": None,
+                    "sourceIndex": None,
+                }
+            )
         if role_row.role == ROLE_PLAYER_1:
             payload["partnerSubmitted"] = "2" in state["submissions"]
         else:
@@ -1483,7 +1571,11 @@ class RuntimeManager:
 
     async def _broadcast_turn(self, db: AsyncSession, room: Room, state: dict) -> None:
         rows = await self._room_participant_rows(db, room.id)
-        condition = room.config_snapshot["condition"] if room.config_snapshot else None
+        has_map_group = bool(room.config_snapshot and room.config_snapshot.get("mapGroup"))
+        params = self._trial_params(room, state["trial_index"]) if has_map_group else None
+        turn_cap = turn_seconds = None
+        if has_map_group:
+            turn_cap, turn_seconds = self._trial_settings(room, state["trial_index"])
         for row in rows:
             if row.participant_id not in self.connections.get(room.id, {}):
                 continue
@@ -1493,18 +1585,21 @@ class RuntimeManager:
                 "roomId": room.id,
                 "trialIndex": state["trial_index"],
                 "round": state["round"],
-                "turnCount": condition["turnCount"] if condition else None,
-                "turnSeconds": condition["turnSeconds"] if condition else None,
+                "turnCount": turn_cap,
+                "turnSeconds": turn_seconds,
                 "deadline": state["turn_deadline"],
                 "board": state["board"],
                 "submitted": str(row.role) in state["submissions"],
                 "partnerSubmitted": other_role in state["submissions"],
             }
+            if params is not None:
+                payload.update(_trial_parameter_payload(params))
             await self._send_json(room.id, row.participant_id, payload)
 
     async def _broadcast_resolution(self, db: AsyncSession, room: Room, state: dict, outcome: dict) -> None:
         rows = await self._room_participant_rows(db, room.id)
-        condition = room.config_snapshot["condition"]
+        params = self._trial_params(room, state["trial_index"])
+        turn_cap, turn_seconds = self._trial_settings(room, state["trial_index"])
         for row in rows:
             if row.participant_id not in self.connections.get(room.id, {}):
                 continue
@@ -1523,6 +1618,8 @@ class RuntimeManager:
                 "trialEnded": outcome["trialEnded"],
                 "resultDisplayMs": outcome["resultDisplayMs"],
             }
+            if params is not None:
+                payload.update(_trial_parameter_payload(params))
             if not outcome["trialEnded"]:
                 payload["nextRound"] = outcome["nextRound"]
                 payload["deadline"] = outcome["deadline"]
@@ -1535,22 +1632,21 @@ class RuntimeManager:
                     payload_rest = {"type": "rest", "roomId": room.id, **self._rest_payload(state, room)}
                     await self._send_json(room.id, row.participant_id, payload_rest)
             else:
-                await self._send_json(
-                    room.id,
-                    row.participant_id,
-                    {
-                        "type": "turn",
-                        "roomId": room.id,
-                        "trialIndex": state["trial_index"],
-                        "round": state["round"],
-                        "turnCount": condition["turnCount"],
-                        "turnSeconds": condition["turnSeconds"],
-                        "deadline": state["turn_deadline"],
-                        "board": state["board"],
-                        "submitted": False,
-                        "partnerSubmitted": False,
-                    },
-                )
+                turn_payload = {
+                    "type": "turn",
+                    "roomId": room.id,
+                    "trialIndex": state["trial_index"],
+                    "round": state["round"],
+                    "turnCount": turn_cap,
+                    "turnSeconds": turn_seconds,
+                    "deadline": state["turn_deadline"],
+                    "board": state["board"],
+                    "submitted": False,
+                    "partnerSubmitted": False,
+                }
+                if params is not None:
+                    turn_payload.update(_trial_parameter_payload(params))
+                await self._send_json(room.id, row.participant_id, turn_payload)
 
     def _final_soldiers(self, state: dict) -> dict[str, int]:
         board = _board_from_payload(state["board"])
@@ -1560,12 +1656,13 @@ class RuntimeManager:
         }
 
     def _rest_payload(self, state: dict, room: Room) -> dict:
-        condition = room.config_snapshot["condition"]
+        map_group = self._map_group(room)
         order = room.trial_plan_json["order"]
         next_index = state["trial_index"] + 1
-        next_params = condition["trialParams"][order[next_index]] if next_index < len(order) else None
-        completed_source = order[state["trial_index"]]
-        completed_params = condition["trialParams"][completed_source]
+        next_params = self._trial_params(room, next_index) if next_index < len(order) else None
+        completed_params = self._trial_params(room, state["trial_index"])
+        if completed_params is None:
+            raise RuntimeError("当前对局计划不存在")
         return {
             "trialIndex": state["trial_index"],
             "round": state["round"],
@@ -1575,8 +1672,9 @@ class RuntimeManager:
             "nextTrialIndex": next_index if next_params else None,
             "nextIsPractice": next_params["isPractice"] if next_params else None,
             "nextFormalTrial": next_params["formalTrial"] if next_params else None,
-            "restSeconds": condition["restSeconds"],
-            "formalTrials": condition["formalTrials"],
+            "nextSourceIndex": next_params["sourceIndex"] if next_params else None,
+            "restSeconds": map_group["restSeconds"],
+            "formalTrials": map_group["formalTrials"],
             "finalSoldiers": self._final_soldiers(state),
             "deadline": state["rest_deadline"],
             "ready": state["rest_ready"],
@@ -1593,10 +1691,13 @@ class RuntimeManager:
     ) -> None:
         rows = await self._room_participant_rows(db, room.id)
         await self._broadcast_snapshots(db, room)
-        condition = room.config_snapshot["condition"]
+        map_group = self._map_group(room)
         order = room.trial_plan_json["order"]
-        params = condition["trialParams"][order[state["trial_index"]]]
         trial_index = state["trial_index"]
+        params = self._trial_params(room, trial_index)
+        if params is None:
+            raise RuntimeError("当前对局计划不存在")
+        turn_cap, turn_seconds = self._trial_settings(room, trial_index)
         for row in rows:
             if row.participant_id not in self.connections.get(room.id, {}):
                 continue
@@ -1619,15 +1720,16 @@ class RuntimeManager:
                     "trialIndex": trial_index,
                     "gameNumber": trial_index + 1,
                     "totalTrials": len(order),
-                    "practiceTrials": condition["practiceTrials"],
-                    "formalTrials": condition["formalTrials"],
+                    "practiceTrials": map_group["practiceTrials"],
+                    "formalTrials": map_group["formalTrials"],
                     "isPractice": params["isPractice"],
                     "formalTrial": params["formalTrial"],
                     "round": 1,
-                    "turnCount": condition["turnCount"],
-                    "turnSeconds": condition["turnSeconds"],
+                    "turnCount": turn_cap,
+                    "turnSeconds": turn_seconds,
                     "board": state["board"],
-                    "visuals": condition["visuals"][f"player{row.role}"],
+                    "visuals": _role_visuals(map_group, row.role),
+                    **_trial_parameter_payload(params),
                 },
             )
         await self._broadcast_turn(db, room, state)
