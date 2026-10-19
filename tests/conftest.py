@@ -5,6 +5,8 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -29,6 +31,14 @@ TEST_DATABASE_URL = os.environ.get(
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "integration-admin-password"
 FERNET_KEY = "WbHjoN9iR54PDbJDatQC0i2G-ow1XNn2_AzRpfdo3_0="
+IDENTITY_FERNET_KEY = "odEQ9io8t2uipKkgvVyIY3UXIYGua3wrE8fnS3662sE="
+ID_CARD_SAMPLE = "11010519491231002X"
+PASSPORT_SAMPLE = "E12345678"
+DEFAULT_TROOP_ROWS = [
+    {"soldiersA": 7, "soldiersB": 7},
+    {"soldiersA": 8, "soldiersB": 9},
+    {"soldiersA": 6, "soldiersB": 5},
+]
 
 
 def _free_port() -> int:
@@ -72,6 +82,22 @@ def execute_sql(sql: str, params: tuple = ()) -> None:
         connection.close()
 
 
+def fetch_all(sql: str, params: tuple = ()) -> list[dict]:
+    connection = _mysql_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            columns = [item[0] for item in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        connection.close()
+
+
+def fetch_one(sql: str, params: tuple = ()) -> dict | None:
+    rows = fetch_all(sql, params)
+    return rows[0] if rows else None
+
+
 def reset_database() -> None:
     from app import models  # noqa: F401
     from app.db import Base
@@ -106,6 +132,7 @@ class ServerHandle:
                 "SECRET_KEY": "integration-secret-key",
                 "PHONE_HMAC_KEY": "integration-phone-hmac-key",
                 "PHONE_ENCRYPTION_KEY": FERNET_KEY,
+                "IDENTITY_ENCRYPTION_KEY": IDENTITY_FERNET_KEY,
                 "ADMIN_USERNAME": ADMIN_USERNAME,
                 "ADMIN_INITIAL_PASSWORD": ADMIN_PASSWORD,
                 "JATOS_BASE_URL": os.environ.get("TEST_JATOS_BASE_URL", "http://127.0.0.1:9000"),
@@ -282,22 +309,141 @@ def create_consent(admin: ApiClient) -> dict:
     return created
 
 
-def create_instruction(admin: ApiClient, role: int, markdown: str, min_seconds: int = 0) -> dict:
+def create_troop_profile(
+    admin: ApiClient,
+    rows: list[dict] | None = None,
+    *,
+    publish: bool = True,
+    name: str | None = None,
+) -> dict:
+    normalized = [
+        {"soldiersA": int(row["soldiersA"]), "soldiersB": int(row["soldiersB"])}
+        for row in (rows if rows is not None else DEFAULT_TROOP_ROWS)
+    ]
+    profile_name = name or f"测试兵力-{uuid.uuid4().hex[:8]}"
+    created = admin.json(
+        "POST",
+        "/admin/api/troop-profiles",
+        json={"name": profile_name, "rows": normalized},
+    )
+    version = created["troopProfile"]
+    if publish:
+        version = admin.json(
+            "POST", f"/admin/api/troop-profiles/{version['id']}/publish"
+        )["troopProfile"]
+    return version
+
+
+def _asset_cells(assets, slot: str, total: int) -> list:
+    if assets is None:
+        return [None] * total
+    cells = assets.get(slot) if isinstance(assets, dict) else assets
+    if cells is None:
+        return [None] * total
+    if len(cells) != total:
+        raise ValueError(f"{slot} 地图单元格数量必须为 {total}")
+    return list(cells)
+
+
+def create_map_group(
+    admin: ApiClient,
+    troop_profile_version_id: str,
+    *,
+    mode: str = "both",
+    rows: int = 3,
+    cols: int = 3,
+    formal_trials: int = 2,
+    assets: list[str | None] | dict[str, list[str | None]] | None = None,
+    spawns: dict[str, int] | None = None,
+    description: str = "测试地图",
+    factor_level: str = "标准",
+    practice_turn_cap: int = 3,
+    practice_turn_seconds: int = 3,
+    formal_turn_cap: int = 3,
+    formal_turn_seconds: int = 3,
+    rest_seconds: int = 1,
+    randomize_formal: bool = True,
+    base_pay_cents: int = 4500,
+    performance_rate_cents: int = 1,
+    performance_cap_cents: int = 2000,
+    showup_pay_cents: int = 1000,
+    publish: bool = True,
+) -> dict:
+    total = rows * cols
+    slots = ("Both",) if mode == "both" else ("A", "B")
+    maps = [
+        {
+            "slot": slot,
+            "description": description,
+            "factorLevel": factor_level,
+            "cells": _asset_cells(assets, slot, total),
+        }
+        for slot in slots
+    ]
+    payload = {
+        "mode": mode,
+        "rows": rows,
+        "cols": cols,
+        "spawns": spawns or {"A": 0, "B": total - 1},
+        "troopProfileVersionId": troop_profile_version_id,
+        "practiceTrials": 1,
+        "formalTrials": formal_trials,
+        "practiceTurnCap": practice_turn_cap,
+        "practiceTurnSeconds": practice_turn_seconds,
+        "formalTurnCap": formal_turn_cap,
+        "formalTurnSeconds": formal_turn_seconds,
+        "restSeconds": rest_seconds,
+        "randomizeFormal": randomize_formal,
+        "payment": {
+            "basePayCents": base_pay_cents,
+            "performanceRateCents": performance_rate_cents,
+            "performanceCapCents": performance_cap_cents,
+            "showupPayCents": showup_pay_cents,
+        },
+        "maps": maps,
+    }
+    created = admin.json("POST", "/admin/api/map-groups", json=payload)
+    version = created["mapGroup"]
+    if publish:
+        version = admin.json(
+            "POST", f"/admin/api/map-groups/{version['id']}/publish"
+        )["mapGroup"]
+    return version
+
+
+def create_instruction(
+    admin: ApiClient,
+    map_group_version_id: str,
+    role: int,
+    markdown: str,
+    min_seconds: int = 0,
+    *,
+    publish: bool = True,
+) -> dict:
     created = admin.json(
         "POST",
         "/admin/api/instructions",
         json={
-            "name": f"role-{role}-instructions",
+            "mapGroupVersionId": map_group_version_id,
             "role": role,
             "markdown": markdown,
             "minReadingSeconds": min_seconds,
         },
     )
-    admin.json("POST", f"/admin/api/instructions/{created['instruction']['id']}/publish")
-    return created["instruction"]
+    instruction = created["instruction"]
+    if publish:
+        instruction = admin.json(
+            "POST", f"/admin/api/instructions/{instruction['id']}/publish"
+        )["instruction"]
+    return instruction
 
 
-def create_questionnaire(admin: ApiClient) -> dict:
+def create_questionnaire(
+    admin: ApiClient,
+    *,
+    publish: bool = True,
+    name: str | None = None,
+) -> dict:
     schema = {
         "title": "后测问卷",
         "pages": [
@@ -313,83 +459,40 @@ def create_questionnaire(admin: ApiClient) -> dict:
                     },
                     {
                         "id": "q2",
-                        "type": "likert",
-                        "label": "满意度",
-                        "required": False,
-                        "min": 1,
-                        "max": 5,
+                        "type": "short_text",
+                        "label": "实验感受",
+                        "required": True,
+                        "maxLength": 200,
+                    },
+                    {"id": "real_name", "type": "real_name", "label": "真实姓名", "required": True},
+                    {
+                        "id": "alipay_phone",
+                        "type": "alipay_phone",
+                        "label": "支付宝手机号",
+                        "required": True,
+                    },
+                    {
+                        "id": "identity_document",
+                        "type": "identity_document",
+                        "label": "身份证件",
+                        "required": True,
                     },
                 ],
             }
         ],
     }
+    questionnaire_name = name or f"测试问卷-{uuid.uuid4().hex[:8]}"
     created = admin.json(
-        "POST", "/admin/api/questionnaires", json={"name": "post-questionnaire", "schemaJson": schema}
+        "POST",
+        "/admin/api/questionnaires",
+        json={"name": questionnaire_name, "schemaJson": schema},
     )
-    admin.json("POST", f"/admin/api/questionnaires/{created['questionnaire']['id']}/publish")
-    return created["questionnaire"]
-
-
-def create_condition(
-    admin: ApiClient,
-    *,
-    rows: int = 5,
-    cols: int = 7,
-    practice: int = 1,
-    formal: int = 2,
-    turn_count: int = 3,
-    turn_seconds: int = 3,
-    rest_seconds: int = 1,
-) -> dict:
-    total = rows * cols
-    cells = []
-    for index in range(total):
-        owner = 1 if index == 0 else (2 if index == total - 1 else 0)
-        cells.append(
-            {
-                "row": index // cols,
-                "col": index % cols,
-                "initialOwner": owner,
-                "initialSoldiers": 0,
-                "reinforcementA": 2,
-                "reinforcementB": 2,
-            }
-        )
-    layer = [{"color": "#DCEBFF", "backgroundAssetId": None} for _ in range(total)]
-    trial_params = []
-    for index in range(practice + formal):
-        is_practice = index < practice
-        trial_params.append(
-            {
-                "sourceIndex": index,
-                "isPractice": is_practice,
-                "formalTrial": 0 if is_practice else index - practice + 1,
-                "baseSoldiersA": 8,
-                "baseSoldiersB": 8,
-                "reinforcementOverrides": None,
-            }
-        )
-    payload = {
-        "name": f"condition-{rows}x{cols}-{practice}-{formal}",
-        "description": "集成测试条件",
-        "rows": rows,
-        "cols": cols,
-        "cells": cells,
-        "visuals": {"player1": layer, "player2": [dict(item) for item in layer]},
-        "baseAIndex": 0,
-        "baseBIndex": total - 1,
-        "practiceTrials": practice,
-        "formalTrials": formal,
-        "turnCount": turn_count,
-        "turnSeconds": turn_seconds,
-        "restSeconds": rest_seconds,
-        "randomizeFormal": True,
-        "trialParams": trial_params,
-        "metadata": {"test": True},
-    }
-    created = admin.json("POST", "/admin/api/conditions", json=payload)
-    admin.json("POST", f"/admin/api/conditions/{created['condition']['id']}/publish")
-    return created["condition"]
+    questionnaire = created["questionnaire"]
+    if publish:
+        questionnaire = admin.json(
+            "POST", f"/admin/api/questionnaires/{questionnaire['id']}/publish"
+        )["questionnaire"]
+    return questionnaire
 
 
 def import_roster(admin: ApiClient, participants: list[tuple[str, str]]) -> dict:
@@ -403,21 +506,17 @@ def import_roster(admin: ApiClient, participants: list[tuple[str, str]]) -> dict
 
 def create_room(
     admin: ApiClient,
-    *,
-    condition_id: str,
+    map_group_version_id: str,
     instruction_p1: str,
     instruction_p2: str,
     questionnaire_id: str,
-    starts_in_seconds: float = 2,
+    starts_in_seconds: float = 6,
     wait_window_seconds: int = 30,
     reconnect_window_seconds: int = 5,
-    base_pay_cents: int = 1000,
-    performance_rate_cents: int = 1,
-    showup_pay_cents: int = 500,
-    label: str = "Integration Room",
+    label: str = "集成测试房间",
+    *,
+    publish: bool = True,
 ) -> dict:
-    from datetime import datetime, timedelta, timezone
-
     starts_at = datetime.now(timezone.utc) + timedelta(seconds=starts_in_seconds)
     created = admin.json(
         "POST",
@@ -425,16 +524,65 @@ def create_room(
         json={
             "internalLabel": label,
             "startsAt": starts_at.isoformat().replace("+00:00", "Z"),
-            "conditionVersionId": condition_id,
+            "mapGroupVersionId": map_group_version_id,
             "instructionVersionP1Id": instruction_p1,
             "instructionVersionP2Id": instruction_p2,
             "questionnaireVersionId": questionnaire_id,
-            "basePayCents": base_pay_cents,
-            "performanceRateCents": performance_rate_cents,
-            "showupPayCents": showup_pay_cents,
             "waitWindowSeconds": wait_window_seconds,
             "reconnectWindowSeconds": reconnect_window_seconds,
         },
     )
-    admin.json("POST", f"/admin/api/rooms/{created['room']['id']}/publish")
-    return created["room"]
+    room = created["room"]
+    if publish:
+        room = admin.json("POST", f"/admin/api/rooms/{room['id']}/publish")["room"]
+    return room
+
+
+def upload_media(
+    admin: ApiClient,
+    data: bytes,
+    *,
+    filename: str = "asset.png",
+    kind: str = "map",
+) -> dict:
+    response = admin.request(
+        "POST",
+        "/admin/api/media",
+        files={"file": (filename, data, "image/png")},
+        data={"kind": kind},
+    )
+    if response.status_code != 200:
+        raise AssertionError(f"media upload failed: {response.status_code}: {response.text}")
+    return response.json()["asset"]
+
+
+def valid_identity_answers(
+    prefix: str,
+    *,
+    phone: str = "13900001111",
+    id_card: str = ID_CARD_SAMPLE,
+    passport: str = PASSPORT_SAMPLE,
+) -> dict:
+    return {
+        "real_name": f"测试{prefix}",
+        "alipay_phone": phone,
+        "id_card": id_card,
+        "passport": passport,
+    }
+
+
+def questionnaire_protected_answers(identity: dict, *, document_type: str = "id_card") -> dict:
+    if document_type not in ("id_card", "passport"):
+        raise ValueError("document_type 必须为 id_card 或 passport")
+    return {
+        "real_name": identity["real_name"],
+        "alipay_phone": identity["alipay_phone"],
+        "identity_document": {
+            "documentType": document_type,
+            "number": identity[document_type],
+        },
+    }
+
+
+def questionnaire_answers(identity: dict, *, document_type: str = "id_card", **answers) -> dict:
+    return {**answers, **questionnaire_protected_answers(identity, document_type=document_type)}

@@ -13,22 +13,10 @@ def test_admin_auth_csrf_and_openapi_disabled(server):
     admin = ApiClient(server.base_url).login_admin()
     without_csrf = admin.client.request(
         "POST",
-        "/admin/api/conditions",
+        "/admin/api/troop-profiles",
         json={
             "name": "csrf-test",
-            "rows": 2,
-            "cols": 2,
-            "cells": [],
-            "visuals": {},
-            "baseAIndex": 0,
-            "baseBIndex": 3,
-            "trialParams": [],
-            "practiceTrials": 0,
-            "formalTrials": 1,
-            "turnCount": 1,
-            "turnSeconds": 1,
-            "restSeconds": 1,
-            "randomizeFormal": False,
+            "rows": [{"soldiersA": 5, "soldiersB": 5}, {"soldiersA": 6, "soldiersB": 6}],
         },
     )
     assert without_csrf.status_code == 403

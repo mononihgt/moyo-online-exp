@@ -60,6 +60,7 @@ class JatosClient:
             base_url=self.base,
             headers={"Authorization": f"Bearer {jatos_api_token()}"},
             timeout=120,
+            trust_env=False,
         )
 
     def create_study(self) -> dict:

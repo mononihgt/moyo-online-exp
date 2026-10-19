@@ -1,737 +1,959 @@
+import csv
 import io
 import json
-import threading
 import time
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlparse
 
-import httpx
-import pytest
+from app.constants import TIMEZONE
+from app.timeutil import isoformat_utc, localize, week_deadline_utc
 
 from conftest import (
+    PASSPORT_SAMPLE,
+    ID_CARD_SAMPLE,
     ApiClient,
-    WsClient,
-    create_condition,
-    execute_sql,
+    create_instruction,
+    create_map_group,
+    create_troop_profile,
+    fetch_all,
+    fetch_one,
     import_roster,
+    upload_media,
+    valid_identity_answers,
     wait_until,
 )
-from test_runtime_flows import Context, _book, _enter_both, _start_game
+
+from test_runtime_flows import (
+    ANNIHILATION_ROWS,
+    Context,
+    STAY_ROWS,
+    _book,
+    _complete_questionnaire,
+    _connect,
+    _json_value,
+    _me,
+    _monitor,
+    _next_trial,
+    _play_to_questionnaire,
+    _png_bytes,
+    _questionnaire_token,
+    _receive_rest,
+    _start_game,
+    _submit_round,
+    _webp_bytes,
+    _seconds_until,
+)
 
 
-def _owned_cell(board: dict, role: int) -> int:
-    owned = [index for index, owner in enumerate(board["owners"]) if owner == role]
-    return owned[0] if owned else 0
+REVIEW_PLAYERS = (("复核甲", "13700002001"), ("复核乙", "13700002002"))
+PAY_ROWS = [
+    {"soldiersA": 1000, "soldiersB": 1000},
+    {"soldiersA": 8, "soldiersB": 9},
+    {"soldiersA": 8, "soldiersB": 9},
+]
 
 
-def _iso_to_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _error_detail(response) -> str:
+    payload = response.json()
+    return payload.get("detail") or json.dumps(payload, ensure_ascii=False)
 
 
-def _wait_instruction_completed(ws: WsClient) -> dict:
-    for _ in range(40):
-        message = ws.recv()
-        if message.get("type") == "instruction_state" and message["instruction"]["completed"]:
-            return message
-    raise AssertionError("instruction did not complete")
+def _payments_for_room(admin: ApiClient, room_id: str) -> list[dict]:
+    payments = admin.json("GET", "/admin/api/payments")["payments"]
+    return [payment for payment in payments if payment["roomId"] == room_id]
 
 
-def _wait_partner_online(ws: WsClient, online: bool) -> dict:
-    for _ in range(60):
-        message = ws.recv()
-        if message.get("type") == "partner_state" and message["partner"]["online"] is online:
-            return message
-    raise AssertionError(f"partner online state {online} did not arrive")
+def _room_detail(admin: ApiClient, room_id: str) -> dict:
+    return admin.json("GET", f"/admin/api/rooms/{room_id}")
 
 
-def _reach_instructions(context: Context, room, participant_a, participant_b):
-    ws_a = WsClient(context.server, participant_a.cookie_value("moyo_participant"))
-    ws_b = WsClient(context.server, participant_b.cookie_value("moyo_participant"))
-    _enter_both(ws_a, ws_b, room["id"], context.admin)
-    ws_a.send("start_matching", roomId=room["id"])
-    ws_b.send("start_matching", roomId=room["id"])
-    ws_a.recv_until("instruction_state")
-    ws_b.recv_until("instruction_state")
-    return ws_a, ws_b
+def _wait_archived(admin: ApiClient, room_id: str, reason: str | None = None, timeout: float = 20) -> dict:
+    def archived():
+        detail = _room_detail(admin, room_id)
+        if detail["room"]["status"] != "archived":
+            return False
+        return reason is None or detail["room"]["archiveReason"] == reason
+
+    wait_until(archived, timeout=timeout)
+    return _room_detail(admin, room_id)
 
 
-def _token_from_url(url: str) -> str:
-    return parse_qs(urlparse(url).query)["rt"][0]
+def _extra_participants(context: Context, players) -> list[ApiClient]:
+    import_roster(context.admin, list(players))
+    clients = []
+    for name, phone in players:
+        client = ApiClient(context.server.base_url).login_participant(name, phone)
+        client.consent()
+        clients.append(client)
+    return clients
 
 
-def _reach_questionnaire(context: Context, room, participant_a, participant_b):
-    ws_a, ws_b, role_a, role_b, turn_a, turn_b = _start_game(
-        context, room, participant_a, participant_b
+def _complete_room(
+    server,
+    context: Context,
+    game,
+    journey,
+    identity_a: dict,
+    identity_b: dict,
+    *,
+    document_a: str = "id_card",
+    document_b: str = "passport",
+) -> dict:
+    token_a = _questionnaire_token(journey.state_a["questionnaire"]["url"])
+    token_b = _questionnaire_token(journey.state_b["questionnaire"]["url"])
+    _complete_questionnaire(server, token_a, identity_a, document_type=document_a)
+    _complete_questionnaire(server, token_b, identity_b, document_type=document_b)
+    return _wait_archived(context.admin, game.room_id, "completed")
+
+
+def _start_completed_room(
+    server,
+    context: Context,
+    participants,
+    *,
+    troop_rows=STAY_ROWS,
+    grid=(2, 2),
+    spawns=None,
+    base_pay=4500,
+    rate=1,
+    performance_cap=2000,
+    identity_a=None,
+    identity_b=None,
+):
+    participant_a, participant_b = participants
+    setup = context.make_room(
+        troop_rows=troop_rows,
+        grid=grid,
+        spawns=spawns or {"A": 0, "B": 1},
+        practice_cap=1,
+        practice_seconds=1,
+        formal_cap=1,
+        formal_seconds=1,
+        rest_seconds=1,
+        base_pay=base_pay,
+        rate=rate,
+        performance_cap=performance_cap,
     )
-    for ws, role, turn in ((ws_a, role_a, turn_a), (ws_b, role_b, turn_b)):
-        ws.send(
-            "submit_selection",
-            roomId=room["id"],
-            trialIndex=turn["trialIndex"],
-            round=turn["round"],
-            cells=[_owned_cell(turn["board"], role)],
-            clientMsgId=f"questionnaire-{role}-{uuid.uuid4().hex[:8]}",
-        )
-    questionnaire_a = ws_a.recv_until("questionnaire_required")
-    questionnaire_b = ws_b.recv_until("questionnaire_required")
-    return (
-        ws_a,
-        ws_b,
-        _token_from_url(questionnaire_a["url"]),
-        _token_from_url(questionnaire_b["url"]),
+    game = _start_game(server, setup, participant_a, participant_b)
+    journey = _play_to_questionnaire(game)
+    identity_a = identity_a or valid_identity_answers("复核甲", phone="13800002101")
+    identity_b = identity_b or valid_identity_answers("复核乙", phone="13800002102")
+    detail = _complete_room(
+        server, context, game, journey, identity_a, identity_b
     )
+    return setup, game, journey, identity_a, identity_b, detail
 
 
-def _completion_payload(token: str, *, answer: str = "female") -> dict:
+def _csv_rows(response) -> list[list[str]]:
+    text = response.text.lstrip("﻿")
+    return list(csv.reader(io.StringIO(text)))
+
+
+def _yuan(cents: int) -> str:
+    return f"{cents // 100}.{cents % 100:02d}"
+
+
+def _local_date(iso_value: str) -> str:
+    moment = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+    return localize(moment, TIMEZONE).date().isoformat()
+
+
+def _questionnaire_schema(questions: list[dict]) -> dict:
     return {
-        "token": token,
-        "answers": {"q1": answer, "q2": 4},
-        "jatosWorkerId": f"worker-{uuid.uuid4().hex[:8]}",
-        "jatosStudyResultId": f"study-{uuid.uuid4()}",
-        "jatosComponentResultId": f"component-{uuid.uuid4()}",
+        "title": "校验问卷",
+        "pages": [{"id": "page1", "questions": questions}],
     }
 
 
-@pytest.mark.integration
-def test_concurrent_booking_respects_capacity(server):
-    context = Context(server)
-    import_roster(
-        context.admin,
-        [("已报甲", "13700000101"), ("抢位乙", "13700000102"), ("抢位丙", "13700000103")],
+def _room_payload(context: Context, map_group_id: str, p1: str, p2: str) -> dict:
+    starts_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+    return {
+        "internalLabel": f"校验房间-{uuid.uuid4().hex[:6]}",
+        "startsAt": starts_at.isoformat().replace("+00:00", "Z"),
+        "mapGroupVersionId": map_group_id,
+        "instructionVersionP1Id": p1,
+        "instructionVersionP2Id": p2,
+        "questionnaireVersionId": context.questionnaire["id"],
+        "waitWindowSeconds": 30,
+        "reconnectWindowSeconds": 5,
+    }
+
+
+def test_week_deadline_and_technical_abort_payments(server):
+    assert week_deadline_utc(datetime(2026, 10, 17, 12, 0), TIMEZONE) == datetime(
+        2026, 10, 18, 16, 0
     )
-    room = context.room(starts_in_seconds=60)
-    participant_a = context.participant("已报甲", "13700000101")
-    participant_b = context.participant("抢位乙", "13700000102")
-    participant_c = context.participant("抢位丙", "13700000103")
-    _book(context, room, participant_a)
+    assert week_deadline_utc(datetime(2026, 10, 18, 2, 0), TIMEZONE) == datetime(
+        2026, 10, 25, 16, 0
+    )
 
-    barrier = threading.Barrier(2)
-
-    def book(client: ApiClient):
-        barrier.wait()
-        return client.request("POST", f"/api/rooms/{room['id']}/book")
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(book, participant_b), pool.submit(book, participant_c)]
-        responses = [future.result() for future in futures]
-
-    assert sorted(response.status_code for response in responses) == [200, 409]
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    assert detail["room"]["bookedCount"] == 2
-    assert detail["room"]["status"] == "full"
-
-    for client in (participant_a, participant_b, participant_c):
-        client.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_mark_absent_while_waiting_archives_no_show(server):
     context = Context(server)
-    import_roster(context.admin, [("到场甲", "13700000111"), ("标记乙", "13700000112")])
-    room = context.room(starts_in_seconds=2, wait_window_seconds=3)
-    participant_a = context.participant("到场甲", "13700000111")
-    participant_b = context.participant("标记乙", "13700000112")
-    _book(context, room, participant_a, participant_b)
+    participant_a, participant_b = context.participants()
+    setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        practice_cap=2,
+        practice_seconds=2,
+        formal_cap=2,
+        formal_seconds=2,
+        rest_seconds=1,
+        showup=500,
+        reconnect_window=1,
+    )
+    game = _start_game(server, setup, participant_a, participant_b)
+    game.ws_a.close()
+    game.ws_b.close()
+
     wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        lambda: len(_payments_for_room(context.admin, setup.room["id"])) == 2,
         timeout=20,
     )
-    ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
-    ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
-    _enter_both(ws_a, ws_b, room["id"], context.admin)
-    booking_b = next(
-        booking
-        for booking in context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["bookings"]
-        if booking["name"] == "标记乙"
+    detail = _wait_archived(context.admin, setup.room["id"], "technical_abort")
+    booked = {booking["participantId"]: booking["status"] for booking in detail["bookings"]}
+    assert set(booked.values()) == {"attended"}
+    room_row = fetch_one(
+        "SELECT archived_at FROM rooms WHERE id = %s", (setup.room["id"],)
     )
+    expected_deadline = isoformat_utc(
+        week_deadline_utc(room_row["archived_at"], TIMEZONE)
+    )
+    payments = _payments_for_room(context.admin, setup.room["id"])
+    assert len(payments) == 2
+    for payment in payments:
+        assert payment["basePayCents"] == 0
+        assert payment["performancePayCents"] == 0
+        assert payment["showupPayCents"] == 500
+        assert payment["totalCents"] == 500
+        assert payment["status"] == "pending"
+        assert payment["deadlineAt"] == expected_deadline
+
+
+def test_performance_floor_and_practice_excluded(server):
+    context = Context(server)
+    participants = context.participants(REVIEW_PLAYERS)
+    setup, game, _journey, _identity_a, _identity_b, detail = _start_completed_room(
+        server,
+        context,
+        participants,
+        troop_rows=PAY_ROWS,
+        base_pay=1000,
+        rate=7,
+        performance_cap=2000,
+    )
+    assert detail["room"]["archiveReason"] == "completed"
+    payments = _payments_for_room(context.admin, setup.room["id"])
+    assert len(payments) == 2
+    for payment in payments:
+        assert payment["basePayCents"] == 1000
+        assert payment["performancePayCents"] == 100
+        assert payment["showupPayCents"] == 0
+        assert payment["totalCents"] == 1100
+        assert payment["analysisCode"]
+    assert {payment["analysisCode"] for payment in payments}.__len__() == 2
+
+
+def test_performance_cap(server):
+    context = Context(server)
+    participants = context.participants(REVIEW_PLAYERS)
+    setup, _game, _journey, _identity_a, _identity_b, _detail = _start_completed_room(
+        server,
+        context,
+        participants,
+        troop_rows=PAY_ROWS,
+        base_pay=4500,
+        rate=500,
+        performance_cap=2000,
+    )
+    payments = _payments_for_room(context.admin, setup.room["id"])
+    assert len(payments) == 2
+    for payment in payments:
+        assert payment["basePayCents"] == 4500
+        assert payment["performancePayCents"] == 2000
+        assert payment["totalCents"] == 6500
+
+
+def test_payment_override_note_and_paid_preserved(server):
+    context = Context(server)
+    participant_a, participant_b = context.participants()
+    setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        practice_cap=2,
+        practice_seconds=2,
+        formal_cap=2,
+        formal_seconds=2,
+        rest_seconds=1,
+        showup=500,
+        reconnect_window=1,
+    )
+    game = _start_game(server, setup, participant_a, participant_b)
+    game.ws_a.close()
+    game.ws_b.close()
+    wait_until(
+        lambda: len(_payments_for_room(context.admin, setup.room["id"])) == 2,
+        timeout=20,
+    )
+    _wait_archived(context.admin, setup.room["id"], "technical_abort")
+    payments = _payments_for_room(context.admin, setup.room["id"])
+    payment = payments[0]
+    participant_id = payment["participantId"]
+
+    missing_note = context.admin.request(
+        "PATCH",
+        f"/admin/api/payments/{payment['id']}",
+        json={"overrideAmountCents": 12345},
+    )
+    assert missing_note.status_code == 400
+    assert "覆盖金额必须填写备注" in _error_detail(missing_note)
+
+    overridden = context.admin.json(
+        "PATCH",
+        f"/admin/api/payments/{payment['id']}",
+        json={"overrideAmountCents": 12345, "adminNote": "线下协商调整"},
+    )["payment"]
+    assert overridden["overrideAmountCents"] == 12345
+    assert overridden["totalCents"] == 12345
+    assert overridden["note"] == "线下协商调整"
+    assert overridden["status"] == "pending"
+
+    paid = context.admin.json(
+        "PATCH",
+        f"/admin/api/payments/{payment['id']}",
+        json={"status": "paid"},
+    )["payment"]
+    assert paid["status"] == "paid"
+    assert paid["paidAt"] is not None
+
     context.admin.json(
         "POST",
-        f"/admin/api/rooms/{room['id']}/actions",
-        json={"action": "mark_absent", "participantId": booking_b["participantId"]},
+        f"/admin/api/rooms/{setup.room['id']}/actions",
+        json={"action": "mark_absent", "participantId": participant_id},
     )
-    archived = ws_a.recv_until("room_archived", timeout=20)
-    assert archived["reason"] == "no_show"
-    assert archived["rewardKind"] == "none"
-    assert context.admin.json("GET", "/admin/api/payments")["payments"] == []
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    statuses = {booking["name"]: booking["status"] for booking in detail["bookings"]}
-    assert statuses["标记乙"] == "no_show"
-    ws_a.close()
-    ws_b.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_mark_absent_after_technical_abort_keeps_existing_payment(server):
-    context = Context(server)
-    import_roster(context.admin, [("到场丙", "13700000121"), ("标记丁", "13700000122")])
-    room = context.room(
-        starts_in_seconds=2,
-        turn_seconds=30,
-        reconnect_window_seconds=2,
-    )
-    participant_a = context.participant("到场丙", "13700000121")
-    participant_b = context.participant("标记丁", "13700000122")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b, _role_a, _role_b, _turn_a, _turn_b = _start_game(
-        context, room, participant_a, participant_b
-    )
-    ws_b.close()
-    archived = ws_a.recv_until("room_archived", timeout=20)
-    assert archived["reason"] == "technical_abort"
-    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 2
-    assert all(item["showupPayCents"] == 500 for item in payments)
-    booking_b = next(
-        booking
-        for booking in context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["bookings"]
-        if booking["name"] == "标记丁"
-    )
-    result = context.admin.json(
-        "POST",
-        f"/admin/api/rooms/{room['id']}/actions",
-        json={"action": "mark_absent", "participantId": booking_b["participantId"]},
-    )
-    assert result == {"ok": True}
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    assert detail["room"]["archiveReason"] == "technical_abort"
-    statuses = {booking["name"]: booking["status"] for booking in detail["bookings"]}
-    assert statuses["标记丁"] == "no_show"
-    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 2
-    by_name = {item["name"]: item for item in payments}
-    assert by_name["到场丙"]["totalCents"] == 500
-    assert by_name["标记丁"]["totalCents"] == 500
-    assert by_name["标记丁"]["showupPayCents"] == 500
-    ws_a.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_archived_condition_can_still_be_updated_and_copied(server):
-    context = Context(server)
-    condition = create_condition(context.admin, rows=3, cols=4, practice=0, formal=1)
-    starts_at = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
-    room = context.admin.json(
-        "POST",
-        "/admin/api/rooms",
-        json={
-            "internalLabel": "Archived version room",
-            "startsAt": starts_at,
-            "conditionVersionId": condition["id"],
-            "instructionVersionP1Id": context.instruction_1["id"],
-            "instructionVersionP2Id": context.instruction_2["id"],
-            "questionnaireVersionId": context.questionnaire["id"],
-            "basePayCents": 1000,
-            "performanceRateCents": 1,
-            "showupPayCents": 500,
-            "waitWindowSeconds": 900,
-            "reconnectWindowSeconds": 600,
-        },
-    )["room"]
-    create_condition(context.admin, rows=3, cols=4, practice=0, formal=1)
-    patched = context.admin.request(
-        "PATCH", f"/admin/api/rooms/{room['id']}", json={"internalLabel": "Updated room"}
-    )
-    assert patched.status_code == 200, patched.text
-    published = context.admin.request("POST", f"/admin/api/rooms/{room['id']}/publish")
-    assert published.status_code == 200, published.text
-    copied = context.admin.request("POST", f"/admin/api/rooms/{room['id']}/copy", json={})
-    assert copied.status_code == 200, copied.text
-    assert copied.json()["room"]["condition"]["id"] == condition["id"]
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_payment_status_patch_preserves_override_and_note(server):
-    context = Context(server)
-    import_roster(context.admin, [("付款甲", "13700000131"), ("付款乙", "13700000132")])
-    room = context.room(starts_in_seconds=2, turn_seconds=30, reconnect_window_seconds=2)
-    participant_a = context.participant("付款甲", "13700000131")
-    participant_b = context.participant("付款乙", "13700000132")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b, _role_a, _role_b, _turn_a, _turn_b = _start_game(
-        context, room, participant_a, participant_b
-    )
-    ws_b.close()
-    ws_a.recv_until("room_archived", timeout=20)
-    payment = next(
+    preserved = next(
         item
-        for item in context.admin.json("GET", "/admin/api/payments")["payments"]
-        if item["roomId"] == room["id"]
+        for item in _payments_for_room(context.admin, setup.room["id"])
+        if item["id"] == payment["id"]
     )
-    updated = context.admin.json(
-        "PATCH",
-        f"/admin/api/payments/{payment['id']}",
-        json={"overrideAmountCents": 12345, "adminNote": "调整金额", "status": "paid"},
-    )["payment"]
-    assert updated["totalCents"] == 12345
-    status_only = context.admin.json(
-        "PATCH", f"/admin/api/payments/{payment['id']}", json={"status": "paid"}
-    )["payment"]
-    assert status_only["overrideAmountCents"] == 12345
-    assert status_only["note"] == "调整金额"
-    assert status_only["totalCents"] == 12345
-    note_only = context.admin.json(
-        "PATCH", f"/admin/api/payments/{payment['id']}", json={"adminNote": "新备注"}
-    )["payment"]
-    assert note_only["overrideAmountCents"] == 12345
-    assert note_only["note"] == "新备注"
-    assert note_only["totalCents"] == 12345
-    cleared = context.admin.json(
-        "PATCH",
-        f"/admin/api/payments/{payment['id']}",
-        json={"overrideAmountCents": None, "adminNote": None},
-    )["payment"]
-    assert cleared["overrideAmountCents"] is None
-    assert cleared["note"] is None
-    assert cleared["totalCents"] == 500
-    ws_a.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
+    assert preserved["status"] == "paid"
+    assert preserved["overrideAmountCents"] == 12345
+    assert preserved["totalCents"] == 12345
+    assert preserved["note"] == "线下协商调整"
+    assert preserved["paidAt"] == paid["paidAt"]
 
 
-@pytest.mark.integration
-def test_import_reports_are_audited_without_names(server):
+def test_analysis_export_and_audit_without_pii(server):
+    players = (("导出甲", "13800009901"), ("导出乙", "13800009902"))
     context = Context(server)
-    import_roster(context.admin, [("审计甲", "13700000141"), ("审计乙", "13700000142")])
-    duplicate = context.admin.json(
-        "POST",
-        "/admin/api/participants/import",
-        files={"file": ("roster.csv", "姓名,手机号\n审计甲,13700000141\n".encode(), "text/csv")},
+    participants = context.participants(players)
+    participant_a, participant_b = participants
+    identity_a = valid_identity_answers("导出甲", phone="13800009911")
+    identity_b = valid_identity_answers("导出乙", phone="13800009912")
+    setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        practice_cap=1,
+        practice_seconds=1,
+        formal_cap=1,
+        formal_seconds=1,
+        rest_seconds=1,
+        base_pay=4500,
+        rate=50,
     )
-    assert duplicate["errors"][0]["name"] == "审计甲"
-    completed = context.admin.json(
-        "POST",
-        "/admin/api/participants/import-completed",
-        files={"file": ("completed.csv", "姓名,手机号\n审计乙,13700000142\n".encode(), "text/csv")},
+    game = _start_game(server, setup, participant_a, participant_b)
+    journey = _play_to_questionnaire(game)
+    _complete_room(
+        server,
+        context,
+        game,
+        journey,
+        identity_a,
+        identity_b,
+        document_a="id_card",
+        document_b="passport",
     )
-    assert completed["rows"][0]["name"] == "审计乙"
-    audit = context.admin.json("GET", "/admin/api/audit?limit=500")["entries"]
-    entries = [
-        entry
-        for entry in audit
-        if entry["action"] in ("participants_import", "participants_import_completed")
+
+    participant_ids = [_me(participant_a)["id"], _me(participant_b)["id"]]
+    pii = [
+        players[0][0],
+        players[1][0],
+        players[0][1],
+        players[1][1],
+        identity_a["real_name"],
+        identity_b["real_name"],
+        identity_a["alipay_phone"],
+        identity_b["alipay_phone"],
+        ID_CARD_SAMPLE,
+        PASSPORT_SAMPLE,
+        *participant_ids,
     ]
-    assert entries
-    for entry in entries:
-        payload_text = json.dumps(entry["payload"], ensure_ascii=False)
-        assert "审计甲" not in payload_text
-        assert "审计乙" not in payload_text
-        for key in ("rows", "errors"):
-            for row in entry["payload"].get(key, []):
-                assert "name" not in row
-    context.admin.close()
 
+    export = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}/export.json")
+    assert export["schemaVersion"] == 5
+    assert len(export["participants"]) == 2
+    participant_keys = {
+        "analysisCode",
+        "role",
+        "bookingStatus",
+        "attendedAt",
+        "instruction",
+        "questionnaire",
+        "completedAt",
+    }
+    for participant in export["participants"]:
+        assert set(participant) == participant_keys
+        assert participant["analysisCode"]
+        assert participant["role"] in (1, 2)
+        answers = participant["questionnaire"]["answers"]
+        assert set(answers) == {"q1", "q2"}
+        assert "real_name" not in answers
+        assert "alipay_phone" not in answers
+        assert "identity_document" not in answers
+    export_text = json.dumps(export, ensure_ascii=False)
+    for value in pii:
+        assert value not in export_text
 
-@pytest.mark.integration
-def test_room_detail_exposes_jatos_admin_url(server):
-    context = Context(server)
-    room = context.room(starts_in_seconds=60)
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    assert detail["jatosAdminUrl"] == "http://127.0.0.1:9000/jatos"
-    assert detail["jatosStudyCode"] == "moyo-test"
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_round_resolution_keeps_clock_paused_while_partner_offline(server):
-    context = Context(server)
-    import_roster(context.admin, [("结算甲", "13700000151"), ("离线乙", "13700000152")])
-    room = context.room(
-        starts_in_seconds=2, turn_seconds=3, turn_count=3, reconnect_window_seconds=30
+    snapshot_row = fetch_one(
+        "SELECT archive_snapshot_json FROM rooms WHERE id = %s", (setup.room["id"],)
     )
-    participant_a = context.participant("结算甲", "13700000151")
-    participant_b = context.participant("离线乙", "13700000152")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b, role_a, role_b, turn_a, turn_b = _start_game(
-        context, room, participant_a, participant_b
-    )
-    ws_b.send(
-        "submit_selection",
-        roomId=room["id"],
-        trialIndex=turn_b["trialIndex"],
-        round=turn_b["round"],
-        cells=[_owned_cell(turn_b["board"], role_b)],
-        clientMsgId="offline-b-1",
-    )
-    ws_b.recv_until("turn")
-    ws_b.close()
-    wait_until(
-        lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")["turnDeadline"]
-        is None,
-        timeout=10,
-    )
-    ws_a.send(
-        "submit_selection",
-        roomId=room["id"],
-        trialIndex=turn_a["trialIndex"],
-        round=turn_a["round"],
-        cells=[_owned_cell(turn_a["board"], role_a)],
-        clientMsgId="offline-a-1",
-    )
-    result = ws_a.recv_until("turn_result")
-    assert result["nextRound"] == 2
-    time.sleep(4)
-    monitor = context.admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")
-    assert monitor["round"] == 2
-    assert monitor["turnDeadline"] is None
-    ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
-    ws_b.send("enter_room", roomId=room["id"])
-    state_b = ws_b.recv_until("room_state")
-    assert state_b["game"]["turnDeadline"] is not None
-    ws_a.close()
-    ws_b.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_game_start_keeps_disconnected_partner_paused(server):
-    context = Context(server)
-    import_roster(context.admin, [("入场甲", "13700000161"), ("入场乙", "13700000162")])
-    room = context.room(starts_in_seconds=2, turn_seconds=30, reconnect_window_seconds=30)
-    participant_a = context.participant("入场甲", "13700000161")
-    participant_b = context.participant("入场乙", "13700000162")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b = _reach_instructions(context, room, participant_a, participant_b)
-    ws_a.send("instruction_complete", roomId=room["id"])
-    ws_b.send("instruction_complete", roomId=room["id"])
-    _wait_instruction_completed(ws_a)
-    _wait_instruction_completed(ws_b)
-    ws_a.send("enter_game", roomId=room["id"])
-    time.sleep(0.5)
-    ws_a.close()
-    _wait_partner_online(ws_b, False)
-    ws_b.send("enter_game", roomId=room["id"])
-    turn_b = ws_b.recv_until("turn")
-    assert turn_b["deadline"] is None
-    monitor = context.admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")
-    assert monitor["turnDeadline"] is None
-    ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
-    ws_a.send("enter_room", roomId=room["id"])
-    state_a = ws_a.recv_until("room_state")
-    assert state_a["game"]["turnDeadline"] is not None
-    resumed_turn = ws_b.recv_until("turn")
-    assert resumed_turn["deadline"] is not None
-    ws_a.close()
-    ws_b.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_reconnect_during_rest_does_not_receive_turn(server):
-    context = Context(server)
-    import_roster(context.admin, [("休息甲", "13700000171"), ("重连乙", "13700000172")])
-    room = context.room(
-        starts_in_seconds=2,
-        practice=0,
-        formal=2,
-        turn_count=1,
-        turn_seconds=3,
-        rest_seconds=5,
-        reconnect_window_seconds=30,
-    )
-    participant_a = context.participant("休息甲", "13700000171")
-    participant_b = context.participant("重连乙", "13700000172")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b, role_a, role_b, turn_a, turn_b = _start_game(
-        context, room, participant_a, participant_b
-    )
-    for ws, role, turn in ((ws_a, role_a, turn_a), (ws_b, role_b, turn_b)):
-        ws.send(
-            "submit_selection",
-            roomId=room["id"],
-            trialIndex=turn["trialIndex"],
-            round=turn["round"],
-            cells=[_owned_cell(turn["board"], role)],
-            clientMsgId=f"rest-{role}",
-        )
-    ws_a.recv_until("rest")
-    rest_b = ws_b.recv_until("rest")
-    ws_b.close()
-    wait_until(
-        lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")["restDeadline"]
-        is None,
-        timeout=10,
-    )
-    ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
-    ws_b.send("enter_room", roomId=room["id"])
-    state_b = ws_b.recv_until("room_state")
-    assert state_b["game"]["phase"] == "rest"
-    assert state_b["game"]["restDeadline"] is not None
-    assert state_b["game"]["finalSoldiers"] == rest_b["finalSoldiers"]
-    assert set(state_b["game"]["finalSoldiers"]) == {"player1", "player2"}
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline:
-        try:
-            message = ws_b.recv(timeout=0.3)
-        except TimeoutError:
-            break
-        assert message.get("type") != "turn"
-    ws_a.close()
-    ws_b.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_restart_preserves_instruction_seconds_and_reconnect_deadline(server):
-    context = Context(server)
-    import_roster(context.admin, [("重启甲", "13700000181"), ("重启乙", "13700000182")])
-    room = context.room(starts_in_seconds=2, reconnect_window_seconds=30)
-    participant_a = context.participant("重启甲", "13700000181")
-    participant_b = context.participant("重启乙", "13700000182")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b = _reach_instructions(context, room, participant_a, participant_b)
-    time.sleep(6.5)
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    seconds_before = next(
-        item["instructionConnectedSeconds"]
-        for item in detail["participants"]
-        if item["name"] == "重启甲"
-    )
-    assert seconds_before >= 5
-    ws_b.close()
-    due_before = wait_until(
-        lambda: next(
-            (
-                item["disconnectedUntil"]
-                for item in context.admin.json(
-                    "GET", f"/admin/api/rooms/{room['id']}/monitor"
-                )["participants"]
-                if item["name"] == "重启乙"
-            ),
-            None,
-        ),
-        timeout=10,
-    )
-    time.sleep(2)
-    ws_a.close()
-    server.restart()
-    admin = ApiClient(server.base_url).login_admin()
-    monitor = admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")
-    due_after = next(
-        item["disconnectedUntil"]
-        for item in monitor["participants"]
-        if item["name"] == "重启乙"
-    )
-    assert abs((_iso_to_datetime(due_after) - _iso_to_datetime(due_before)).total_seconds()) < 1.5
-    ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
-    ws_a.send("enter_room", roomId=room["id"])
-    ws_a.recv_until("room_state")
-    detail = admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    seconds_after = next(
-        item["instructionConnectedSeconds"]
-        for item in detail["participants"]
-        if item["name"] == "重启甲"
-    )
-    assert seconds_after >= seconds_before
-    ws_a.close()
-    participant_a.close()
-    participant_b.close()
-    admin.close()
-
-
-@pytest.mark.integration
-def test_concurrent_questionnaire_completion_keeps_single_canonical(server):
-    context = Context(server)
-    import_roster(context.admin, [("问卷甲", "13700000191"), ("问卷乙", "13700000192")])
-    room = context.room(
-        starts_in_seconds=2,
-        practice=0,
-        formal=1,
-        turn_count=1,
-        turn_seconds=3,
-    )
-    participant_a = context.participant("问卷甲", "13700000191")
-    participant_b = context.participant("问卷乙", "13700000192")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b, token_a, token_b = _reach_questionnaire(
-        context, room, participant_a, participant_b
-    )
-    payloads = [_completion_payload(token_a), _completion_payload(token_a, answer="male")]
-
-    def complete(payload: dict):
-        return httpx.post(
-            f"{server.base_url}/api/jatos/questionnaire/complete", json=payload, timeout=30
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(complete, payload) for payload in payloads]
-        responses = [future.result() for future in futures]
-    assert all(response.status_code == 200 for response in responses)
-    assert sorted(response.json()["canonical"] for response in responses) == [False, True]
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    assert detail["room"]["status"] == "questionnaire"
-    complete_b = httpx.post(
-        f"{server.base_url}/api/jatos/questionnaire/complete",
-        json=_completion_payload(token_b),
-        timeout=30,
-    )
-    assert complete_b.status_code == 200
-    wait_until(
-        lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"]["status"]
-        == "archived",
-        timeout=20,
-    )
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    assert detail["room"]["archiveReason"] == "completed"
-    ws_a.close()
-    ws_b.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
-
-
-@pytest.mark.integration
-def test_payment_export_filters_and_analysis_zip_keeps_all(server):
-    context = Context(server)
-    import_roster(
-        context.admin, [("导出甲", "13700000211"), ("导出乙", "13700000212")]
-    )
-    room = context.room(starts_in_seconds=2, turn_seconds=30, reconnect_window_seconds=2)
-    participant_a = context.participant("导出甲", "13700000211")
-    participant_b = context.participant("导出乙", "13700000212")
-    _book(context, room, participant_a, participant_b)
-    wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
-        timeout=20,
-    )
-    ws_a, ws_b, _role_a, _role_b, _turn_a, _turn_b = _start_game(
-        context, room, participant_a, participant_b
-    )
-    ws_b.close()
-    archived = ws_a.recv_until("room_archived", timeout=20)
-    assert archived["reason"] == "technical_abort"
-    payments = context.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 2
-    assert all(item["showupPayCents"] == 500 for item in payments)
-
-    export = context.admin.request("GET", "/admin/api/payments/export.csv")
-    assert export.status_code == 200
-    text = export.content.decode("utf-8-sig")
-    for value in ("导出甲", "13700000211", "导出乙", "13700000212"):
-        assert value in text
+    snapshot = _json_value(snapshot_row["archive_snapshot_json"])
+    assert set(snapshot) == {
+        "schemaVersion",
+        "createdAt",
+        "room",
+        "mapGroup",
+        "instructions",
+        "questionnaire",
+        "media",
+    }
+    snapshot_text = json.dumps(snapshot, ensure_ascii=False)
+    for value in pii:
+        assert value not in snapshot_text
 
     zip_response = context.admin.request(
-        "GET", f"/admin/api/rooms/{room['id']}/analysis.zip"
+        "GET", f"/admin/api/rooms/{setup.room['id']}/analysis.zip"
     )
     assert zip_response.status_code == 200
-    analysis = zipfile.ZipFile(io.BytesIO(zip_response.content))
-    payment_csv = analysis.read("payment.csv").decode("utf-8-sig")
-    assert len(payment_csv.strip().splitlines()) == 3
-
-    execute_sql(
-        "UPDATE rooms SET archive_reason = %s WHERE id = %s",
-        ("admin_aborted", room["id"]),
+    archive = zipfile.ZipFile(io.BytesIO(zip_response.content))
+    names = set(archive.namelist())
+    assert {"room.json", "participants.csv", "turns.csv", "payment.csv", "questionnaire.json", "manifest.json"} <= names
+    manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert manifest["schemaVersion"] == 5
+    assert manifest["containsPII"] is False
+    assert manifest["rowCounts"]["participants"] == 2
+    assert manifest["rowCounts"]["payments"] == 2
+    payment_rows = list(
+        csv.reader(io.StringIO(archive.read("payment.csv").decode("utf-8-sig")))
     )
-    filtered = context.admin.request("GET", "/admin/api/payments/export.csv")
-    assert filtered.status_code == 200
-    filtered_text = filtered.content.decode("utf-8-sig")
-    assert "导出甲" not in filtered_text
-    assert "13700000211" not in filtered_text
-    assert len(filtered_text.strip().splitlines()) == 1
+    assert len(payment_rows) == 3
+    for name in names:
+        if not name.endswith((".json", ".csv")):
+            continue
+        text = archive.read(name).decode("utf-8-sig")
+        for value in pii:
+            assert value not in text, f"{name} 包含敏感值 {value}"
 
-    zip_after = context.admin.request(
-        "GET", f"/admin/api/rooms/{room['id']}/analysis.zip"
-    )
-    assert zip_after.status_code == 200
-    analysis_after = zipfile.ZipFile(io.BytesIO(zip_after.content))
-    payment_csv_after = analysis_after.read("payment.csv").decode("utf-8-sig")
-    assert len(payment_csv_after.strip().splitlines()) == 3
-    ws_a.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
+    audit = context.admin.json("GET", "/admin/api/audit?limit=500")
+    entries = audit["entries"]
+    assert any(entry["action"] == "participants_import" for entry in entries)
+    audit_text = json.dumps(entries, ensure_ascii=False)
+    for value in [
+        players[0][0],
+        players[1][0],
+        identity_a["real_name"],
+        identity_b["real_name"],
+        players[0][1],
+        players[1][1],
+        identity_a["alipay_phone"],
+        identity_b["alipay_phone"],
+        ID_CARD_SAMPLE,
+        PASSPORT_SAMPLE,
+    ]:
+        assert value not in audit_text
 
 
-@pytest.mark.integration
-def test_concurrent_questionnaire_completion_archives_room(server):
+def test_payment_lists_filters_and_columns(server):
     context = Context(server)
-    import_roster(context.admin, [("并发甲", "13700000201"), ("并发乙", "13700000202")])
-    room = context.room(
-        starts_in_seconds=2,
-        practice=0,
-        formal=1,
-        turn_count=1,
-        turn_seconds=3,
+    extra_a, extra_b = _extra_participants(
+        context, (("清单丙", "13800003303"), ("清单丁", "13800004404"))
     )
-    participant_a = context.participant("并发甲", "13700000201")
-    participant_b = context.participant("并发乙", "13700000202")
-    _book(context, room, participant_a, participant_b)
+    participants = context.participants(REVIEW_PLAYERS)
+    participant_a, participant_b = participants
+
+    abort_setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        practice_cap=2,
+        practice_seconds=2,
+        formal_cap=2,
+        formal_seconds=2,
+        rest_seconds=1,
+        showup=500,
+        reconnect_window=1,
+    )
+    abort_game = _start_game(server, abort_setup, extra_a, extra_b)
+    abort_game.ws_a.close()
+    abort_game.ws_b.close()
     wait_until(
-        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        lambda: len(_payments_for_room(context.admin, abort_setup.room["id"])) == 2,
         timeout=20,
     )
-    ws_a, ws_b, token_a, token_b = _reach_questionnaire(
-        context, room, participant_a, participant_b
-    )
+    _wait_archived(context.admin, abort_setup.room["id"], "technical_abort")
 
-    def complete(payload: dict):
-        return httpx.post(
-            f"{server.base_url}/api/jatos/questionnaire/complete", json=payload, timeout=30
+    identity_a = valid_identity_answers("清单甲", phone="13800001111")
+    identity_b = valid_identity_answers("清单乙", phone="13800002222")
+    setup, game, journey, _identity_a, _identity_b, _detail = _start_completed_room(
+        server,
+        context,
+        participants,
+        troop_rows=PAY_ROWS,
+        base_pay=4500,
+        rate=50,
+        identity_a=identity_a,
+        identity_b=identity_b,
+    )
+    payments = _payments_for_room(context.admin, setup.room["id"])
+    assert len(payments) == 2
+    assert sorted(payment["totalCents"] for payment in payments) == [5300, 5400]
+
+    start_date = _local_date(_room_detail(context.admin, setup.room["id"])["room"]["startsAt"])
+    params = {"from": start_date, "to": start_date}
+    pending_list = context.admin.request(
+        "GET", "/admin/api/payments/export-payment-list.csv", params=params
+    )
+    assert pending_list.status_code == 200
+    rows = _csv_rows(pending_list)
+    assert rows[0] == ["序号", "玩家支付宝手机号", "玩家姓名", "金额"]
+    assert len(rows) == 3
+    assert {row[1] for row in rows[1:]} == {
+        identity_a["alipay_phone"],
+        identity_b["alipay_phone"],
+    }
+    assert {row[2] for row in rows[1:]} == {identity_a["real_name"], identity_b["real_name"]}
+    assert [row[3] for row in rows[1:]] == ["53.00", "54.00"] or [
+        row[3] for row in rows[1:]
+    ] == ["54.00", "53.00"]
+
+    empty = context.admin.request(
+        "GET",
+        "/admin/api/payments/export-payment-list.csv",
+        params={"from": "2000-01-01", "to": "2000-01-02"},
+    )
+    assert _csv_rows(empty) == [["序号", "玩家支付宝手机号", "玩家姓名", "金额"]]
+
+    reimbursement_before = context.admin.request(
+        "GET", "/admin/api/payments/export-reimbursement-list.csv", params=params
+    )
+    assert _csv_rows(reimbursement_before) == [
+        ["序号", "参与日期", "玩家姓名", "玩家手机号", "玩家身份证", "金额"]
+    ]
+
+    payment_ids = [
+        row["id"]
+        for row in fetch_all(
+            "SELECT id FROM payments WHERE room_id = %s", (setup.room["id"],)
         )
+    ]
+    marked = context.admin.json(
+        "POST",
+        "/admin/api/payments/bulk-mark-paid",
+        json={"paymentIds": payment_ids},
+    )
+    assert marked["updated"] == 2
 
-    payloads = [_completion_payload(token_a), _completion_payload(token_b, answer="male")]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(complete, payload) for payload in payloads]
-        responses = [future.result() for future in futures]
-    assert all(response.status_code == 200 for response in responses)
-    assert all(response.json()["canonical"] is True for response in responses)
+    after_paid = context.admin.request(
+        "GET", "/admin/api/payments/export-payment-list.csv", params=params
+    )
+    assert _csv_rows(after_paid) == [["序号", "玩家支付宝手机号", "玩家姓名", "金额"]]
+
+    reimbursement = context.admin.request(
+        "GET", "/admin/api/payments/export-reimbursement-list.csv", params=params
+    )
+    reimbursement_rows = _csv_rows(reimbursement)
+    assert reimbursement_rows[0] == [
+        "序号",
+        "参与日期",
+        "玩家姓名",
+        "玩家手机号",
+        "玩家身份证",
+        "金额",
+    ]
+    assert len(reimbursement_rows) == 3
+    payment_by_participant = {
+        payment["participantId"]: payment for payment in payments
+    }
+    expected = {
+        (
+            start_date,
+            identity_a["real_name"],
+            REVIEW_PLAYERS[0][1],
+            ID_CARD_SAMPLE,
+            _yuan(payment_by_participant[_me(participant_a)["id"]]["totalCents"]),
+        ),
+        (
+            start_date,
+            identity_b["real_name"],
+            REVIEW_PLAYERS[1][1],
+            PASSPORT_SAMPLE,
+            _yuan(payment_by_participant[_me(participant_b)["id"]]["totalCents"]),
+        ),
+    }
+    assert {tuple(row[1:]) for row in reimbursement_rows[1:]} == expected
+
+    abort_payments = _payments_for_room(context.admin, abort_setup.room["id"])
+    assert len(abort_payments) == 2
+    assert all(payment["status"] == "pending" for payment in abort_payments)
+
+
+def test_room_start_and_config_limits(server):
+    context = Context(server)
+    participant_a, _participant_b = context.participants()
+    draft_setup = context.make_room(
+        troop_rows=STAY_ROWS[:2],
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        starts_in=3600,
+        publish=False,
+    )
+    room_id = draft_setup.room["id"]
+    assert draft_setup.room["status"] == "draft"
+    new_start = datetime.now(timezone.utc) + timedelta(hours=2)
+    patched = context.admin.json(
+        "PATCH",
+        f"/admin/api/rooms/{room_id}",
+        json={"internalLabel": "草稿改名"},
+    )
+    assert patched["room"]["internalLabel"] == "草稿改名"
+    context.admin.json("POST", f"/admin/api/rooms/{room_id}/publish")
+
+    start_rejected = context.admin.request(
+        "PATCH",
+        f"/admin/api/rooms/{room_id}",
+        json={"startsAt": new_start.isoformat().replace("+00:00", "Z")},
+    )
+    assert start_rejected.status_code == 409
+    assert "仅草稿房间可以修改开始时间" in _error_detail(start_rejected)
+
+    config_patched = context.admin.json(
+        "PATCH",
+        f"/admin/api/rooms/{room_id}",
+        json={"reconnectWindowSeconds": 12},
+    )
+    assert config_patched["room"]["status"] == "open"
+
+    _book(draft_setup, participant_a)
+    close_with_booking = context.admin.request(
+        "POST", f"/admin/api/rooms/{room_id}/close-booking"
+    )
+    assert close_with_booking.status_code == 409
+    assert "存在有效预约，无法关闭预约" in _error_detail(close_with_booking)
+    detail = _room_detail(context.admin, room_id)
+    booking_id = detail["bookings"][0]["id"]
+    participant_a.json("POST", f"/api/bookings/{booking_id}/cancel")
+    closed = context.admin.json("POST", f"/admin/api/rooms/{room_id}/close-booking")
+    assert closed["room"]["status"] == "draft"
+
+    started_setup = context.make_room(
+        troop_rows=STAY_ROWS[:2],
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        starts_in=1,
+    )
+    time.sleep(1.5)
+    config_rejected = context.admin.request(
+        "PATCH",
+        f"/admin/api/rooms/{started_setup.room['id']}",
+        json={"reconnectWindowSeconds": 12},
+    )
+    assert config_rejected.status_code == 409
+    assert "房间开始后不可修改配置" in _error_detail(config_rejected)
+    close_rejected = context.admin.request(
+        "POST", f"/admin/api/rooms/{started_setup.room['id']}/close-booking"
+    )
+    assert close_rejected.status_code == 409
+    # 到达开始时间后定时任务可能已把房间移出 open/full，两种提示都表示此时禁止关闭预约。
+    assert "关闭预约" in _error_detail(close_rejected)
+
+    past_setup = context.make_room(
+        troop_rows=STAY_ROWS[:2],
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        starts_in=-120,
+        publish=False,
+    )
+    publish_past = context.admin.request(
+        "POST", f"/admin/api/rooms/{past_setup.room['id']}/publish"
+    )
+    assert publish_past.status_code == 400
+    assert "开始时间必须晚于当前时间" in _error_detail(publish_past)
+
+
+def test_instruction_prefix_and_role_validation(server):
+    context = Context(server)
+    profile = create_troop_profile(context.admin, STAY_ROWS)
+    first = create_map_group(
+        context.admin,
+        profile["id"],
+        rows=2,
+        cols=2,
+        formal_trials=2,
+        spawns={"A": 0, "B": 1},
+        description=f"校验甲{uuid.uuid4().hex[:6]}",
+    )
+    second = create_map_group(
+        context.admin,
+        profile["id"],
+        rows=2,
+        cols=2,
+        formal_trials=2,
+        spawns={"A": 0, "B": 1},
+        description=f"校验乙{uuid.uuid4().hex[:6]}",
+    )
+    first_role1 = create_instruction(context.admin, first["id"], 1, "甲玩家1")
+    first_role2 = create_instruction(context.admin, first["id"], 2, "甲玩家2")
+    second_role1 = create_instruction(context.admin, second["id"], 1, "乙玩家1")
+
+    role_response = context.admin.request(
+        "POST",
+        "/admin/api/rooms",
+        json=_room_payload(context, first["id"], first_role2["id"], first_role2["id"]),
+    )
+    assert role_response.status_code == 400
+    assert "玩家1指导语的角色必须是 1" in _error_detail(role_response)
+
+    prefix_response = context.admin.request(
+        "POST",
+        "/admin/api/rooms",
+        json=_room_payload(context, first["id"], second_role1["id"], first_role2["id"]),
+    )
+    assert prefix_response.status_code == 400
+    assert "玩家1指导语的名称前缀必须与地图组名称一致" in _error_detail(prefix_response)
+
+
+def test_questionnaire_protected_field_validation(server):
+    context = Context(server)
+
+    missing = _questionnaire_schema(
+        [
+            {"id": "real_name", "type": "real_name", "label": "真实姓名", "required": True},
+            {
+                "id": "alipay_phone",
+                "type": "alipay_phone",
+                "label": "支付宝手机号",
+                "required": True,
+            },
+        ]
+    )
+    created = context.admin.json(
+        "POST",
+        "/admin/api/questionnaires",
+        json={"name": f"缺身份-{uuid.uuid4().hex[:6]}", "schemaJson": missing},
+    )
+    publish_missing = context.admin.request(
+        "POST",
+        f"/admin/api/questionnaires/{created['questionnaire']['id']}/publish",
+    )
+    assert publish_missing.status_code == 400
+    assert "问卷必须包含受保护题型: identity_document" in _error_detail(publish_missing)
+
+    optional = _questionnaire_schema(
+        [
+            {"id": "real_name", "type": "real_name", "label": "真实姓名", "required": False},
+            {
+                "id": "alipay_phone",
+                "type": "alipay_phone",
+                "label": "支付宝手机号",
+                "required": True,
+            },
+            {
+                "id": "identity_document",
+                "type": "identity_document",
+                "label": "身份证件",
+                "required": True,
+            },
+        ]
+    )
+    optional_response = context.admin.request(
+        "POST",
+        "/admin/api/questionnaires",
+        json={"name": f"可选题-{uuid.uuid4().hex[:6]}", "schemaJson": optional},
+    )
+    assert optional_response.status_code == 400
+    assert "pages[0].questions[0] 受保护题型必须设置为必填" in _error_detail(
+        optional_response
+    )
+
+    duplicate = _questionnaire_schema(
+        [
+            {"id": "real_name", "type": "real_name", "label": "真实姓名", "required": True},
+            {
+                "id": "real_name_again",
+                "type": "real_name",
+                "label": "真实姓名再次",
+                "required": True,
+            },
+        ]
+    )
+    duplicate_response = context.admin.request(
+        "POST",
+        "/admin/api/questionnaires",
+        json={"name": f"重复题-{uuid.uuid4().hex[:6]}", "schemaJson": duplicate},
+    )
+    assert duplicate_response.status_code == 400
+    assert "受保护题型重复: real_name" in _error_detail(duplicate_response)
+
+
+def test_map_group_webp_rejected_and_builtin_profile_read_only(server):
+    context = Context(server)
+    profile = create_troop_profile(context.admin, STAY_ROWS)
+    webp_asset = upload_media(
+        context.admin, _webp_bytes((30, 60, 90)), filename="forbidden-map.webp"
+    )
+    assert webp_asset["contentType"] == "image/webp"
+    payload = {
+        "mode": "both",
+        "rows": 2,
+        "cols": 2,
+        "spawns": {"A": 0, "B": 1},
+        "troopProfileVersionId": profile["id"],
+        "practiceTrials": 1,
+        "formalTrials": 2,
+        "payment": {
+            "basePayCents": 4500,
+            "performanceRateCents": 1,
+            "performanceCapCents": 2000,
+            "showupPayCents": 1000,
+        },
+        "maps": [
+            {
+                "slot": "Both",
+                "description": f"拒绝地图{uuid.uuid4().hex[:6]}",
+                "factorLevel": "标准",
+                "cells": [webp_asset["id"], None, None, None],
+            }
+        ],
+    }
+    webp_response = context.admin.request("POST", "/admin/api/map-groups", json=payload)
+    assert webp_response.status_code == 400
+    assert "地图单元格仅支持 PNG/JPG 图片" in _error_detail(webp_response)
+
+    profiles = context.admin.json("GET", "/admin/api/troop-profiles")["profiles"]
+    builtin = next(item for item in profiles if item["builtIn"])
+    builtin_version = builtin["versions"][0]
+    patch_builtin = context.admin.request(
+        "PATCH",
+        f"/admin/api/troop-profiles/{builtin_version['id']}",
+        json={"rows": [{"soldiersA": 3, "soldiersB": 4}, {"soldiersA": 5, "soldiersB": 6}]},
+    )
+    assert patch_builtin.status_code == 409
+    assert "内置方案只读，请复制后修改" in _error_detail(patch_builtin)
+
+    create_same = context.admin.request(
+        "POST",
+        "/admin/api/troop-profiles",
+        json={
+            "name": builtin["name"],
+            "rows": [{"soldiersA": 3, "soldiersB": 4}, {"soldiersA": 5, "soldiersB": 6}],
+        },
+    )
+    assert create_same.status_code == 409
+    assert "内置方案只读，请复制后修改" in _error_detail(create_same)
+
+    copy_name = f"复制方案-{uuid.uuid4().hex[:6]}"
+    copied = context.admin.json(
+        "POST",
+        f"/admin/api/troop-profiles/{builtin_version['id']}/copy",
+        json={"name": copy_name},
+    )["troopProfile"]
+    assert copied["name"] == copy_name
+    assert copied["builtIn"] is False
+    assert copied["status"] == "draft"
+    edited = context.admin.json(
+        "PATCH",
+        f"/admin/api/troop-profiles/{copied['id']}",
+        json={"rows": [{"soldiersA": 2, "soldiersB": 3}, {"soldiersA": 4, "soldiersB": 5}]},
+    )["troopProfile"]
+    assert edited["status"] == "draft"
+    assert edited["rows"] == [
+        {"soldiersA": 2, "soldiersB": 3},
+        {"soldiersA": 4, "soldiersB": 5},
+    ]
+
+
+def test_combat_boundary_and_rest_reconnect(server):
+    context = Context(server)
+    participant_a, participant_b = context.participants()
+    setup = context.make_room(
+        troop_rows=ANNIHILATION_ROWS,
+        grid=(2, 2),
+        spawns={"A": 0, "B": 1},
+        practice_cap=3,
+        practice_seconds=2,
+        formal_cap=3,
+        formal_seconds=2,
+        rest_seconds=4,
+        reconnect_window=15,
+    )
+    game = _start_game(server, setup, participant_a, participant_b)
+
+    result_a, result_b, _cells_a, _cells_b = _submit_round(
+        game, game.turn_a, game.turn_b, attack=True, tag="边界攻击"
+    )
+    assert result_a["trialEnded"] is True
+    assert result_a["warLocation"] == [1]
+    assert result_a["resultDisplayMs"] == 1000
+    assert result_a["round"] == 1
+    state_a, rest_a = _receive_rest(game.ws_a)
+    _state_b, rest_b = _receive_rest(game.ws_b)
+    assert state_a["game"]["phase"] == "rest"
+    assert rest_a["finalSoldiers"]["player2"] == 0
+    assert 4.5 <= _seconds_until(rest_a["deadline"]) <= 5.6
+    assert rest_a["nextTrialIndex"] == 1
+
+    game.ws_b.close()
     wait_until(
-        lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"]["status"]
-        == "archived",
-        timeout=20,
+        lambda: _monitor(context.admin, setup.room["id"])["restDeadline"] is None,
+        timeout=10,
     )
-    detail = context.admin.json("GET", f"/admin/api/rooms/{room['id']}")
-    assert detail["room"]["archiveReason"] == "completed"
-    assert all(
-        item["questionnaireStatus"] == "completed" for item in detail["participants"]
+    time.sleep(1.5)
+    monitor = _monitor(context.admin, setup.room["id"])
+    assert monitor["phase"] == "rest"
+    assert monitor["restDeadline"] is None
+
+    ws_b, snapshot_b = _connect(server, participant_b)
+    game.ws_b = ws_b
+    assert snapshot_b["game"]["phase"] == "rest"
+    assert snapshot_b["game"]["restDeadline"] is not None
+    resumed_a = game.ws_a.recv_until("rest")
+    resumed_b = ws_b.recv_until("rest")
+    assert resumed_a["deadline"] == resumed_b["deadline"]
+    assert _seconds_until(resumed_a["deadline"]) > 3.0
+
+    _state_a, _state_b, start_a, start_b, _turn_a, _turn_b = _next_trial(
+        game, resumed_a, resumed_b
     )
-    ws_a.close()
-    ws_b.close()
-    participant_a.close()
-    participant_b.close()
-    context.admin.close()
+    assert start_a["trialIndex"] == 1
+    assert start_b["trialIndex"] == 1
+    formal_trial = fetch_one(
+        "SELECT * FROM game_trials WHERE room_id = %s AND trial_index = 0",
+        (setup.room["id"],),
+    )
+    assert formal_trial["completed_rounds"] == 3
+    assert formal_trial["forced_rounds"] == 2
+    assert formal_trial["end_reason"] == "annihilation"
+
+
+def test_old_v4_endpoints_removed(server):
+    context = Context(server)
+    conditions = context.admin.request("GET", "/admin/api/conditions")
+    assert conditions.status_code == 404
+    legacy_export = context.admin.request("GET", "/admin/api/payments/export.csv")
+    assert legacy_export.status_code in (404, 405)
+    assert "序号" not in legacy_export.text
+    assert "text/csv" not in legacy_export.headers.get("content-type", "")
+    profiles = context.admin.json("GET", "/admin/api/troop-profiles")
+    assert profiles["profiles"]

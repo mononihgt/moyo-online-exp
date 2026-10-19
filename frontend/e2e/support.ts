@@ -13,19 +13,45 @@ export const WAIT_EXIT_DETAIL =
   "退出后本次实验将结束，本次实验未完成，不产生报酬。你可以返回首页重新预约其他时间段。";
 export const NO_REWARD = "本次实验未完成，不产生报酬";
 
+export const ID_CARD_SAMPLE = "11010519491231002X";
+export const PASSPORT_SAMPLE = "E12345678";
+
+export const DEFAULT_TROOP_ROWS: TroopRow[] = [
+  { soldiersA: 7, soldiersB: 7 },
+  { soldiersA: 8, soldiersB: 9 },
+  { soldiersA: 6, soldiersB: 5 },
+];
+
 export interface RosterEntry {
   name: string;
   phone: string;
 }
 
-export interface ConditionConfig {
-  practiceTrials?: number;
-  formalTrials?: number;
-  turnCount?: number;
-  turnSeconds?: number;
-  restSeconds?: number;
+export interface TroopRow {
+  soldiersA: number;
+  soldiersB: number;
+}
+
+export interface MapGroupConfig {
+  mode?: "both" | "ab";
   rows?: number;
   cols?: number;
+  formalTrials?: number;
+  description?: string;
+  factorLevel?: string;
+  images?: (string | null)[];
+  imagesBySlot?: { a?: (string | null)[]; b?: (string | null)[] };
+  spawns?: { A: number; B: number };
+  practiceTurnCap?: number;
+  practiceTurnSeconds?: number;
+  formalTurnCap?: number;
+  formalTurnSeconds?: number;
+  restSeconds?: number;
+  randomizeFormal?: boolean;
+  basePayCents?: number;
+  performanceRateCents?: number;
+  performanceCapCents?: number;
+  showupPayCents?: number;
 }
 
 export interface WorldConfig {
@@ -33,16 +59,51 @@ export interface WorldConfig {
   startsInSeconds?: number;
   waitWindowSeconds?: number;
   reconnectWindowSeconds?: number;
-  showupPayCents?: number;
-  basePayCents?: number;
-  performanceRateCents?: number;
-  condition?: ConditionConfig;
+  troopRows?: TroopRow[];
+  map?: MapGroupConfig;
+  roomLabel?: string;
+  instructionMarkdownP1?: string;
+  instructionMarkdownP2?: string;
+  minReadingSecondsP1?: number;
+  minReadingSecondsP2?: number;
+  questionnaireName?: string;
 }
 
 export interface World {
   roomId: string;
+  roomLabel: string;
   startsAt: string;
   entries: RosterEntry[];
+  troopRows: TroopRow[];
+  mapGroupVersionId: string;
+  mapGroupName: string;
+  instructionP1Id: string;
+  instructionP2Id: string;
+  questionnaireVersionId: string;
+  rows: number;
+  cols: number;
+}
+
+export interface IdentityAnswers {
+  real_name: string;
+  alipay_phone: string;
+  documentType: "id_card" | "passport";
+  documentNumber: string;
+}
+
+export interface PaymentListEntry {
+  id: string;
+  participantId: string;
+  name: string;
+  totalCents: number;
+  status: "pending" | "paid";
+  roomStartsAt: string;
+}
+
+export interface MediaUpload {
+  data: Buffer;
+  filename: string;
+  mimeType: string;
 }
 
 type Json = Record<string, unknown>;
@@ -140,36 +201,154 @@ export async function publishConsentVersion(
   return created.id;
 }
 
+export async function uploadMedia(
+  request: APIRequestContext,
+  baseURL: string,
+  upload: MediaUpload,
+  kind = "map",
+): Promise<string> {
+  const csrf = await adminCsrfToken(request);
+  const response = await request.fetch(`${baseURL}/admin/api/media`, {
+    method: "POST",
+    headers: { "X-CSRF-Token": csrf },
+    multipart: {
+      file: {
+        name: upload.filename,
+        mimeType: upload.mimeType,
+        buffer: upload.data,
+      },
+      kind,
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(`POST /admin/api/media -> ${response.status()}: ${await response.text()}`);
+  }
+  const body = (await response.json()) as { asset: { id: string } };
+  return body.asset.id;
+}
+
+async function createTroopProfile(
+  request: APIRequestContext,
+  baseURL: string,
+  rows: TroopRow[],
+): Promise<string> {
+  const created = await adminApi<{ troopProfile: { id: string } }>(
+    request,
+    baseURL,
+    "POST",
+    "/admin/api/troop-profiles",
+    { name: marker("浏览器兵力"), rows },
+  );
+  const published = await adminApi<{ troopProfile: { id: string } }>(
+    request,
+    baseURL,
+    "POST",
+    `/admin/api/troop-profiles/${created.troopProfile.id}/publish`,
+  );
+  return published.troopProfile.id;
+}
+
+function mapCells(
+  images: (string | null)[] | undefined,
+  total: number,
+): (string | null)[] {
+  return Array.from({ length: total }, (_, index) => images?.[index] ?? null);
+}
+
+async function createMapGroup(
+  request: APIRequestContext,
+  baseURL: string,
+  profileVersionId: string,
+  config: MapGroupConfig,
+  troopRows: TroopRow[],
+): Promise<{ id: string; name: string; rows: number; cols: number }> {
+  const mode = config.mode ?? "both";
+  const rows = config.rows ?? 3;
+  const cols = config.cols ?? 3;
+  const total = rows * cols;
+  const formalTrials = config.formalTrials ?? troopRows.length - 1;
+  const description = config.description ?? "浏览器验证";
+  const factorLevel = config.factorLevel ?? "标准";
+  const slots = mode === "both" ? (["Both"] as const) : (["A", "B"] as const);
+  const maps = slots.map((slot) => ({
+    slot,
+    description,
+    factorLevel,
+    cells:
+      slot === "B"
+        ? mapCells(config.imagesBySlot?.b ?? config.images, total)
+        : mapCells(config.imagesBySlot?.a ?? config.images, total),
+  }));
+  const created = await adminApi<{ mapGroup: { id: string; name: string } }>(
+    request,
+    baseURL,
+    "POST",
+    "/admin/api/map-groups",
+    {
+      mode,
+      rows,
+      cols,
+      spawns: config.spawns ?? { A: 0, B: total - 1 },
+      troopProfileVersionId: profileVersionId,
+      practiceTrials: 1,
+      formalTrials,
+      practiceTurnCap: config.practiceTurnCap ?? 2,
+      practiceTurnSeconds: config.practiceTurnSeconds ?? 30,
+      formalTurnCap: config.formalTurnCap ?? 2,
+      formalTurnSeconds: config.formalTurnSeconds ?? 30,
+      restSeconds: config.restSeconds ?? 1,
+      randomizeFormal: config.randomizeFormal ?? false,
+      payment: {
+        basePayCents: config.basePayCents ?? 4500,
+        performanceRateCents: config.performanceRateCents ?? 1,
+        performanceCapCents: config.performanceCapCents ?? 2000,
+        showupPayCents: config.showupPayCents ?? 1000,
+      },
+      maps,
+    },
+  );
+  const published = await adminApi<{ mapGroup: { id: string; name: string } }>(
+    request,
+    baseURL,
+    "POST",
+    `/admin/api/map-groups/${created.mapGroup.id}/publish`,
+  );
+  return {
+    id: published.mapGroup.id,
+    name: published.mapGroup.name,
+    rows,
+    cols,
+  };
+}
+
 async function createInstruction(
   request: APIRequestContext,
   baseURL: string,
+  mapGroupVersionId: string,
   role: 1 | 2,
+  markdown: string,
+  minReadingSeconds: number,
 ): Promise<string> {
-  const name = marker(`flow-p${role}`);
   const created = await adminApi<{ instruction: { id: string } }>(
     request,
     baseURL,
     "POST",
     "/admin/api/instructions",
-    {
-      name,
-      role,
-      markdown: `# 玩家${role}\n\n玩家${role}流程测试指导语。`,
-      minReadingSeconds: 0,
-    },
+    { mapGroupVersionId, role, markdown, minReadingSeconds },
   );
-  await adminApi(
+  const published = await adminApi<{ instruction: { id: string } }>(
     request,
     baseURL,
     "POST",
     `/admin/api/instructions/${created.instruction.id}/publish`,
   );
-  return created.instruction.id;
+  return published.instruction.id;
 }
 
 async function createQuestionnaire(
   request: APIRequestContext,
   baseURL: string,
+  name: string,
 ): Promise<string> {
   const created = await adminApi<{ questionnaire: { id: string } }>(
     request,
@@ -177,22 +356,47 @@ async function createQuestionnaire(
     "POST",
     "/admin/api/questionnaires",
     {
-      name: marker("flow-questionnaire"),
+      name,
       schemaJson: {
-        title: "流程测试后测",
+        title: "浏览器流程后测",
         pages: [
           {
-            id: "p1",
+            id: "page1",
             questions: [
               {
                 id: "q1",
                 type: "single_choice",
-                label: "流程测试选项",
+                label: "本次实验中的体验",
                 required: true,
                 options: [
-                  { value: "a", label: "A" },
-                  { value: "b", label: "B" },
+                  { value: "a", label: "顺利" },
+                  { value: "b", label: "一般" },
                 ],
+              },
+              {
+                id: "q2",
+                type: "short_text",
+                label: "实验感受",
+                required: true,
+                maxLength: 200,
+              },
+              {
+                id: "real_name",
+                type: "real_name",
+                label: "真实姓名",
+                required: true,
+              },
+              {
+                id: "alipay_phone",
+                type: "alipay_phone",
+                label: "支付宝手机号",
+                required: true,
+              },
+              {
+                id: "identity_document",
+                type: "identity_document",
+                label: "身份证件",
+                required: true,
               },
             ],
           },
@@ -200,66 +404,60 @@ async function createQuestionnaire(
       },
     },
   );
-  await adminApi(
+  const published = await adminApi<{ questionnaire: { id: string } }>(
     request,
     baseURL,
     "POST",
     `/admin/api/questionnaires/${created.questionnaire.id}/publish`,
   );
-  return created.questionnaire.id;
+  return published.questionnaire.id;
 }
 
-function conditionPayload(config: ConditionConfig): Json {
-  const rows = config.rows ?? 2;
-  const cols = config.cols ?? 2;
-  const total = rows * cols;
-  const practiceTrials = config.practiceTrials ?? 0;
-  const formalTrials = config.formalTrials ?? 1;
-  const turnCount = config.turnCount ?? 1;
-  const cells = Array.from({ length: total }, (_, index) => ({
-    row: Math.floor(index / cols),
-    col: index % cols,
-    initialOwner: index === 0 ? 1 : index === total - 1 ? 2 : 0,
-    initialSoldiers: 0,
-    reinforcementA: 2,
-    reinforcementB: 2,
-  }));
-  const visual = Array.from({ length: total }, () => ({
-    color: "#E8F0FF",
-    backgroundAssetId: null,
-  }));
-  const trialParams = Array.from(
-    { length: practiceTrials + formalTrials },
-    (_, index) => ({
-      sourceIndex: index,
-      isPractice: index < practiceTrials,
-      formalTrial: index < practiceTrials ? 0 : index - practiceTrials + 1,
-      baseSoldiersA: 8,
-      baseSoldiersB: 8,
-      reinforcementOverrides: null,
-    }),
-  );
-  return {
-    name: marker(`flow-condition-${rows}x${cols}`),
-    description: "参与者流程浏览器测试条件",
-    rows,
-    cols,
-    cells,
-    visuals: {
-      player1: visual,
-      player2: visual.map((item) => ({ ...item })),
+async function createRoom(
+  request: APIRequestContext,
+  baseURL: string,
+  materials: {
+    mapGroupVersionId: string;
+    instructionP1Id: string;
+    instructionP2Id: string;
+    questionnaireVersionId: string;
+  },
+  options: {
+    label: string;
+    startsInSeconds: number;
+    waitWindowSeconds: number;
+    reconnectWindowSeconds: number;
+    publish: boolean;
+  },
+): Promise<{ id: string; startsAt: string }> {
+  const startsAt = new Date(
+    Date.now() + options.startsInSeconds * 1000,
+  ).toISOString();
+  const created = await adminApi<{ room: { id: string } }>(
+    request,
+    baseURL,
+    "POST",
+    "/admin/api/rooms",
+    {
+      internalLabel: options.label,
+      startsAt,
+      mapGroupVersionId: materials.mapGroupVersionId,
+      instructionVersionP1Id: materials.instructionP1Id,
+      instructionVersionP2Id: materials.instructionP2Id,
+      questionnaireVersionId: materials.questionnaireVersionId,
+      waitWindowSeconds: options.waitWindowSeconds,
+      reconnectWindowSeconds: options.reconnectWindowSeconds,
     },
-    baseAIndex: 0,
-    baseBIndex: total - 1,
-    practiceTrials,
-    formalTrials,
-    turnCount,
-    turnSeconds: config.turnSeconds ?? 60,
-    restSeconds: config.restSeconds ?? 30,
-    randomizeFormal: false,
-    trialParams,
-    metadata: { source: "participant-flow-e2e" },
-  };
+  );
+  if (options.publish) {
+    await adminApi(
+      request,
+      baseURL,
+      "POST",
+      `/admin/api/rooms/${created.room.id}/publish`,
+    );
+  }
+  return { id: created.room.id, startsAt };
 }
 
 export async function prepareConsentBase(
@@ -282,51 +480,136 @@ export async function prepareWorld(
   config: WorldConfig,
 ): Promise<World> {
   await prepareConsentBase(request, baseURL, config.entries);
-  const instructionP1Id = await createInstruction(request, baseURL, 1);
-  const instructionP2Id = await createInstruction(request, baseURL, 2);
-  const questionnaireVersionId = await createQuestionnaire(request, baseURL);
-  const condition = await adminApi<{ condition: { id: string } }>(
+  const troopRows = config.troopRows ?? DEFAULT_TROOP_ROWS;
+  const profileVersionId = await createTroopProfile(request, baseURL, troopRows);
+  const mapConfig = config.map ?? {};
+  const mapGroup = await createMapGroup(
     request,
     baseURL,
-    "POST",
-    "/admin/api/conditions",
-    conditionPayload(config.condition ?? {}),
+    profileVersionId,
+    mapConfig,
+    troopRows,
   );
-  await adminApi(
+  const instructionP1Id = await createInstruction(
     request,
     baseURL,
-    "POST",
-    `/admin/api/conditions/${condition.condition.id}/publish`,
+    mapGroup.id,
+    1,
+    config.instructionMarkdownP1 ??
+      "# 玩家 A\n\n请阅读本页指导语，完成后点击继续。",
+    config.minReadingSecondsP1 ?? 0,
   );
-  const startsAt = new Date(
-    Date.now() + (config.startsInSeconds ?? 20) * 1000,
-  ).toISOString();
-  const room = await adminApi<{ room: { id: string } }>(
+  const instructionP2Id = await createInstruction(
     request,
     baseURL,
-    "POST",
-    "/admin/api/rooms",
+    mapGroup.id,
+    2,
+    config.instructionMarkdownP2 ??
+      "# 玩家 B\n\n请阅读本页指导语，完成后点击继续。",
+    config.minReadingSecondsP2 ?? 0,
+  );
+  const questionnaireVersionId = await createQuestionnaire(
+    request,
+    baseURL,
+    config.questionnaireName ?? marker("浏览器问卷"),
+  );
+  const roomLabel = config.roomLabel ?? marker("浏览器房间");
+  const room = await createRoom(
+    request,
+    baseURL,
     {
-      internalLabel: marker("flow-room"),
-      startsAt,
-      conditionVersionId: condition.condition.id,
-      instructionVersionP1Id: instructionP1Id,
-      instructionVersionP2Id: instructionP2Id,
+      mapGroupVersionId: mapGroup.id,
+      instructionP1Id,
+      instructionP2Id,
       questionnaireVersionId,
-      basePayCents: config.basePayCents ?? 1000,
-      performanceRateCents: config.performanceRateCents ?? 1,
-      showupPayCents: config.showupPayCents ?? 500,
-      waitWindowSeconds: config.waitWindowSeconds ?? 120,
-      reconnectWindowSeconds: config.reconnectWindowSeconds ?? 60,
+    },
+    {
+      label: roomLabel,
+      startsInSeconds: config.startsInSeconds ?? 25,
+      waitWindowSeconds: config.waitWindowSeconds ?? 90,
+      reconnectWindowSeconds: config.reconnectWindowSeconds ?? 30,
+      publish: true,
     },
   );
-  await adminApi(
+  return {
+    roomId: room.id,
+    roomLabel,
+    startsAt: room.startsAt,
+    entries: config.entries,
+    troopRows,
+    mapGroupVersionId: mapGroup.id,
+    mapGroupName: mapGroup.name,
+    instructionP1Id,
+    instructionP2Id,
+    questionnaireVersionId,
+    rows: mapGroup.rows,
+    cols: mapGroup.cols,
+  };
+}
+
+export async function createAdditionalRoom(
+  request: APIRequestContext,
+  baseURL: string,
+  world: World,
+  options: {
+    label: string;
+    startsInSeconds?: number;
+    waitWindowSeconds?: number;
+    reconnectWindowSeconds?: number;
+    publish?: boolean;
+  },
+): Promise<{ id: string; startsAt: string }> {
+  return createRoom(
     request,
     baseURL,
-    "POST",
-    `/admin/api/rooms/${room.room.id}/publish`,
+    {
+      mapGroupVersionId: world.mapGroupVersionId,
+      instructionP1Id: world.instructionP1Id,
+      instructionP2Id: world.instructionP2Id,
+      questionnaireVersionId: world.questionnaireVersionId,
+    },
+    {
+      label: options.label,
+      startsInSeconds: options.startsInSeconds ?? 3600,
+      waitWindowSeconds: options.waitWindowSeconds ?? 90,
+      reconnectWindowSeconds: options.reconnectWindowSeconds ?? 30,
+      publish: options.publish ?? true,
+    },
   );
-  return { roomId: room.room.id, startsAt, entries: config.entries };
+}
+
+export function identityAnswers(
+  tag: string,
+  options: {
+    phone?: string;
+    documentType?: "id_card" | "passport";
+  } = {},
+): IdentityAnswers {
+  const documentType = options.documentType ?? "id_card";
+  return {
+    real_name: `测试${tag}`,
+    alipay_phone: options.phone ?? "13900001111",
+    documentType,
+    documentNumber:
+      documentType === "passport" ? PASSPORT_SAMPLE : ID_CARD_SAMPLE,
+  };
+}
+
+export function questionnaireAnswers(
+  identity: IdentityAnswers,
+  extra: Json = {},
+): Json {
+  return {
+    q1: "a",
+    q2: "浏览器端流程测试答卷",
+    ...extra,
+    real_name: identity.real_name,
+    alipay_phone: identity.alipay_phone,
+    identity_document: {
+      documentType: identity.documentType,
+      number: identity.documentNumber,
+    },
+  };
 }
 
 export async function adminLoginPage(page: Page): Promise<void> {
@@ -461,22 +744,60 @@ export async function completeInstructionsPair(
   ]);
 }
 
-async function submitCell(page: Page): Promise<void> {
+export async function roleMarker(page: Page): Promise<"circle" | "diamond"> {
+  const text = await page.locator(".exp-hud-role").innerText();
+  return text.includes("○") ? "circle" : "diamond";
+}
+
+export async function clickBoardCell(
+  page: Page,
+  index: number,
+  rows: number,
+  cols: number,
+): Promise<void> {
   const canvas = page.getByTestId("game-canvas");
   await expect(canvas).toBeVisible({ timeout: 30000 });
   const box = await canvas.boundingBox();
   if (box === null) throw new Error("game canvas has no bounding box");
-  await page.mouse.click(box.x + box.width * 0.25, box.y + box.height * 0.25);
+  const row = Math.floor(index / cols);
+  const col = index % cols;
+  await page.mouse.click(
+    box.x + ((col + 0.5) * box.width) / cols,
+    box.y + ((row + 0.5) * box.height) / rows,
+  );
+}
+
+async function submitCell(page: Page, index: number, rows: number, cols: number): Promise<void> {
+  await clickBoardCell(page, index, rows, cols);
   const confirm = page.getByTestId("confirm-selection");
   await expect(confirm).toBeEnabled({ timeout: 10000 });
   await confirm.click();
 }
 
-export async function submitCellPair(
+export async function submitRoundPair(
   pageOne: Page,
   pageTwo: Page,
+  rows: number,
+  cols: number,
 ): Promise<void> {
-  await Promise.all([submitCell(pageOne), submitCell(pageTwo)]);
+  const markerOne = await roleMarker(pageOne);
+  const markerTwo = await roleMarker(pageTwo);
+  const circleIndex = 1;
+  const diamondIndex = Math.max(2, rows * cols - 2);
+  await Promise.all([
+    submitCell(
+      pageOne,
+      markerOne === "circle" ? circleIndex : diamondIndex,
+      rows,
+      cols,
+    ),
+    submitCell(
+      pageTwo,
+      markerTwo === "circle" ? circleIndex : diamondIndex,
+      rows,
+      cols,
+    ),
+  ]);
 }
 
 export async function waitForRest(
@@ -487,6 +808,17 @@ export async function waitForRest(
     expect(pageOne.getByTestId("rest-view")).toBeVisible({ timeout: 30000 }),
     expect(pageTwo.getByTestId("rest-view")).toBeVisible({ timeout: 30000 }),
   ]);
+}
+
+export async function continueFromRestPair(
+  pageOne: Page,
+  pageTwo: Page,
+): Promise<void> {
+  const readyOne = pageOne.getByTestId("rest-ready");
+  const readyTwo = pageTwo.getByTestId("rest-ready");
+  await expect(readyOne).toBeEnabled({ timeout: 20000 });
+  await expect(readyTwo).toBeEnabled({ timeout: 20000 });
+  await Promise.all([readyOne.click(), readyTwo.click()]);
 }
 
 export async function waitForQuestionnaire(
@@ -500,6 +832,21 @@ export async function waitForQuestionnaire(
     expect(
       pageTwo.getByRole("heading", { name: "请填写后测问卷", exact: true }),
     ).toBeVisible({ timeout: 30000 }),
+  ]);
+}
+
+export async function expectTurnLabel(
+  pageOne: Page,
+  pageTwo: Page,
+  label: string,
+): Promise<void> {
+  await Promise.all([
+    expect(pageOne.locator(".exp-hud-left")).toContainText(label, {
+      timeout: 30000,
+    }),
+    expect(pageTwo.locator(".exp-hud-left")).toContainText(label, {
+      timeout: 30000,
+    }),
   ]);
 }
 
@@ -637,12 +984,40 @@ export async function submitQuestionnaire(
   baseURL: string,
   roomId: string,
   tag: string,
+  identity: IdentityAnswers = identityAnswers(tag),
 ): Promise<Json> {
   return participantPost(page, baseURL, "/api/questionnaire/complete", {
     roomId,
-    answers: { q1: "a" },
+    answers: questionnaireAnswers(identity),
     jatosWorkerId: `node-e2e-${tag}`,
     jatosStudyResultId: `node-e2e-study-${tag}`,
     jatosComponentResultId: `node-e2e-component-${tag}`,
   });
+}
+
+export async function listPayments(
+  request: APIRequestContext,
+  baseURL: string,
+): Promise<PaymentListEntry[]> {
+  const response = await adminApi<{ payments: PaymentListEntry[] }>(
+    request,
+    baseURL,
+    "GET",
+    "/admin/api/payments",
+  );
+  return response.payments;
+}
+
+export async function markPaymentPaid(
+  request: APIRequestContext,
+  baseURL: string,
+  paymentId: string,
+): Promise<void> {
+  await adminApi(
+    request,
+    baseURL,
+    "PATCH",
+    `/admin/api/payments/${paymentId}`,
+    { status: "paid" },
+  );
 }

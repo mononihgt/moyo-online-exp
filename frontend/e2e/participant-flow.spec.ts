@@ -1,475 +1,212 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import {
-  NO_REWARD,
-  adminApi,
   adminLoginPage,
-  archiveReasonOptions,
   bookRoom,
-  cancelExperimentExit,
-  cancelWaitingExit,
   completeInstructionsPair,
-  confirmExperimentExit,
-  confirmWaitingExit,
+  continueFromRestPair,
   enterRoom,
-  expectArchiveView,
   expectBothBooked,
-  expectNoRewardComplete,
+  expectTurnLabel,
+  identityAnswers,
+  listPayments,
   loginParticipant,
-  openAdminRoom,
-  prepareConsentBase,
+  markPaymentPaid,
   prepareWorld,
-  publishConsentVersion,
   startMatchingPair,
-  submitCellPair,
   submitQuestionnaire,
+  submitRoundPair,
   waitBothEntered,
   waitForQuestionnaire,
   waitForRest,
 } from "./support";
-import type { RosterEntry } from "./support";
+import type { IdentityAnswers, World } from "./support";
 
-const WAIT_PARTNER_NOT_ENTERED_DETAIL =
-  "另一名参与者尚未进入实验。本次实验需要两名参与者。等待时间结束后若仍未到齐，本次实验将结束，本次实验未完成，不产生报酬。你可以继续等待，或点击下方“退出本次实验”返回首页并重新预约其他时间。实验开始后无法取消预约。";
-const WAIT_EXIT_PARTNER_BUTTON =
-  "另一名被试可能放鸽子了，我退出本次实验";
-const WAIT_BOTH_ENTERED_DETAIL =
-  "双方均已到场后不能退出；如果等待时间结束时仍未开始，本次实验将自动结束，不产生报酬。";
-
-const ABANDONED_SELF_TITLE = "你已退出实验";
-const ABANDONED_SELF_DETAIL =
-  "你已主动退出本次实验，本次实验未完成，无实验报酬。你可以重新预约。";
-const ABANDONED_PARTNER_TITLE = "实验已中止";
-const ABANDONED_PARTNER_DETAIL =
-  "另一名参与者已主动退出，实验被迫中止，无法计算报酬。你可以重新预约其他时间段参与实验";
-const ABANDONED_REASON_LABEL = "参与者主动退出";
-
-const ADMIN_CANCELLED_DETAIL =
-  "本次实验在开始前已取消，实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。";
-
-const QUESTIONNAIRE_INCOMPLETE_TITLE = "待补交后测问卷";
-const QUESTIONNAIRE_INCOMPLETE_ARCHIVE_DETAIL =
-  "房间已归档，你的后测问卷尚未提交。本次实验未完成，不产生报酬。完成问卷前，你无法预约新的实验。继续填写问卷是获得报酬的唯一方式。";
-const PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL =
-  "本次实验已归档。你已完成本次正式实验，但后测问卷尚未提交。本次实验未完成，不产生报酬；继续填写问卷是获得报酬的唯一方式。完成问卷前，你无法预约新的实验。";
-const COMPLETE_PENDING_ARCHIVED_DETAIL =
-  "你已完成本次正式实验，但后测问卷尚未提交，本次实验未完成，不产生报酬。房间已归档，你仍可以继续填写并提交问卷；提交后将按完成实验结算基础费与绩效费。完成问卷前，你无法预约新的实验。";
-const COMPLETE_QUESTIONNAIRE_ARCHIVE_NOTE =
-  "房间归档原因：问卷未完成。房间归档后仍可继续填写并提交问卷。";
-const COMPLETE_ARCHIVED_SUBMITTED_NOTE =
-  "你已提交后测问卷，归档不影响你的完成状态与报酬。";
-const HISTORY_ARCHIVED_SUBMITTED_NOTE = "归档不影响你的完成状态与报酬。";
-const HISTORY_QUESTIONNAIRE_LOCK_NOTE = "完成问卷前，你无法预约新的实验。";
-const ACCOUNT_PENDING_QUESTIONNAIRE =
-  "你已完成正式实验但尚未提交后测问卷。完成问卷后才能结束本次实验；不能预约新的场次。";
-const ACCOUNT_COMPLETED = "你已完成全部实验，无法再预约新的场次。";
-const COMPLETE_TRANSFER_NOTE =
-  "报酬将在提交后测问卷后的第一个周日 24:00 前通过支付宝完成转账。如逾期未收到，请通过“联系主试”与实验组织者核对。";
-
-const COMPLETED_TITLE = "实验已完成";
 const COMPLETED_DETAIL =
   "双方已完成全部实验并提交后测问卷。你可以查看报酬信息，确认金额、支付状态和支付截止日期。";
-const COMPLETED_REASON_LABEL = "正常完成";
 
-const CONTACT_SCENARIOS = [
-  "另一名参与者缺席、断线后无法重新连接，或实验被意外中止。",
-  "你主动退出后发现状态或报酬记录不正确。",
-  "后测问卷无法打开、提交失败，或提交后仍显示待填写。",
-  "到场费、报酬金额、支付状态或支付截止日期与预期不符。",
-  "无法登录、预约、取消预约，或无法重新预约。",
-];
-const CONTACT_DEADLINE_NOTE =
-  "技术中止的到场费支付截止日期为中止后的第一个周日 24:00（北京时间）；如逾期未收到，请通过以上方式联系实验主试。";
+const PRACTICE_A = 7;
+const PRACTICE_B = 7;
+const FORMAL_ONE_A = 8;
+const FORMAL_ONE_B = 9;
+const FORMAL_TWO_A = 6;
+const FORMAL_TWO_B = 5;
 
-function roster(names: string[], prefix: string): RosterEntry[] {
-  return names.map((name, index) => ({
-    name,
-    phone: `${prefix}${String(index + 1).padStart(4, "0")}`,
-  }));
+function beijingDate(daysAgo: number): string {
+  return new Date(Date.now() + 8 * 3600 * 1000 - daysAgo * 86400 * 1000)
+    .toISOString()
+    .slice(0, 10);
 }
 
-test("登录校验、拒绝知情同意与版本更新", async ({ browser, request, baseURL }) => {
-  test.setTimeout(120_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["流程登录"], "1340000");
-  await prepareConsentBase(request, baseURL, entries);
+function clockSeconds(label: string | null): number {
+  if (label === null) throw new Error("missing countdown label");
+  const match = /(\d{2}):(\d{2})/.exec(label);
+  if (match === null) throw new Error(`unexpected countdown label: ${label}`);
+  return Number(match[1]) * 60 + Number(match[2]);
+}
 
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.goto("/login");
-  await page.getByTestId("login-submit").click();
-  await expect(
-    page.getByText("请填写姓名和手机号。", { exact: true }),
-  ).toBeVisible();
+async function expectCountdown(page: Page, configured: number): Promise<void> {
+  const countdown = page.getByTestId("game-countdown");
+  await expect(countdown).toBeVisible();
+  const label = await countdown.getAttribute("aria-label");
+  const seconds = clockSeconds(label);
+  expect(seconds).toBeLessThanOrEqual(configured + 1);
+  expect(seconds).toBeGreaterThan(configured - 15);
+}
 
-  await page.getByTestId("login-name").fill(entries[0].name);
-  await page.getByTestId("login-phone").fill("13499999999");
-  await page.getByTestId("login-submit").click();
-  await expect(
-    page.getByText("姓名或手机号不正确", { exact: true }),
-  ).toBeVisible();
-
-  await page.getByTestId("login-phone").fill(entries[0].phone);
-  await page.getByTestId("login-submit").click();
-  await expect(page.getByTestId("consent-agree")).toBeVisible({
-    timeout: 20000,
-  });
-
-  await page.getByTestId("consent-decline").click();
-  await expect(page).toHaveURL((url) => url.pathname === "/login");
-  await expect(
-    page.getByText("你已拒绝知情同意并退出登录。", { exact: true }),
-  ).toBeVisible();
-
-  await page.getByTestId("login-name").fill(entries[0].name);
-  await page.getByTestId("login-phone").fill(entries[0].phone);
-  await page.getByTestId("login-submit").click();
-  await expect(page.getByTestId("consent-agree")).toBeVisible({
-    timeout: 20000,
-  });
-
-  await publishConsentVersion(
-    request,
-    baseURL,
-    "# 更新后的知情同意\n\n刷新后同意书。",
+async function expectBadge(page: Page, a: number, b: number): Promise<void> {
+  const badge = page.getByTestId("trial-info-badge");
+  await expect(badge).toBeVisible({ timeout: 20000 });
+  await expect(badge).toHaveAttribute(
+    "aria-label",
+    `本局初始兵力与每格收益：玩家 A +${a}，玩家 B +${b}`,
   );
-  await page.getByTestId("consent-agree").click();
-  await expect(
-    page.getByText("知情同意书版本已更新，请刷新页面", { exact: true }),
-  ).toBeVisible();
+  await expect(badge).toHaveAttribute("role", "img");
+  await expect(badge.locator("title")).toHaveCount(0);
+  await expect(badge.getByText(/玩家/)).toHaveCount(0);
 
-  await page.reload();
-  await expect(page.getByText("刷新后同意书。", { exact: true })).toBeVisible({
-    timeout: 20000,
-  });
-  await page.getByTestId("consent-agree").click();
-  await expect(page).toHaveURL((url) => url.pathname === "/", {
-    timeout: 20000,
-  });
-  await expect(page.getByTestId("current-booking")).toContainText(
-    "你当前没有预约",
+  const circle = badge.locator("circle");
+  await expect(circle).toHaveCount(1);
+  await expect(circle).toHaveAttribute("cx", "40");
+  await expect(circle).toHaveAttribute("cy", "26");
+  await expect(circle).toHaveAttribute("r", "21");
+  await expect(circle).toHaveAttribute("fill", "none");
+  await expect(circle).toHaveAttribute("stroke", "#000000");
+  await expect(circle).toHaveAttribute("stroke-width", "1");
+
+  const diamond = badge.locator("polygon");
+  await expect(diamond).toHaveCount(1);
+  await expect(diamond).toHaveAttribute("fill", "none");
+  await expect(diamond).toHaveAttribute("stroke", "#000000");
+  await expect(diamond).toHaveAttribute("stroke-width", "1");
+  await expect(diamond).toHaveAttribute(
+    "points",
+    "40,55 61,76 40,97 19,76",
   );
-  await expect(page.getByTestId("room-option")).toHaveCount(0);
 
-  await page.goto("/contact");
-  await expect(
-    page.getByRole("heading", { name: "联系实验主试", exact: true }),
-  ).toBeVisible({ timeout: 20000 });
-  for (const scenario of CONTACT_SCENARIOS) {
-    await expect(page.getByText(scenario, { exact: true })).toBeVisible();
+  const numbers = badge.locator("text");
+  await expect(numbers).toHaveCount(2);
+  await expect(numbers.nth(0)).toHaveText(`+${a}`);
+  await expect(numbers.nth(1)).toHaveText(`+${b}`);
+  for (const text of [numbers.nth(0), numbers.nth(1)]) {
+    await expect(text).toHaveAttribute("font-size", "20");
+    await expect(text).toHaveAttribute("fill", "#000000");
+    const fontFamily = await text.getAttribute("font-family");
+    expect(fontFamily).toContain("Times New Roman");
+    expect(fontFamily).toContain("serif");
   }
-  await expect(
-    page.getByText(CONTACT_DEADLINE_NOTE, { exact: true }),
-  ).toBeVisible();
+  const badgeText = await badge.evaluate((element) => element.textContent?.trim());
+  expect(badgeText).toBe(`+${a}+${b}`);
 
-  await context.close();
-});
+  const badgeBox = await badge.boundingBox();
+  const boardBox = await page.getByTestId("game-canvas").boundingBox();
+  if (badgeBox === null || boardBox === null) {
+    throw new Error("missing badge or board bounding box");
+  }
+  const horizontallyOutside =
+    badgeBox.x + badgeBox.width <= boardBox.x || badgeBox.x >= boardBox.x + boardBox.width;
+  const verticallyOutside =
+    badgeBox.y + badgeBox.height <= boardBox.y || badgeBox.y >= boardBox.y + boardBox.height;
+  expect(horizontallyOutside || verticallyOutside).toBe(true);
+  expect(badgeBox.x).toBeGreaterThanOrEqual(boardBox.x + boardBox.width - 1);
+  expect(badgeBox.y).toBeLessThanOrEqual(boardBox.y + 40);
+}
 
-test("开始前管理端只能选择主试取消，取消记录进入历史", async ({
+async function expectBadgeHidden(page: Page): Promise<void> {
+  await expect(page.getByTestId("trial-info-badge")).toHaveCount(0);
+}
+
+async function submitInvalidQuestionnaire(
+  page: Page,
+  baseURL: string,
+  roomId: string,
+  identity: IdentityAnswers,
+): Promise<number> {
+  const cookies = await page.context().cookies();
+  const csrf = cookies.find((cookie) => cookie.name === "moyo_csrf");
+  if (!csrf) throw new Error("missing moyo_csrf cookie");
+  const response = await page.request.fetch(
+    `${baseURL}/api/questionnaire/complete`,
+    {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrf.value },
+      data: {
+        roomId,
+        answers: {
+          q1: "a",
+          q2: "缺少真实姓名",
+          alipay_phone: identity.alipay_phone,
+          identity_document: {
+            documentType: identity.documentType,
+            number: identity.documentNumber,
+          },
+        },
+        jatosWorkerId: "node-e2e-invalid-worker",
+        jatosStudyResultId: "node-e2e-invalid-study",
+        jatosComponentResultId: "node-e2e-invalid-component",
+      },
+    },
+  );
+  return response.status();
+}
+
+async function loadRoomSection(
+  page: Page,
+  baseURL: string,
+  section: string,
+): Promise<void> {
+  const responsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/admin/api/rooms?section=${section}`) &&
+      response.ok(),
+    { timeout: 20000 },
+  );
+  await page.goto(`${baseURL}/admin/rooms?section=${section}`);
+  await responsePromise;
+}
+
+test("双方完成练习与正式对局、问卷身份、报酬及批量付款", async ({
   browser,
   request,
   baseURL,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["流程取消"], "1341000");
-  const world = await prepareWorld(request, baseURL, {
+  const entries = [
+    { name: "流程甲", phone: "13700000001" },
+    { name: "流程乙", phone: "13700000002" },
+  ];
+  const practiceSeconds = 45;
+  const formalSeconds = 60;
+  const world: World = await prepareWorld(request, baseURL, {
     entries,
-    startsInSeconds: 120,
-  });
-
-  const participantContext = await browser.newContext();
-  const page = await participantContext.newPage();
-  await loginParticipant(page, entries[0].name, entries[0].phone);
-  await bookRoom(page, world.roomId);
-  await expect(page.getByTestId("current-booking")).toContainText("1/2");
-
-  const adminContext = await browser.newContext();
-  const adminPage = await adminContext.newPage();
-  await adminLoginPage(adminPage);
-  await openAdminRoom(adminPage, world.roomId);
-  expect(await archiveReasonOptions(adminPage)).toEqual(["主试取消"]);
-  await expect(
-    adminPage.locator("#archive-reason option", { hasText: "技术中断" }),
-  ).toHaveCount(0);
-
-  await adminApi(
-    request,
-    baseURL,
-    "POST",
-    `/admin/api/rooms/${world.roomId}/archive`,
-    { reason: "admin_cancelled" },
-  );
-
-  await page.reload();
-  await expect(page.getByTestId("current-booking")).toContainText(
-    "你当前没有预约",
-  );
-  await expect(
-    page.locator(
-      `[data-testid="room-option"][data-room-id="${world.roomId}"]`,
-    ),
-  ).toHaveCount(0);
-
-  await page.goto("/history");
-  const history = page.getByTestId("history-list");
-  await expect(history).toContainText("已取消", { timeout: 20000 });
-  await expect(history).toContainText("主试取消");
-  await expect(history).toContainText(NO_REWARD);
-  await expect(page.getByTestId("reward-info")).toBeVisible();
-  await expect(page.getByTestId("rebook")).toBeVisible();
-
-  await expectNoRewardComplete(
-    page,
-    world.roomId,
-    ADMIN_CANCELLED_DETAIL,
-    { rebook: true, archiveReason: "主试取消" },
-  );
-
-  await participantContext.close();
-  await adminContext.close();
-});
-
-test("等待阶段搭档未进入时退出并返回首页", async ({
-  browser,
-  request,
-  baseURL,
-}) => {
-  test.setTimeout(180_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["等待甲", "等待乙"], "1342000");
-  const world = await prepareWorld(request, baseURL, {
-    entries,
-    startsInSeconds: 20,
-  });
-
-  const contextOne = await browser.newContext();
-  const contextTwo = await browser.newContext();
-  const pageOne = await contextOne.newPage();
-  const pageTwo = await contextTwo.newPage();
-  await Promise.all([
-    loginParticipant(pageOne, entries[0].name, entries[0].phone),
-    loginParticipant(pageTwo, entries[1].name, entries[1].phone),
-  ]);
-  await Promise.all([
-    bookRoom(pageOne, world.roomId),
-    bookRoom(pageTwo, world.roomId),
-  ]);
-  await expectBothBooked(pageOne, pageTwo);
-
-  await enterRoom(pageOne);
-  await expect(pageOne.getByTestId("hud-partner")).toContainText(
-    "等待另一名参与者进入",
-  );
-  await expect(pageOne.getByTestId("start-matching")).toBeDisabled();
-  await expect(pageOne.getByTestId("waiting-exit")).toHaveText(
-    WAIT_EXIT_PARTNER_BUTTON,
-  );
-  await expect(
-    pageOne.getByText(WAIT_PARTNER_NOT_ENTERED_DETAIL, { exact: true }),
-  ).toBeVisible();
-
-  await cancelWaitingExit(pageOne);
-  await expect(pageOne.getByTestId("start-matching")).toBeDisabled();
-  await confirmWaitingExit(pageOne);
-
-  await pageOne.goto(`/room/${world.roomId}`);
-  await expectArchiveView(
-    pageOne,
-    ABANDONED_SELF_TITLE,
-    ABANDONED_SELF_DETAIL,
-    { rebook: true, continueQuestionnaire: false },
-  );
-  await expectNoRewardComplete(
-    pageOne,
-    world.roomId,
-    ABANDONED_SELF_DETAIL,
-    { rebook: true, archiveReason: ABANDONED_REASON_LABEL },
-  );
-  await pageOne.goto("/history");
-  const selfHistory = pageOne.getByTestId("history-list");
-  await expect(selfHistory).toContainText("已退出", { timeout: 20000 });
-  await expect(selfHistory).toContainText(ABANDONED_REASON_LABEL);
-  await expect(selfHistory).toContainText(NO_REWARD);
-  await expect(selfHistory.getByTestId("rebook")).toBeVisible();
-  await expect(selfHistory.getByTestId("reward-info")).toBeVisible();
-  await expect(selfHistory.getByTestId("payment-status")).toHaveCount(0);
-
-  await pageTwo.reload();
-  await expect(pageTwo.getByTestId("current-booking")).toContainText(
-    "你当前没有预约",
-  );
-  await expect(
-    pageTwo.locator(
-      `[data-testid="room-option"][data-room-id="${world.roomId}"]`,
-    ),
-  ).toHaveCount(0);
-  await pageTwo.goto("/history");
-  const partnerHistory = pageTwo.getByTestId("history-list");
-  await expect(partnerHistory).toContainText("未到场", {
-    timeout: 20000,
-  });
-  await expect(partnerHistory).toContainText(ABANDONED_REASON_LABEL);
-  await expect(partnerHistory).toContainText(NO_REWARD);
-  await expect(partnerHistory.getByTestId("rebook")).toBeVisible();
-  await expect(partnerHistory.getByTestId("payment-status")).toHaveCount(0);
-  await expectNoRewardComplete(
-    pageTwo,
-    world.roomId,
-    ABANDONED_PARTNER_DETAIL,
-    { rebook: true, archiveReason: ABANDONED_REASON_LABEL },
-  );
-
-  await contextOne.close();
-  await contextTwo.close();
-});
-
-test("指导语阶段退出并让搭档看到中止归档页", async ({
-  browser,
-  request,
-  baseURL,
-}) => {
-  test.setTimeout(180_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["指导甲", "指导乙"], "1343000");
-  const world = await prepareWorld(request, baseURL, {
-    entries,
-    startsInSeconds: 20,
-  });
-
-  const contextOne = await browser.newContext();
-  const contextTwo = await browser.newContext();
-  const pageOne = await contextOne.newPage();
-  const pageTwo = await contextTwo.newPage();
-  await Promise.all([
-    loginParticipant(pageOne, entries[0].name, entries[0].phone),
-    loginParticipant(pageTwo, entries[1].name, entries[1].phone),
-  ]);
-  await Promise.all([
-    bookRoom(pageOne, world.roomId),
-    bookRoom(pageTwo, world.roomId),
-  ]);
-  await expectBothBooked(pageOne, pageTwo);
-  await Promise.all([enterRoom(pageOne), enterRoom(pageTwo)]);
-  await waitBothEntered(pageOne, pageTwo);
-  await expect(
-    pageOne.getByText(WAIT_BOTH_ENTERED_DETAIL, { exact: true }),
-  ).toBeVisible();
-  await expect(pageOne.getByTestId("waiting-exit")).toHaveCount(0);
-  await expect(pageTwo.getByTestId("waiting-exit")).toHaveCount(0);
-  await startMatchingPair(pageOne, pageTwo);
-
-  await expect(pageOne.getByTestId("exit-experiment")).toBeVisible();
-  await expect(pageTwo.getByTestId("exit-experiment")).toBeVisible();
-
-  const adminContext = await browser.newContext();
-  const adminPage = await adminContext.newPage();
-  await adminLoginPage(adminPage);
-  await openAdminRoom(adminPage, world.roomId);
-  expect(await archiveReasonOptions(adminPage)).toEqual(["主试中止"]);
-
-  await cancelExperimentExit(pageOne);
-  await expect(pageOne.getByTestId("instruction-content")).toBeVisible();
-
-  await confirmExperimentExit(pageOne);
-  await expectArchiveView(
-    pageTwo,
-    ABANDONED_PARTNER_TITLE,
-    ABANDONED_PARTNER_DETAIL,
-    { rebook: true, continueQuestionnaire: false },
-  );
-  await expect(pageTwo.getByTestId("game-canvas")).toHaveCount(0);
-  await expectNoRewardComplete(
-    pageTwo,
-    world.roomId,
-    ABANDONED_PARTNER_DETAIL,
-    { rebook: true, archiveReason: ABANDONED_REASON_LABEL },
-  );
-
-  await pageOne.goto("/history");
-  const ownHistory = pageOne.getByTestId("history-list");
-  await expect(ownHistory).toContainText("已退出", { timeout: 20000 });
-  await expect(ownHistory).toContainText(ABANDONED_REASON_LABEL);
-  await expect(ownHistory.getByTestId("rebook")).toBeVisible();
-
-  await pageTwo.goto("/history");
-  const partnerHistory = pageTwo.getByTestId("history-list");
-  await expect(partnerHistory).toContainText("已中止", { timeout: 20000 });
-  await expect(partnerHistory).toContainText(ABANDONED_REASON_LABEL);
-  await expect(partnerHistory.getByTestId("rebook")).toBeVisible();
-
-  await contextOne.close();
-  await contextTwo.close();
-  await adminContext.close();
-});
-
-test("回合阶段退出并让搭档看到中止归档页", async ({
-  browser,
-  request,
-  baseURL,
-}) => {
-  test.setTimeout(180_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["回合甲", "回合乙"], "1344000");
-  const world = await prepareWorld(request, baseURL, {
-    entries,
-    startsInSeconds: 20,
-    condition: { formalTrials: 1, turnCount: 1 },
-  });
-
-  const contextOne = await browser.newContext();
-  const contextTwo = await browser.newContext();
-  const pageOne = await contextOne.newPage();
-  const pageTwo = await contextTwo.newPage();
-  await Promise.all([
-    loginParticipant(pageOne, entries[0].name, entries[0].phone),
-    loginParticipant(pageTwo, entries[1].name, entries[1].phone),
-  ]);
-  await Promise.all([
-    bookRoom(pageOne, world.roomId),
-    bookRoom(pageTwo, world.roomId),
-  ]);
-  await expectBothBooked(pageOne, pageTwo);
-  await Promise.all([enterRoom(pageOne), enterRoom(pageTwo)]);
-  await waitBothEntered(pageOne, pageTwo);
-  await startMatchingPair(pageOne, pageTwo);
-  await completeInstructionsPair(pageOne, pageTwo);
-
-  await expect(pageOne.getByTestId("game-canvas")).toBeVisible();
-  await expect(pageOne.getByTestId("exit-experiment")).toBeVisible();
-  await expect(pageOne.getByTestId("confirm-selection")).toBeVisible();
-
-  await confirmExperimentExit(pageOne);
-  await expectArchiveView(
-    pageTwo,
-    ABANDONED_PARTNER_TITLE,
-    ABANDONED_PARTNER_DETAIL,
-    { rebook: true, continueQuestionnaire: false },
-  );
-  await expect(pageTwo.getByTestId("game-canvas")).toHaveCount(0);
-
-  await contextOne.close();
-  await contextTwo.close();
-});
-
-test("休息阶段退出并让搭档看到中止归档页", async ({
-  browser,
-  request,
-  baseURL,
-}) => {
-  test.setTimeout(180_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["休息甲", "休息乙"], "1345000");
-  const world = await prepareWorld(request, baseURL, {
-    entries,
-    startsInSeconds: 20,
-    condition: {
-      practiceTrials: 1,
+    startsInSeconds: 30,
+    troopRows: [
+      { soldiersA: PRACTICE_A, soldiersB: PRACTICE_B },
+      { soldiersA: FORMAL_ONE_A, soldiersB: FORMAL_ONE_B },
+      { soldiersA: FORMAL_TWO_A, soldiersB: FORMAL_TWO_B },
+    ],
+    map: {
+      rows: 3,
+      cols: 3,
       formalTrials: 2,
-      turnCount: 1,
-      restSeconds: 60,
-      turnSeconds: 60,
+      practiceTurnCap: 2,
+      practiceTurnSeconds: practiceSeconds,
+      formalTurnCap: 2,
+      formalTurnSeconds: formalSeconds,
+      restSeconds: 2,
+      randomizeFormal: false,
+      basePayCents: 4500,
+      performanceRateCents: 1,
+      performanceCapCents: 2000,
+      showupPayCents: 1000,
     },
+    roomLabel: "浏览器完整流程房间",
+    instructionMarkdownP1:
+      "# 玩家 A 指导语\n\n这是玩家 A 的指导语，完成后点击继续。",
+    instructionMarkdownP2:
+      "# 玩家 B 指导语\n\n这是玩家 B 的指导语，完成后点击继续。",
   });
 
   const contextOne = await browser.newContext();
@@ -485,323 +222,268 @@ test("休息阶段退出并让搭档看到中止归档页", async ({
     bookRoom(pageTwo, world.roomId),
   ]);
   await expectBothBooked(pageOne, pageTwo);
+  await expectBadgeHidden(pageOne);
+  await expectBadgeHidden(pageTwo);
+
   await Promise.all([enterRoom(pageOne), enterRoom(pageTwo)]);
   await waitBothEntered(pageOne, pageTwo);
+  await expectBadgeHidden(pageOne);
+  await expectBadgeHidden(pageTwo);
+
   await startMatchingPair(pageOne, pageTwo);
-  await completeInstructionsPair(pageOne, pageTwo);
-  await submitCellPair(pageOne, pageTwo);
-  await waitForRest(pageOne, pageTwo);
-
-  await expect(pageOne.getByTestId("rest-title")).toHaveText("练习结束");
-  await expect(pageOne.getByTestId("rest-view")).toContainText("对局间休息");
-  await expect(pageOne.getByTestId("rest-summary")).toBeVisible();
-  await expect(pageOne.getByTestId("rest-trial-chip")).toHaveText("练习局");
-  await expect(pageOne.getByTestId("rest-score-player2")).toHaveText(/^\d+$/);
-  await expect(pageOne.getByTestId("rest-score-player1")).toHaveText(/^\d+$/);
-  await expect(pageOne.getByTestId("rest-ready")).toHaveText(
-    "我休息好了，可以继续",
-  );
-  await expect(pageOne.getByTestId("exit-experiment")).toBeVisible();
-
-  await Promise.all([
-    pageOne.getByTestId("rest-ready").click(),
-    pageTwo.getByTestId("rest-ready").click(),
-  ]);
-  await expect(pageOne.locator(".exp-hud-left")).toContainText("正式 1/2");
-  await submitCellPair(pageOne, pageTwo);
-  await waitForRest(pageOne, pageTwo);
-  await expect(pageOne.getByTestId("rest-title")).toHaveCount(0);
-  await expect(pageOne.getByTestId("rest-trial-chip")).toHaveText(
-    /对局\s*1\/2/,
-  );
-  await expect(pageOne.getByTestId("rest-score-player2")).toHaveText(/^\d+$/);
-  await expect(pageOne.getByTestId("rest-score-player1")).toHaveText(/^\d+$/);
-  await expect(pageOne.getByTestId("rest-ready")).toHaveText(
-    "我休息好了，可以继续",
-  );
-
-  await confirmExperimentExit(pageOne);
-  await expectArchiveView(
-    pageTwo,
-    ABANDONED_PARTNER_TITLE,
-    ABANDONED_PARTNER_DETAIL,
-    { rebook: true, continueQuestionnaire: false },
-  );
-  await expect(pageTwo.getByTestId("rest-view")).toHaveCount(0);
-
-  await contextOne.close();
-  await contextTwo.close();
-});
-
-test("问卷阶段归档后按人显示状态并允许补交", async ({
-  browser,
-  request,
-  baseURL,
-}) => {
-  test.setTimeout(240_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["问卷甲", "问卷乙"], "1346000");
-  const world = await prepareWorld(request, baseURL, {
-    entries,
-    startsInSeconds: 20,
-    condition: {
-      formalTrials: 1,
-      turnCount: 1,
-      restSeconds: 1,
-      turnSeconds: 60,
-    },
-  });
-
-  const contextOne = await browser.newContext();
-  const contextTwo = await browser.newContext();
-  const pageOne = await contextOne.newPage();
-  const pageTwo = await contextTwo.newPage();
-  await Promise.all([
-    loginParticipant(pageOne, entries[0].name, entries[0].phone),
-    loginParticipant(pageTwo, entries[1].name, entries[1].phone),
-  ]);
-  await Promise.all([
-    bookRoom(pageOne, world.roomId),
-    bookRoom(pageTwo, world.roomId),
-  ]);
-  await expectBothBooked(pageOne, pageTwo);
-  await Promise.all([enterRoom(pageOne), enterRoom(pageTwo)]);
-  await waitBothEntered(pageOne, pageTwo);
-  await startMatchingPair(pageOne, pageTwo);
-  await completeInstructionsPair(pageOne, pageTwo);
-  await submitCellPair(pageOne, pageTwo);
-  await waitForQuestionnaire(pageOne, pageTwo);
-
-  await expect(
-    pageOne.getByText("全部对局已完成", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    pageOne.getByText(
-      "请完成实验后测问卷。完成实验并提交问卷后，才会计算实验报酬",
-      { exact: true },
+  const instructions = await Promise.all(
+    [pageOne, pageTwo].map(async (page) =>
+      page.getByTestId("instruction-content").innerText(),
     ),
-  ).toBeVisible();
-  await expect(
-    pageOne.getByText("问卷状态：未成功提交问卷", { exact: true }),
-  ).toBeVisible();
-  await expect(pageOne.getByTestId("exit-experiment")).toHaveCount(0);
-  await expect(pageTwo.getByTestId("exit-experiment")).toHaveCount(0);
+  );
+  expect(
+    instructions.filter((text) => text.includes("这是玩家 A 的指导语")),
+  ).toHaveLength(1);
+  expect(
+    instructions.filter((text) => text.includes("这是玩家 B 的指导语")),
+  ).toHaveLength(1);
+  await expectBadgeHidden(pageOne);
+  await expectBadgeHidden(pageTwo);
+
+  await completeInstructionsPair(pageOne, pageTwo);
+  await expectTurnLabel(pageOne, pageTwo, "练习 1/2");
+  await expect(pageOne.locator(".exp-hud-role")).toHaveText(
+    /你是玩家 [○◇]/,
+  );
+  await expect(pageOne.getByTestId("hud-partner")).toHaveText(
+    /^另一名玩家(在线|离线)$/,
+  );
+  await expect(pageOne.getByTestId("hud-partner")).not.toContainText(
+    entries[1].name,
+  );
+  await expectBadge(pageOne, PRACTICE_A, PRACTICE_B);
+  await expectBadge(pageTwo, PRACTICE_A, PRACTICE_B);
+  await expectCountdown(pageOne, practiceSeconds);
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText("确认选择");
+
+  await submitRoundPair(pageOne, pageTwo, world.rows, world.cols);
+  await expectTurnLabel(pageOne, pageTwo, "练习 2/2");
+  await expectBadge(pageOne, PRACTICE_A, PRACTICE_B);
+  await expectCountdown(pageOne, practiceSeconds);
+
+  await submitRoundPair(pageOne, pageTwo, world.rows, world.cols);
+  await waitForRest(pageOne, pageTwo);
+  await expectBadgeHidden(pageOne);
+  await expectBadgeHidden(pageTwo);
+  await expect(pageOne.getByTestId("rest-title")).toHaveText("练习结束");
+  await expect(pageOne.getByTestId("rest-trial-chip")).toHaveText("练习局");
+  await expect(pageOne.getByTestId("rest-summary")).toBeVisible();
+  await expect(pageOne.getByTestId("rest-score-player1")).toHaveText(/^\d+$/);
+  await expect(pageOne.getByTestId("rest-score-player2")).toHaveText(/^\d+$/);
+
+  await continueFromRestPair(pageOne, pageTwo);
+  await expectTurnLabel(pageOne, pageTwo, "正式 1/2 · 回合 1/2");
+  await expectBadge(pageOne, FORMAL_ONE_A, FORMAL_ONE_B);
+  await expectBadge(pageTwo, FORMAL_ONE_A, FORMAL_ONE_B);
+  await expectCountdown(pageOne, formalSeconds);
+
+  await submitRoundPair(pageOne, pageTwo, world.rows, world.cols);
+  await expectTurnLabel(pageOne, pageTwo, "正式 1/2 · 回合 2/2");
+  await expectBadge(pageOne, FORMAL_ONE_A, FORMAL_ONE_B);
+
+  await pageOne.reload();
+  await expect(pageOne.getByTestId("game-canvas")).toBeVisible({
+    timeout: 30000,
+  });
+  await expect(pageOne.locator(".exp-hud-left")).toContainText(
+    "正式 1/2 · 回合 2/2",
+    { timeout: 30000 },
+  );
+  await expectBadge(pageOne, FORMAL_ONE_A, FORMAL_ONE_B);
+  await expectCountdown(pageOne, formalSeconds);
+
+  await submitRoundPair(pageOne, pageTwo, world.rows, world.cols);
+  await waitForRest(pageOne, pageTwo);
+  await expectBadgeHidden(pageOne);
+  await expectBadgeHidden(pageTwo);
+  await expect(pageOne.getByTestId("rest-title")).toHaveCount(0);
+  await expect(pageOne.getByTestId("rest-trial-chip")).toContainText("1/2");
+
+  await continueFromRestPair(pageOne, pageTwo);
+  await expectTurnLabel(pageOne, pageTwo, "正式 2/2 · 回合 1/2");
+  await expectBadge(pageOne, FORMAL_TWO_A, FORMAL_TWO_B);
+  await expectBadge(pageTwo, FORMAL_TWO_A, FORMAL_TWO_B);
+  await expectCountdown(pageOne, formalSeconds);
+
+  await submitRoundPair(pageOne, pageTwo, world.rows, world.cols);
+  await expectTurnLabel(pageOne, pageTwo, "正式 2/2 · 回合 2/2");
+  await expectBadge(pageOne, FORMAL_TWO_A, FORMAL_TWO_B);
+  await submitRoundPair(pageOne, pageTwo, world.rows, world.cols);
+
+  await waitForQuestionnaire(pageOne, pageTwo);
+  await expectBadgeHidden(pageOne);
+  await expectBadgeHidden(pageTwo);
   await expect(pageOne.getByTestId("questionnaire-button")).toBeVisible();
   await expect(pageTwo.getByTestId("questionnaire-button")).toBeVisible();
-  await expect(pageOne.getByTestId("reward-info")).toBeVisible();
-  await expect(pageTwo.getByTestId("reward-info")).toBeVisible();
+  await expect(pageOne.getByTestId("exit-experiment")).toHaveCount(0);
 
-  const adminContext = await browser.newContext();
-  const adminPage = await adminContext.newPage();
-  await adminLoginPage(adminPage);
-  await openAdminRoom(adminPage, world.roomId);
-  expect(await archiveReasonOptions(adminPage)).toEqual(["问卷未完成"]);
-  await expect(
-    adminPage.locator("#archive-reason option", { hasText: "技术中断" }),
-  ).toHaveCount(0);
-
-  await adminApi(
-    request,
-    baseURL,
-    "POST",
-    `/admin/api/rooms/${world.roomId}/archive`,
-    { reason: "questionnaire_incomplete" },
-  );
-
-  await Promise.all([
-    expectArchiveView(
+  const identityOne = identityAnswers("流程甲", { phone: "13900002221" });
+  const identityTwo = identityAnswers("流程乙", { phone: "13900002222" });
+  expect(
+    await submitInvalidQuestionnaire(
       pageOne,
-      QUESTIONNAIRE_INCOMPLETE_TITLE,
-      QUESTIONNAIRE_INCOMPLETE_ARCHIVE_DETAIL,
-      { rebook: false, continueQuestionnaire: true },
+      baseURL,
+      world.roomId,
+      identityOne,
     ),
-    expectArchiveView(
+  ).toBe(400);
+
+  await Promise.all([
+    submitQuestionnaire(
+      pageOne,
+      baseURL,
+      world.roomId,
+      "participant-flow-a",
+      identityOne,
+    ),
+    submitQuestionnaire(
       pageTwo,
-      QUESTIONNAIRE_INCOMPLETE_TITLE,
-      QUESTIONNAIRE_INCOMPLETE_ARCHIVE_DETAIL,
-      { rebook: false, continueQuestionnaire: true },
+      baseURL,
+      world.roomId,
+      "participant-flow-b",
+      identityTwo,
     ),
-  ]);
-
-  await pageOne.goto("/");
-  await expect(pageOne.getByTestId("pending-questionnaire-card")).toContainText(
-    "已归档",
-  );
-  await expect(
-    pageOne.getByText(PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL, { exact: true }),
-  ).toBeVisible();
-  await expect(
-    pageOne.getByText(ACCOUNT_PENDING_QUESTIONNAIRE, { exact: true }),
-  ).toBeVisible();
-  await expect(pageOne.getByTestId("bookable-hidden")).toBeVisible();
-  await expect(pageOne.getByTestId("current-booking")).toHaveCount(0);
-  await expect(pageOne.getByTestId("continue-questionnaire")).toBeVisible();
-  await expect(pageOne.getByTestId("reward-info")).toBeVisible();
-
-  await pageOne.goto("/history");
-  const pendingHistory = pageOne.getByTestId("history-list");
-  await expect(pendingHistory).toContainText("待填写问卷", {
-    timeout: 20000,
-  });
-  await expect(pendingHistory).toContainText("正式实验已完成");
-  await expect(pendingHistory).toContainText("未提交");
-  await expect(pendingHistory).toContainText(NO_REWARD);
-  await expect(pendingHistory).toContainText("问卷未完成");
-  await expect(pendingHistory).toContainText(HISTORY_QUESTIONNAIRE_LOCK_NOTE);
-  await expect(pageOne.getByTestId("continue-questionnaire")).toBeVisible();
-  await expect(pageOne.getByTestId("rebook")).toHaveCount(0);
-  await expect(pageOne.getByTestId("payment-status")).toHaveCount(0);
-
-  await pageOne.goto(`/complete?room=${encodeURIComponent(world.roomId)}`);
-  await expect(pageOne.getByRole("heading", { name: "报酬信息" })).toBeVisible({
-    timeout: 20000,
-  });
-  await expect(pageOne.getByText(NO_REWARD, { exact: true })).toBeVisible();
-  await expect(
-    pageOne.getByText(COMPLETE_PENDING_ARCHIVED_DETAIL, { exact: true }),
-  ).toBeVisible();
-  await expect(
-    pageOne.getByText(COMPLETE_QUESTIONNAIRE_ARCHIVE_NOTE, { exact: true }),
-  ).toBeVisible();
-  await expect(pageOne.getByTestId("continue-questionnaire")).toBeVisible();
-  await expect(pageOne.getByTestId("complete-total")).toHaveCount(0);
-  await expect(pageOne.getByTestId("payment-status")).toHaveCount(0);
-  await expect(pageOne.getByText("支付截止日期", { exact: true })).toHaveCount(
-    0,
-  );
-
-  await submitQuestionnaire(pageOne, baseURL, world.roomId, "incomplete-a");
-
-  await pageOne.goto(`/complete?room=${encodeURIComponent(world.roomId)}`);
-  await expect(pageOne.getByTestId("complete-total")).toBeVisible({
-    timeout: 20000,
-  });
-  await expect(pageOne.getByTestId("payment-status")).toContainText("待支付");
-  await expect(
-    pageOne.getByText(COMPLETE_ARCHIVED_SUBMITTED_NOTE, { exact: true }),
-  ).toBeVisible();
-  await expect(pageOne.getByText("问卷未完成", { exact: true })).toBeVisible();
-  await expect(pageOne.getByTestId("continue-questionnaire")).toHaveCount(0);
-  await expect(pageOne.getByTestId("rebook")).toHaveCount(0);
-
-  await pageOne.goto("/");
-  await expect(
-    pageOne.getByText(ACCOUNT_COMPLETED, { exact: true }),
-  ).toBeVisible({ timeout: 20000 });
-  await expect(pageOne.getByTestId("pending-questionnaire-card")).toHaveCount(
-    0,
-  );
-  await expect(pageOne.getByTestId("bookable-hidden")).toHaveCount(0);
-  await expect(pageOne.getByTestId("current-booking")).toContainText(
-    "你当前没有预约",
-  );
-
-  await pageOne.goto("/history");
-  const completedHistory = pageOne.getByTestId("history-list");
-  await expect(completedHistory).toContainText("已完成", {
-    timeout: 20000,
-  });
-  await expect(completedHistory).toContainText("问卷未完成");
-  await expect(completedHistory).toContainText(
-    HISTORY_ARCHIVED_SUBMITTED_NOTE,
-  );
-  await expect(pageOne.getByTestId("payment-status")).toHaveText("待支付");
-  await expect(pageOne.getByTestId("continue-questionnaire")).toHaveCount(0);
-  await expect(pageOne.getByTestId("rebook")).toHaveCount(0);
-
-  await pageTwo.goto("/");
-  await expect(pageTwo.getByTestId("pending-questionnaire-card")).toContainText(
-    "已归档",
-  );
-  await expect(
-    pageTwo.getByText(PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL, { exact: true }),
-  ).toBeVisible();
-  await expect(
-    pageTwo.getByText(ACCOUNT_PENDING_QUESTIONNAIRE, { exact: true }),
-  ).toBeVisible();
-  await expect(pageTwo.getByTestId("bookable-hidden")).toBeVisible();
-  await expect(pageTwo.getByTestId("continue-questionnaire")).toBeVisible();
-
-  await contextOne.close();
-  await contextTwo.close();
-  await adminContext.close();
-});
-
-test("双方提交问卷后正常归档并显示完成报酬", async ({
-  browser,
-  request,
-  baseURL,
-}) => {
-  test.setTimeout(240_000);
-  if (!baseURL) throw new Error("baseURL missing");
-  const entries = roster(["完成甲", "完成乙"], "1347000");
-  const world = await prepareWorld(request, baseURL, {
-    entries,
-    startsInSeconds: 20,
-    condition: {
-      formalTrials: 1,
-      turnCount: 1,
-      restSeconds: 1,
-      turnSeconds: 60,
-    },
-  });
-
-  const contextOne = await browser.newContext();
-  const contextTwo = await browser.newContext();
-  const pageOne = await contextOne.newPage();
-  const pageTwo = await contextTwo.newPage();
-  await Promise.all([
-    loginParticipant(pageOne, entries[0].name, entries[0].phone),
-    loginParticipant(pageTwo, entries[1].name, entries[1].phone),
-  ]);
-  await Promise.all([
-    bookRoom(pageOne, world.roomId),
-    bookRoom(pageTwo, world.roomId),
-  ]);
-  await expectBothBooked(pageOne, pageTwo);
-  await Promise.all([enterRoom(pageOne), enterRoom(pageTwo)]);
-  await waitBothEntered(pageOne, pageTwo);
-  await startMatchingPair(pageOne, pageTwo);
-  await completeInstructionsPair(pageOne, pageTwo);
-  await submitCellPair(pageOne, pageTwo);
-  await waitForQuestionnaire(pageOne, pageTwo);
-
-  await Promise.all([
-    submitQuestionnaire(pageOne, baseURL, world.roomId, "completed-a"),
-    submitQuestionnaire(pageTwo, baseURL, world.roomId, "completed-b"),
-  ]);
-
-  await Promise.all([
-    expectArchiveView(pageOne, COMPLETED_TITLE, COMPLETED_DETAIL, {
-      rebook: false,
-      continueQuestionnaire: false,
-    }),
-    expectArchiveView(pageTwo, COMPLETED_TITLE, COMPLETED_DETAIL, {
-      rebook: false,
-      continueQuestionnaire: false,
-    }),
   ]);
 
   for (const page of [pageOne, pageTwo]) {
+    await expect(
+      page.getByRole("heading", { name: "实验已完成", exact: true }),
+    ).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText(COMPLETED_DETAIL, { exact: true })).toBeVisible();
+    await expect(page.getByTestId("reward-info")).toBeVisible();
+    await expect(page.getByTestId("rebook")).toHaveCount(0);
+    await expectBadgeHidden(page);
+
     await page.goto(`/complete?room=${encodeURIComponent(world.roomId)}`);
     await expect(page.getByTestId("complete-total")).toBeVisible({
       timeout: 20000,
     });
     await expect(page.getByTestId("payment-status")).toContainText("待支付");
     await expect(
-      page.getByText(COMPLETE_TRANSFER_NOTE, { exact: true }),
+      page.getByText("正常完成", { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText(COMPLETED_REASON_LABEL, { exact: true })).toBeVisible();
-    await expect(page.getByTestId("rebook")).toHaveCount(0);
-
-    await page.goto("/history");
-    const history = page.getByTestId("history-list");
-    await expect(history).toContainText("已完成", { timeout: 20000 });
-    await expect(history).toContainText(COMPLETED_REASON_LABEL);
-    await expect(page.getByTestId("payment-status")).toHaveText("待支付");
-    await expect(page.getByTestId("rebook")).toHaveCount(0);
+    await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
   }
+
+  const payments = (await listPayments(request, baseURL)).filter((payment) =>
+    entries.some((entry) => entry.name === payment.name),
+  );
+  expect(payments).toHaveLength(2);
+  const paymentsByName = new Map(
+    payments.map((payment) => [payment.name, payment]),
+  );
+  const paidPayment = paymentsByName.get(entries[0].name);
+  const pendingPayment = paymentsByName.get(entries[1].name);
+  if (paidPayment === undefined || pendingPayment === undefined) {
+    throw new Error("missing payment for participant flow entries");
+  }
+  await markPaymentPaid(request, baseURL, paidPayment.id);
+
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  await adminLoginPage(adminPage);
+  const from = beijingDate(6);
+  const to = beijingDate(0);
+  await adminPage.goto(
+    `${baseURL}/admin/payments/bulk?from=${from}&to=${to}`,
+  );
+  await expect(
+    adminPage.getByRole("heading", { name: "批量付款", exact: true }),
+  ).toBeVisible({ timeout: 20000 });
+  await expect(adminPage.getByTestId("bulk-summary")).toBeVisible({
+    timeout: 20000,
+  });
+
+  const paidRow = adminPage.getByTestId(
+    `bulk-payment-row-${paidPayment.id}`,
+  );
+  const pendingRow = adminPage.getByTestId(
+    `bulk-payment-row-${pendingPayment.id}`,
+  );
+  await expect(paidRow).toBeVisible();
+  await expect(pendingRow).toBeVisible();
+  await expect(paidRow).toContainText("已支付");
+  await expect(pendingRow).toContainText("待支付");
+  const paidCheckbox = adminPage.getByTestId(
+    `bulk-payment-checkbox-${paidPayment.id}`,
+  );
+  const pendingCheckbox = adminPage.getByTestId(
+    `bulk-payment-checkbox-${pendingPayment.id}`,
+  );
+  await expect(paidCheckbox).toBeDisabled();
+  await expect(paidCheckbox).not.toBeChecked();
+  await expect(pendingCheckbox).toBeChecked();
+  await expect(paidRow.locator(".admin-bulk-phone")).toHaveText(
+    entries[0].phone,
+  );
+  await expect(pendingRow.locator(".admin-bulk-phone")).toHaveText(
+    entries[1].phone,
+  );
+  await expect(paidRow).toContainText(identityOne.real_name);
+  await expect(pendingRow).toContainText(identityTwo.real_name);
+  expect(
+    await paidRow.locator(".admin-bulk-phone").innerText(),
+  ).toHaveLength(11);
+  await expect(adminPage.getByTestId("bulk-mark-paid")).toBeEnabled();
+  await expect(adminPage.getByTestId("bulk-selected-total")).toContainText("¥");
+
+  await adminPage.getByTestId("bulk-invert-selection").click();
+  await expect(pendingCheckbox).not.toBeChecked();
+  await adminPage.getByTestId("bulk-select-all").click();
+  await expect(pendingCheckbox).toBeChecked();
+  await adminPage.getByTestId("bulk-select-all").click();
+  await expect(pendingCheckbox).not.toBeChecked();
+  await expect(adminPage.getByTestId("bulk-mark-paid")).toBeDisabled();
+  await expect(adminPage.getByTestId("bulk-selected-total")).toHaveText("¥0");
+
+  await adminPage.getByTestId("bulk-select-all-button").click();
+  await expect(pendingCheckbox).toBeChecked();
+  await expect(adminPage.getByTestId("bulk-mark-paid")).toBeEnabled();
+
+  await adminPage.getByTestId("bulk-mark-paid").click();
+  const dialog = adminPage.getByRole("dialog", {
+    name: "批量标记已支付",
+  });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "标记已支付", exact: true }).click();
+  await expect(
+    adminPage.getByText(/已标记 \d+ 笔付款为已支付，跳过 0 笔已支付记录/),
+  ).toBeVisible({ timeout: 20000 });
+  await expect(paidRow).toContainText("已支付");
+  await expect(pendingRow).toContainText("已支付");
+  await expect(pendingCheckbox).toBeDisabled();
+  await expect(adminPage.getByTestId("bulk-mark-paid")).toBeDisabled();
+
+  await adminPage.reload();
+  await expect(adminPage.getByTestId("bulk-summary")).toBeVisible({
+    timeout: 20000,
+  });
+  await expect(
+    adminPage.getByTestId(`bulk-payment-row-${pendingPayment.id}`),
+  ).toContainText("已支付");
+  await expect(
+    adminPage.getByTestId(`bulk-payment-checkbox-${pendingPayment.id}`),
+  ).toBeDisabled();
+
+  await loadRoomSection(adminPage, baseURL, "archived");
+  await expect(
+    adminPage
+      .locator("table")
+      .getByRole("link", { name: world.roomLabel, exact: true }),
+  ).toBeVisible({ timeout: 20000 });
+  await loadRoomSection(adminPage, baseURL, "unpaid");
+  await expect(
+    adminPage
+      .locator("table")
+      .getByRole("link", { name: world.roomLabel, exact: true }),
+  ).toHaveCount(0);
 
   await contextOne.close();
   await contextTwo.close();
+  await adminContext.close();
 });

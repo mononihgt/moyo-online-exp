@@ -1,193 +1,363 @@
+import hashlib
 import io
 import json
+import uuid
 import zipfile
 
+import httpx
 import pytest
-from openpyxl import Workbook
 from PIL import Image
 
 from conftest import (
     ApiClient,
-    create_condition,
-    create_consent,
     create_instruction,
+    create_map_group,
     create_questionnaire,
     create_room,
+    create_troop_profile,
     import_roster,
 )
 
+OVERSIZED_BYTES = 10 * 1024 * 1024 + 1
 
-def _jpeg_with_exif() -> bytes:
-    image = Image.new("RGB", (64, 48), (20, 40, 60))
-    exif = Image.Exif()
-    exif[0x010F] = "TestCamera"
-    exif[0x0110] = "TestModel"
+
+def _image_bytes(fmt, *, size, color=(31, 119, 180), exif_orientation=None):
+    image = Image.new("RGB", size, color)
     buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", exif=exif)
+    if fmt == "JPEG" and exif_orientation is not None:
+        exif = Image.Exif()
+        exif[274] = exif_orientation
+        image.save(buffer, format=fmt, quality=90, exif=exif)
+    else:
+        image.save(buffer, format=fmt)
     return buffer.getvalue()
 
 
-@pytest.mark.integration
-def test_media_upload_requires_auth_strips_exif_and_exports_snapshot(server):
-    admin = ApiClient(server.base_url).login_admin()
-    original = _jpeg_with_exif()
-    upload = admin.request(
+def _upload(admin, data, *, filename, content_type="image/png", kind="map"):
+    return admin.request(
         "POST",
         "/admin/api/media",
-        files={"file": ("background.jpg", original, "image/jpeg")},
-        data={"kind": "condition_background"},
+        files={"file": (filename, data, content_type)},
+        data={"kind": kind},
     )
-    assert upload.status_code == 200, upload.text
-    asset = upload.json()["asset"]
-    assert asset["contentType"] == "image/jpeg"
-    assert asset["width"] == 64 and asset["height"] == 48
-    assert asset["sha256"].startswith("sha256:")
 
-    anonymous = ApiClient(server.base_url)
-    assert anonymous.request("GET", f"/media/{asset['assetId']}").status_code == 401
-    downloaded = admin.request("GET", f"/media/{asset['assetId']}")
-    assert downloaded.status_code == 200
-    clean = Image.open(io.BytesIO(downloaded.content))
-    assert len(clean.getexif()) == 0
-    assert clean.size == (64, 48)
 
-    svg_upload = admin.request(
-        "POST",
-        "/admin/api/media",
-        files={"file": ("evil.svg", b"<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/svg+xml")},
-        data={"kind": "instruction_image"},
-    )
-    assert svg_upload.status_code == 400
+def _asset(admin, data, *, filename, content_type="image/png", kind="map"):
+    response = _upload(admin, data, filename=filename, content_type=content_type, kind=kind)
+    assert response.status_code == 200, response.text
+    return response.json()["asset"]
 
-    import_roster(admin, [("媒体被试", "13600000001")])
-    create_consent(admin)
-    instruction_1 = create_instruction(
-        admin, 1, f"# 玩家1\n\n![示意图](asset://{asset['assetId']})", 0
-    )
-    instruction_2 = create_instruction(admin, 2, "# 玩家2", 0)
-    questionnaire = create_questionnaire(admin)
-    condition = create_condition(admin)
-    detail = admin.json("GET", f"/admin/api/conditions/{condition['id']}")["condition"]
-    payload = {
-        key: detail[key]
-        for key in (
-            "name",
-            "description",
-            "rows",
-            "cols",
-            "cells",
-            "visuals",
-            "baseAIndex",
-            "baseBIndex",
-            "trialParams",
-            "practiceTrials",
-            "formalTrials",
-            "turnCount",
-            "turnSeconds",
-            "restSeconds",
-            "randomizeFormal",
-            "metadata",
-        )
+
+def _map_maps(version, cells_by_slot):
+    return [
+        {
+            "slot": item["slot"],
+            "description": item["description"],
+            "factorLevel": item["factorLevel"],
+            "cells": cells_by_slot.get(item["slot"], item["cells"]),
+        }
+        for item in version["maps"]
+    ]
+
+
+def _create_payload(version, cells_by_slot):
+    return {
+        "mode": version["mode"],
+        "rows": version["rows"],
+        "cols": version["cols"],
+        "spawns": version["spawns"],
+        "troopProfileVersionId": version["profile"]["versionId"],
+        "practiceTrials": version["practiceTrials"],
+        "formalTrials": version["formalTrials"],
+        "practiceTurnCap": version["practiceTurnCap"],
+        "practiceTurnSeconds": version["practiceTurnSeconds"],
+        "formalTurnCap": version["formalTurnCap"],
+        "formalTurnSeconds": version["formalTurnSeconds"],
+        "restSeconds": version["restSeconds"],
+        "randomizeFormal": version["randomizeFormal"],
+        "payment": version["payment"],
+        "maps": _map_maps(version, cells_by_slot),
     }
-    payload["visuals"]["player1"][1]["backgroundAssetId"] = asset["assetId"]
-    payload["visuals"]["player2"][1]["backgroundAssetId"] = asset["assetId"]
-    conditional = admin.json("POST", "/admin/api/conditions", json=payload)["condition"]
-    admin.json("POST", f"/admin/api/conditions/{conditional['id']}/publish")
 
-    invalid_payload = json.loads(json.dumps(payload))
-    invalid_payload["name"] = "missing-asset"
-    invalid_payload["visuals"]["player1"][2]["backgroundAssetId"] = "00000000-0000-0000-0000-000000000000"
-    invalid = admin.request("POST", "/admin/api/conditions", json=invalid_payload)
-    assert invalid.status_code == 400
 
-    room = create_room(
-        admin,
-        condition_id=conditional["id"],
-        instruction_p1=instruction_1["id"],
-        instruction_p2=instruction_2["id"],
-        questionnaire_id=questionnaire["id"],
-        starts_in_seconds=300,
-    )
-    exported = admin.json("GET", f"/admin/api/rooms/{room['id']}/export.json")
-    assert exported["schemaVersion"] == 4
-    assert len(exported["media"]) == 1
-    media_entry = exported["media"][0]
-    assert media_entry["assetId"] == asset["assetId"]
-    assert media_entry["sha256"] == asset["sha256"]
-    assert exported["instructions"]["player1"]["contentMarkdown"].find(f"asset://{asset['assetId']}") >= 0
+def _entry_by_id(export):
+    return {entry["assetId"]: entry for entry in export["media"]}
 
-    zip_response = admin.request("GET", f"/admin/api/rooms/{room['id']}/analysis.zip")
-    assert zip_response.status_code == 200
-    archive = zipfile.ZipFile(io.BytesIO(zip_response.content))
-    assert media_entry["path"] in archive.namelist()
-    assert archive.read(media_entry["path"]) == downloaded.content
+
+def _zip_entries(response):
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    names = set(archive.namelist())
     media_manifest = json.loads(archive.read("media/manifest.json"))
-    assert media_manifest["assets"][0]["assetId"] == asset["assetId"]
-    room_json = json.loads(archive.read("room.json"))
-    assert room_json["condition"]["visuals"]["player1"][1]["backgroundAssetId"] == asset["assetId"]
-
-    participant = ApiClient(server.base_url).login_participant("媒体被试", "13600000001")
-    participant.consent()
-    assert participant.request("GET", f"/media/{asset['assetId']}").status_code == 200
-    admin.close()
-    participant.close()
+    manifest = json.loads(archive.read("manifest.json"))
+    for entry in media_manifest["assets"]:
+        assert entry["path"] in names
+        digest = hashlib.sha256(archive.read(entry["path"])).hexdigest()
+        assert entry["sha256"] == "sha256:" + digest
+    manifest_files = {item["path"]: item for item in manifest["files"]}
+    for entry in media_manifest["assets"]:
+        assert manifest_files[entry["path"]]["sha256"] == entry["sha256"]
+    archive.close()
+    return media_manifest
 
 
 @pytest.mark.integration
-def test_import_completed_and_participant_status_changes(server):
+def test_media_upload_formats_exif_and_limits(server):
     admin = ApiClient(server.base_url).login_admin()
-    import_roster(admin, [("历史甲", "13600000011"), ("历史乙", "13600000012")])
-    completed_csv = "姓名,手机号\n历史甲,13600000011\n不存在丙,13600000013\n"
-    report = admin.json(
-        "POST",
-        "/admin/api/participants/import-completed",
-        files={"file": ("completed.csv", completed_csv.encode("utf-8"), "text/csv")},
+    png_data = _image_bytes("PNG", size=(37, 19))
+    png = _asset(admin, png_data, filename="narrow.png")
+    assert png["contentType"] == "image/png"
+    assert (png["width"], png["height"]) == (37, 19)
+    assert png["sha256"].startswith("sha256:")
+    assert png["url"] == f"/media/{png['id']}"
+
+    download = admin.request("GET", f"/media/{png['id']}")
+    assert download.status_code == 200
+    assert download.headers["content-type"].startswith("image/png")
+    assert png["sizeBytes"] == len(download.content)
+    assert (
+        "sha256:" + hashlib.sha256(download.content).hexdigest() == png["sha256"]
     )
-    assert report["matched"] == 1
-    assert report["unmatched"] == 1
-    participant = ApiClient(server.base_url).login_participant("历史甲", "13600000011")
-    me = participant.json("GET", "/api/me")["me"]
-    assert me["isCompleted"] is True
-    assert me["canBook"] is False
-    participants = admin.json("GET", "/admin/api/participants")["participants"]
-    record = next(item for item in participants if item["name"] == "历史甲")
-    admin.json("PATCH", f"/admin/api/participants/{record['id']}", json={"status": "disabled", "notes": "测试停用"})
-    me = participant.json("GET", "/api/me")["me"]
-    assert me["isDisabled"] is True
-    assert me["status"] == "disabled"
-    admin.json("PATCH", f"/admin/api/participants/{record['id']}", json={"status": "eligible"})
-    me = participant.json("GET", "/api/me")["me"]
-    assert me["status"] == "eligible"
-    audit = admin.json("GET", "/admin/api/audit")["entries"]
-    actions = {entry["action"] for entry in audit}
-    assert "participants_import_completed" in actions
-    assert "participant_updated" in actions
-    admin.close()
+    with Image.open(io.BytesIO(download.content)) as stored:
+        assert stored.size == (37, 19)
+
+    jpeg = _asset(
+        admin,
+        _image_bytes("JPEG", size=(60, 30), exif_orientation=6),
+        filename="turned.jpg",
+        content_type="image/jpeg",
+    )
+    assert jpeg["contentType"] == "image/jpeg"
+    assert (jpeg["width"], jpeg["height"]) == (30, 60)
+    jpeg_download = admin.request("GET", f"/media/{jpeg['id']}")
+    assert jpeg_download.status_code == 200
+    with Image.open(io.BytesIO(jpeg_download.content)) as stored:
+        assert stored.size == (30, 60)
+        assert len(stored.getexif()) == 0
+
+    webp = _asset(
+        admin,
+        _image_bytes("WEBP", size=(41, 23)),
+        filename="wide.webp",
+        content_type="image/webp",
+    )
+    assert webp["contentType"] == "image/webp"
+    assert (webp["width"], webp["height"]) == (41, 23)
+
+    duplicate = _asset(admin, png_data, filename="copy.png")
+    assert duplicate["id"] == png["id"]
+
+    anonymous = httpx.get(f"{server.base_url}/media/{png['id']}", timeout=30)
+    assert anonymous.status_code == 401
+    missing = admin.request("GET", f"/media/{uuid.uuid4()}")
+    assert missing.status_code == 404
+
+    import_roster(admin, [("媒体参与者", "13700002001")])
+    participant = ApiClient(server.base_url).login_participant("媒体参与者", "13700002001")
+    permitted = participant.request("GET", f"/media/{png['id']}")
+    assert permitted.status_code == 200
+
+    invalid = _upload(admin, b"definitely-not-an-image", filename="broken.png")
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"] == "文件不是有效图片"
+    empty = _upload(admin, b"", filename="empty.png")
+    assert empty.status_code == 400
+    assert empty.json()["detail"] == "上传文件为空"
+    gif_data = io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 10, 10)).save(gif_data, format="GIF")
+    gif = _upload(
+        admin, gif_data.getvalue(), filename="anim.gif", content_type="image/gif"
+    )
+    assert gif.status_code == 400
+    assert gif.json()["detail"] == "仅接受 PNG、JPEG、WebP 图片"
+    oversized = _upload(
+        admin, b"0" * OVERSIZED_BYTES, filename="huge.png", content_type="image/png"
+    )
+    assert oversized.status_code == 413
+    assert oversized.json()["detail"] == "图片超过大小限制"
+
     participant.close()
+    admin.close()
 
 
 @pytest.mark.integration
-def test_xlsx_roster_import_with_numeric_phone(server):
+def test_map_group_rejects_webp_and_missing_assets(server):
     admin = ApiClient(server.base_url).login_admin()
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.append(["姓名", "手机号", "备注"])
-    sheet.append(["表格甲", 13600000021, "XLSX 导入"])
-    buffer = io.BytesIO()
-    workbook.save(buffer)
-    report = admin.json(
+    profile = create_troop_profile(admin)
+    draft = create_map_group(admin, profile["id"], rows=2, cols=2, publish=False)
+    total = draft["rows"] * draft["cols"]
+
+    webp = _asset(
+        admin,
+        _image_bytes("WEBP", size=(41, 23)),
+        filename="cell.webp",
+        content_type="image/webp",
+    )
+    webp_cells = [webp["id"]] + [None] * (total - 1)
+    create_response = admin.request(
+        "POST", "/admin/api/map-groups", json=_create_payload(draft, {"Both": webp_cells})
+    )
+    assert create_response.status_code == 400
+    assert create_response.json()["detail"] == "地图单元格仅支持 PNG/JPG 图片"
+    patch_response = admin.request(
+        "PATCH",
+        f"/admin/api/map-groups/{draft['id']}",
+        json={"maps": _map_maps(draft, {"Both": webp_cells})},
+    )
+    assert patch_response.status_code == 400
+    assert patch_response.json()["detail"] == "地图单元格仅支持 PNG/JPG 图片"
+
+    missing_id = str(uuid.uuid4())
+    missing_cells = [missing_id] + [None] * (total - 1)
+    missing_create = admin.request(
+        "POST", "/admin/api/map-groups", json=_create_payload(draft, {"Both": missing_cells})
+    )
+    assert missing_create.status_code == 400
+    assert missing_create.json()["detail"] == "地图单元格引用的图片资源不存在"
+    missing_patch = admin.request(
+        "PATCH",
+        f"/admin/api/map-groups/{draft['id']}",
+        json={"maps": _map_maps(draft, {"Both": missing_cells})},
+    )
+    assert missing_patch.status_code == 400
+    assert missing_patch.json()["detail"] == "地图单元格引用的图片资源不存在"
+
+    unchanged = admin.json("GET", f"/admin/api/map-groups/{draft['id']}")["mapGroup"]
+    assert unchanged["maps"][0]["cells"] == [None] * total
+    assert unchanged["contentHash"] == draft["contentHash"]
+
+    admin.close()
+
+
+@pytest.mark.integration
+def test_room_media_export_and_instruction_asset_rendering(server):
+    admin = ApiClient(server.base_url).login_admin()
+    profile = create_troop_profile(admin)
+    questionnaire = create_questionnaire(admin)
+
+    both_image = _asset(
+        admin, _image_bytes("PNG", size=(37, 19)), filename="both-cell.png"
+    )
+    instruction_image = _asset(
+        admin,
+        _image_bytes("PNG", size=(33, 17), color=(20, 90, 44)),
+        filename="instruction.png",
+        kind="instruction_image",
+    )
+    both_group = create_map_group(
+        admin,
+        profile["id"],
+        rows=2,
+        cols=2,
+        description="合成地图",
+        assets=[both_image["id"], None, None, None],
+    )
+    instruction_markdown = (
+        f"# 玩家一\n\n请阅读示意图：\n\n![示意图](asset://{instruction_image['id']})\n"
+    )
+    both_instruction_a = create_instruction(
+        admin, both_group["id"], 1, instruction_markdown, 0
+    )
+    both_instruction_b = create_instruction(admin, both_group["id"], 2, "# 玩家二", 0)
+    both_room = create_room(
+        admin,
+        both_group["id"],
+        both_instruction_a["id"],
+        both_instruction_b["id"],
+        questionnaire["id"],
+        starts_in_seconds=600,
+        label="媒体导出房间",
+    )
+
+    rendered = admin.json(
+        "GET", f"/admin/api/instructions/{both_instruction_a['id']}"
+    )["instruction"]
+    assert f'src="/media/{instruction_image["id"]}"' in rendered["contentHtml"]
+    assert "asset://" not in rendered["contentHtml"]
+    assert f"asset://{instruction_image['id']}" in rendered["contentMarkdown"]
+
+    missing_instruction = admin.request(
         "POST",
-        "/admin/api/participants/import",
-        files={
-            "file": (
-                "roster.xlsx",
-                buffer.getvalue(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        "/admin/api/instructions",
+        json={
+            "mapGroupVersionId": both_group["id"],
+            "role": 1,
+            "markdown": f"![缺失](asset://{uuid.uuid4()})",
+            "minReadingSeconds": 0,
         },
     )
-    assert report["imported"] == 1
-    participant = ApiClient(server.base_url).login_participant("表格甲", "13600000021")
-    assert participant.json("GET", "/api/me")["me"]["name"] == "表格甲"
+    assert missing_instruction.status_code == 400
+    assert "指导语引用了不存在的图片资产" in missing_instruction.json()["detail"]
+
+    export = admin.json("GET", f"/admin/api/rooms/{both_room['id']}/export.json")
+    assert export["schemaVersion"] == 5
+    both_entries = _entry_by_id(export)
+    assert set(both_entries) == {both_image["id"], instruction_image["id"]}
+    both_entry = both_entries[both_image["id"]]
+    assert (both_entry["width"], both_entry["height"]) == (37, 19)
+    assert both_entry["contentType"] == "image/png"
+    assert both_entry["sha256"] == both_image["sha256"]
+    assert both_entry["path"] == f"media/{both_image['id']}.png"
+    assert export["mapGroup"]["maps"][0]["cells"][0] == both_image["id"]
+    assert (
+        f"asset://{instruction_image['id']}"
+        in export["instructions"]["player1"]["contentMarkdown"]
+    )
+    zip_response = admin.request("GET", f"/admin/api/rooms/{both_room['id']}/analysis.zip")
+    assert zip_response.status_code == 200
+    both_manifest = _zip_entries(zip_response)
+    assert {entry["assetId"] for entry in both_manifest["assets"]} == set(both_entries)
+
+    a_image = _asset(
+        admin, _image_bytes("PNG", size=(48, 16), color=(200, 80, 10)), filename="a.png"
+    )
+    b_image = _asset(
+        admin,
+        _image_bytes("JPEG", size=(24, 32), color=(10, 60, 200)),
+        filename="b.jpg",
+        content_type="image/jpeg",
+    )
+    ab_group = create_map_group(
+        admin,
+        profile["id"],
+        mode="ab",
+        rows=2,
+        cols=2,
+        description="对照地图",
+        assets={
+            "A": [a_image["id"], None, None, None],
+            "B": [b_image["id"], None, None, None],
+        },
+    )
+    ab_instruction_a = create_instruction(
+        admin,
+        ab_group["id"],
+        1,
+        f"![示意](asset://{instruction_image['id']})",
+        0,
+    )
+    ab_instruction_b = create_instruction(admin, ab_group["id"], 2, "## 玩家二", 0)
+    ab_room = create_room(
+        admin,
+        ab_group["id"],
+        ab_instruction_a["id"],
+        ab_instruction_b["id"],
+        questionnaire["id"],
+        starts_in_seconds=600,
+        label="AB 媒体导出房间",
+    )
+    ab_export = admin.json("GET", f"/admin/api/rooms/{ab_room['id']}/export.json")
+    ab_entries = _entry_by_id(ab_export)
+    assert set(ab_entries) == {a_image["id"], b_image["id"], instruction_image["id"]}
+    maps = {item["slot"]: item for item in ab_export["mapGroup"]["maps"]}
+    assert maps["A"]["cells"][0] == a_image["id"]
+    assert maps["B"]["cells"][0] == b_image["id"]
+    assert ab_entries[a_image["id"]]["contentType"] == "image/png"
+    assert ab_entries[b_image["id"]]["contentType"] == "image/jpeg"
+    assert ab_entries[a_image["id"]]["path"] == f"media/{a_image['id']}.png"
+    assert ab_entries[b_image["id"]]["path"] == f"media/{b_image['id']}.jpg"
+    ab_zip = admin.request("GET", f"/admin/api/rooms/{ab_room['id']}/analysis.zip")
+    assert ab_zip.status_code == 200
+    ab_manifest = _zip_entries(ab_zip)
+    assert {entry["assetId"] for entry in ab_manifest["assets"]} == set(ab_entries)
+
     admin.close()
-    participant.close()
