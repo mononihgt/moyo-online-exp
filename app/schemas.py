@@ -90,6 +90,7 @@ class MapGroupPatch(ApiModel):
     rows: int | None = None
     cols: int | None = None
     spawns: dict[str, int] | None = None
+    troop_profile_version_id: str | None = None
     practice_trials: int | None = None
     formal_trials: int | None = None
     practice_turn_cap: int | None = None

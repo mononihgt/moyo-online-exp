@@ -110,7 +110,7 @@ async def _map_group_for_instruction(db: AsyncSession, map_group_version_id: str
     map_group = await db.get(MapGroupVersion, map_group_version_id)
     if map_group is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "地图组版本不存在")
-    if map_group.status not in (VERSION_PUBLISHED, VERSION_ARCHIVED):
+    if map_group.status != VERSION_PUBLISHED:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "地图组版本尚未发布")
     return map_group
 

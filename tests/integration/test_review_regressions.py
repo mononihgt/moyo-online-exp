@@ -884,6 +884,84 @@ def test_map_group_webp_rejected_and_builtin_profile_read_only(server):
     ]
 
 
+def test_map_group_draft_can_switch_troop_profile(server):
+    context = Context(server)
+    first_profile = create_troop_profile(context.admin, STAY_ROWS)
+    second_rows = [
+        {"soldiersA": 4, "soldiersB": 5},
+        {"soldiersA": 6, "soldiersB": 7},
+        {"soldiersA": 8, "soldiersB": 9},
+    ]
+    second_profile = create_troop_profile(context.admin, second_rows)
+    draft_profile = create_troop_profile(context.admin, STAY_ROWS, publish=False)
+    map_group = create_map_group(
+        context.admin,
+        first_profile["id"],
+        rows=2,
+        cols=2,
+        formal_trials=2,
+        spawns={"A": 0, "B": 1},
+        description=f"换方案{uuid.uuid4().hex[:6]}",
+        publish=False,
+    )
+    map_payload = {
+        "mode": "both",
+        "rows": 2,
+        "cols": 2,
+        "spawns": {"A": 0, "B": 1},
+        "practiceTrials": 1,
+        "formalTrials": 2,
+        "practiceTurnCap": 3,
+        "practiceTurnSeconds": 3,
+        "formalTurnCap": 3,
+        "formalTurnSeconds": 3,
+        "restSeconds": 1,
+        "randomizeFormal": True,
+        "payment": {
+            "basePayCents": 4500,
+            "performanceRateCents": 1,
+            "performanceCapCents": 2000,
+            "showupPayCents": 1000,
+        },
+        "maps": [
+            {
+                "slot": "Both",
+                "description": map_group["maps"][0]["description"],
+                "factorLevel": map_group["maps"][0]["factorLevel"],
+                "cells": [None, None, None, None],
+            }
+        ],
+    }
+    switched = context.admin.json(
+        "PATCH",
+        f"/admin/api/map-groups/{map_group['id']}",
+        json={**map_payload, "troopProfileVersionId": second_profile["id"]},
+    )["mapGroup"]
+    assert switched["profile"]["versionId"] == second_profile["id"]
+    assert switched["profile"]["rows"] == second_rows
+    assert switched["contentHash"] != map_group["contentHash"]
+
+    mismatch = context.admin.request(
+        "PATCH",
+        f"/admin/api/map-groups/{map_group['id']}",
+        json={
+            **map_payload,
+            "troopProfileVersionId": second_profile["id"],
+            "formalTrials": 3,
+        },
+    )
+    assert mismatch.status_code == 400
+    assert "地图组正式对局数与兵力配置不一致" in _error_detail(mismatch)
+
+    draft_rejected = context.admin.request(
+        "PATCH",
+        f"/admin/api/map-groups/{map_group['id']}",
+        json={**map_payload, "troopProfileVersionId": draft_profile["id"]},
+    )
+    assert draft_rejected.status_code == 400
+    assert "兵力配置方案版本尚未发布" in _error_detail(draft_rejected)
+
+
 def test_combat_boundary_and_rest_reconnect(server):
     context = Context(server)
     participant_a, participant_b = context.participants()

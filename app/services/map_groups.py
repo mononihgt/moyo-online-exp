@@ -255,6 +255,7 @@ def map_group_content_hash(data: dict) -> str:
         "rows": data["rows"],
         "cols": data["cols"],
         "spawns": {"A": data["spawn_a_index"], "B": data["spawn_b_index"]},
+        "troopProfileVersionId": data["troop_profile_version_id"],
         "practiceTrials": 1,
         "formalTrials": data["formal_trials"],
         "practiceTurnCap": data["practice_turn_cap"],
@@ -407,6 +408,7 @@ def _version_payload(version: MapGroupVersion) -> dict:
         "rows": version.rows,
         "cols": version.cols,
         "spawns": {"A": version.spawn_a_index, "B": version.spawn_b_index},
+        "troop_profile_version_id": version.troop_profile_version_id,
         "practice_trials": version.practice_trials,
         "formal_trials": version.formal_trials,
         "practice_turn_cap": version.practice_turn_cap,
@@ -456,25 +458,40 @@ def _apply_validated(version: MapGroupVersion, data: dict) -> None:
 
 
 def _replace_maps(version: MapGroupVersion, maps: list[dict]) -> None:
-    version.maps.clear()
+    existing = {item.slot: item for item in version.maps}
+    kept_slots: set[str] = set()
     for item in maps:
-        version.maps.append(
-            Map(
-                slot=item["slot"],
-                name=item["name"],
-                description=item["description"],
-                size_token=item["sizeToken"],
-                factor_level=item["factorLevel"],
-                player_suffix=item["playerSuffix"],
-                cells_json=item["cells"],
+        kept_slots.add(item["slot"])
+        row = existing.get(item["slot"])
+        if row is None:
+            version.maps.append(
+                Map(
+                    slot=item["slot"],
+                    name=item["name"],
+                    description=item["description"],
+                    size_token=item["sizeToken"],
+                    factor_level=item["factorLevel"],
+                    player_suffix=item["playerSuffix"],
+                    cells_json=item["cells"],
+                )
             )
-        )
+            continue
+        row.name = item["name"]
+        row.description = item["description"]
+        row.size_token = item["sizeToken"]
+        row.factor_level = item["factorLevel"]
+        row.player_suffix = item["playerSuffix"]
+        row.cells_json = item["cells"]
+    for slot, row in existing.items():
+        if slot not in kept_slots:
+            version.maps.remove(row)
 
 
 async def create_map_group(db: AsyncSession, payload: dict) -> MapGroupVersion:
     profile_version = await _get_profile_version(db, payload.get("troop_profile_version_id"))
     asset_types = await collect_asset_types(db, _payload_asset_ids(payload.get("maps") or []))
     data = validate_map_group_payload(payload, asset_types, profile_version.formal_trials)
+    data["troop_profile_version_id"] = profile_version.id
     version = MapGroupVersion(
         name=data["name"],
         version=await _next_group_version(db, data["name"]),
@@ -496,8 +513,12 @@ async def update_map_group(db: AsyncSession, version: MapGroupVersion, patch: di
         if value is not None:
             payload[key] = value
     profile_version = version.troop_profile_version
+    if patch.get("troop_profile_version_id") is not None:
+        profile_version = await _get_profile_version(db, patch["troop_profile_version_id"])
+    payload["troop_profile_version_id"] = profile_version.id
     asset_types = await collect_asset_types(db, _payload_asset_ids(payload["maps"]))
     data = validate_map_group_payload(payload, asset_types, profile_version.formal_trials)
+    data["troop_profile_version_id"] = profile_version.id
     conflict = await db.execute(
         select(MapGroupVersion.id).where(
             MapGroupVersion.name == data["name"],
@@ -508,6 +529,7 @@ async def update_map_group(db: AsyncSession, version: MapGroupVersion, patch: di
     if conflict.scalars().first() is not None:
         raise MapGroupValidationError("地图组名称与已有版本冲突")
     _apply_validated(version, data)
+    version.troop_profile_version = profile_version
     _replace_maps(version, data["maps"])
     await db.flush()
     return version
@@ -521,6 +543,7 @@ async def publish_map_group(db: AsyncSession, version: MapGroupVersion) -> MapGr
     data = validate_map_group_payload(
         payload, asset_types, version.troop_profile_version.formal_trials
     )
+    data["troop_profile_version_id"] = version.troop_profile_version_id
     previous = await db.execute(
         select(MapGroupVersion).where(
             MapGroupVersion.name == version.name,
