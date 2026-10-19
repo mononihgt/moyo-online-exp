@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Download, ListChecks, Search, Wallet } from "lucide-react";
 import type { PaymentAdmin, PaymentStatus } from "../../shared/types";
-import { formatDateTime, formatMoney } from "../../shared/format";
+import { formatDateTime, formatMoney, formatShanghaiDate } from "../../shared/format";
 import { adminApi, adminDownload, errorMessage } from "../api";
 import type { PaymentsResponse } from "../types";
 import {
@@ -30,18 +30,12 @@ interface DateRange {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-function formatDateValue(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function defaultDateRange(): DateRange {
-  const to = new Date();
-  const from = new Date(to);
-  from.setDate(from.getDate() - 6);
-  return { from: formatDateValue(from), to: formatDateValue(to) };
+  const now = Date.now();
+  return {
+    from: formatShanghaiDate(new Date(now - 6 * 86400_000)),
+    to: formatShanghaiDate(new Date(now)),
+  };
 }
 
 function readDateRange(params: URLSearchParams): DateRange {
@@ -249,7 +243,7 @@ export function PaymentsPage() {
       const prefix = kind === "payment" ? "payment-list" : "reimbursement-list";
       await adminDownload(
         `${path}?${params.toString()}`,
-        `${prefix}-${range.to.replace(/-/g, "")}.csv`,
+        `${prefix}-${range.from}-${range.to}.csv`,
       );
       notify(kind === "payment" ? "支付名单已导出" : "报销清单已导出");
     } catch (err) {

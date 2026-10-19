@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { formatDateTime } from "../shared/format";
+import { formatDateTime, formatMoney } from "../shared/format";
 import type { ExperimentRecord, Payment } from "../shared/types";
 import type {
   MyExperimentsResponse,
@@ -74,12 +74,6 @@ function questionnaireLabel(
 
 function rewardStatusLabel(payment: Payment): string {
   return payment.status === "paid" ? "已支付" : "待支付";
-}
-
-function formatPaymentAmount(cents: number | null | undefined): string {
-  if (cents === null || cents === undefined) return "—";
-  if (cents % 100 === 0) return `¥${cents / 100}`;
-  return `¥${(cents / 100).toFixed(2)}`;
 }
 
 export default function CompletePage() {
@@ -285,18 +279,18 @@ export default function CompletePage() {
                   <>
                     <div className="p-payment-row">
                       <span>基础费</span>
-                      <span className="p-mono">{formatPaymentAmount(payment.basePayCents)}</span>
+                      <span className="p-mono">{formatMoney(payment.basePayCents)}</span>
                     </div>
                     <div className="p-payment-row">
                       <span>绩效费</span>
                       <span className="p-mono">
-                        {formatPaymentAmount(payment.performancePayCents)}
+                        {formatMoney(payment.performancePayCents)}
                       </span>
                     </div>
                     <div className="p-payment-row p-payment-total">
                       <span>合计</span>
                       <span className="p-mono" data-testid="complete-total">
-                        {formatPaymentAmount(payment.totalCents)}
+                        {formatMoney(payment.totalCents)}
                       </span>
                     </div>
                     <dl className="p-detail-list p-payment-details">
@@ -336,13 +330,13 @@ export default function CompletePage() {
                 <div className="p-payment-row">
                   <span>到场费</span>
                   <span className="p-mono">
-                    {formatPaymentAmount(payment?.showupPayCents ?? 0)}
+                    {formatMoney(payment?.showupPayCents ?? 0)}
                   </span>
                 </div>
                 <div className="p-payment-row p-payment-total">
                   <span>合计</span>
                   <span className="p-mono" data-testid="complete-total">
-                    {formatPaymentAmount(payment?.totalCents ?? 0)}
+                    {formatMoney(payment?.totalCents ?? 0)}
                   </span>
                 </div>
                 {payment !== null ? (

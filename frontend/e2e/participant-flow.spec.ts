@@ -360,7 +360,7 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
     await expectBadgeHidden(page);
 
     await page.goto(`/complete?room=${encodeURIComponent(world.roomId)}`);
-    await expect(page.getByTestId("complete-total")).toBeVisible({
+    await expect(page.getByTestId("complete-total")).toHaveText("¥45.00", {
       timeout: 20000,
     });
     await expect(page.getByTestId("payment-status")).toContainText("待支付");
@@ -409,6 +409,7 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
   await expect(pendingRow).toBeVisible();
   await expect(paidRow).toContainText("已支付");
   await expect(pendingRow).toContainText("待支付");
+  await expect(pendingRow.locator(".admin-total")).toHaveText("¥45.00");
   const paidCheckbox = adminPage.getByTestId(
     `bulk-payment-checkbox-${paidPayment.id}`,
   );
@@ -430,7 +431,9 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
     await paidRow.locator(".admin-bulk-phone").innerText(),
   ).toHaveLength(11);
   await expect(adminPage.getByTestId("bulk-mark-paid")).toBeEnabled();
-  await expect(adminPage.getByTestId("bulk-selected-total")).toContainText("¥");
+  await expect(adminPage.getByTestId("bulk-selected-total")).toHaveText(
+    /^¥\d+\.\d{2}$/,
+  );
 
   await adminPage.getByTestId("bulk-invert-selection").click();
   await expect(pendingCheckbox).not.toBeChecked();
@@ -439,7 +442,7 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
   await adminPage.getByTestId("bulk-select-all").click();
   await expect(pendingCheckbox).not.toBeChecked();
   await expect(adminPage.getByTestId("bulk-mark-paid")).toBeDisabled();
-  await expect(adminPage.getByTestId("bulk-selected-total")).toHaveText("¥0");
+  await expect(adminPage.getByTestId("bulk-selected-total")).toHaveText("¥0.00");
 
   await adminPage.getByTestId("bulk-select-all-button").click();
   await expect(pendingCheckbox).toBeChecked();
@@ -450,6 +453,7 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
     name: "批量标记已支付",
   });
   await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(/合计 ¥\d+\.\d{2}/);
   await dialog.getByRole("button", { name: "标记已支付", exact: true }).click();
   await expect(
     adminPage.getByText(/已标记 \d+ 笔付款为已支付，跳过 0 笔已支付记录/),

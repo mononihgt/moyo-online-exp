@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ListChecks, RefreshCw, Wallet } from "lucide-react";
 import type { BulkPaymentRecord } from "../../shared/types";
-import { formatDateTime } from "../../shared/format";
+import { formatDateTime, formatMoney, formatShanghaiDate } from "../../shared/format";
 import { adminApi, errorMessage } from "../api";
 import type { BulkMarkPaidResponse, BulkPaymentsResponse } from "../types";
 import { ARCHIVE_REASON_LABELS } from "../labels";
@@ -25,18 +25,12 @@ interface DateRange {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-function formatDateValue(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function defaultDateRange(): DateRange {
-  const to = new Date();
-  const from = new Date(to);
-  from.setDate(from.getDate() - 6);
-  return { from: formatDateValue(from), to: formatDateValue(to) };
+  const now = Date.now();
+  return {
+    from: formatShanghaiDate(new Date(now - 6 * 86400_000)),
+    to: formatShanghaiDate(new Date(now)),
+  };
 }
 
 function readDateRange(params: URLSearchParams): DateRange {
@@ -54,30 +48,25 @@ function rangeErrorFor(range: DateRange): string | null {
   return null;
 }
 
-function formatYuanAmount(cents: number): string {
-  const yuan = cents / 100;
-  return Number.isInteger(yuan) ? `¥${yuan}` : `¥${yuan.toFixed(2)}`;
-}
-
 export function BulkPaymentsPage() {
   const { notify, confirm } = useUi();
   const [searchParams, setSearchParams] = useSearchParams();
   const [draftRange, setDraftRange] = useState<DateRange>(() => readDateRange(searchParams));
   const [appliedRange, setAppliedRange] = useState<DateRange>(draftRange);
+  const appliedRangeRef = useRef<DateRange>(draftRange);
   const [payments, setPayments] = useState<BulkPaymentRecord[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [reloadNonce, setReloadNonce] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [marking, setMarking] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (range: DateRange) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
-        from: appliedRange.from,
-        to: appliedRange.to,
+        from: range.from,
+        to: range.to,
       });
       const response = await adminApi.get<BulkPaymentsResponse>(
         `/payments/bulk?${params.toString()}`,
@@ -97,11 +86,11 @@ export function BulkPaymentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [appliedRange.from, appliedRange.to, reloadNonce]);
+  }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(appliedRange);
+  }, [appliedRange, load]);
 
   const draftRangeError = rangeErrorFor(draftRange);
   const rangeDirty =
@@ -129,9 +118,10 @@ export function BulkPaymentsPage() {
 
   function applyRange() {
     if (draftRangeError) return;
-    setAppliedRange({ ...draftRange });
-    setSearchParams({ from: draftRange.from, to: draftRange.to }, { replace: true });
-    setReloadNonce((value) => value + 1);
+    const nextRange = { ...draftRange };
+    appliedRangeRef.current = nextRange;
+    setAppliedRange(nextRange);
+    setSearchParams({ from: nextRange.from, to: nextRange.to }, { replace: true });
   }
 
   function togglePayment(paymentId: string) {
@@ -165,7 +155,7 @@ export function BulkPaymentsPage() {
     const ok = await confirm({
       title: "批量标记已支付",
       message: [
-        `将选中的 ${selectedPayments.length} 笔付款标记为已支付，合计 ${formatYuanAmount(
+        `将选中的 ${selectedPayments.length} 笔付款标记为已支付，合计 ${formatMoney(
           selectedTotalCents,
         )}。`,
         "服务端只更新待支付记录，已支付记录会被跳过并统计。",
@@ -183,7 +173,7 @@ export function BulkPaymentsPage() {
       notify(
         `已标记 ${response.updated} 笔付款为已支付，跳过 ${response.skipped} 笔已支付记录`,
       );
-      await load();
+      await load(appliedRangeRef.current);
     } catch (err) {
       notify(errorMessage(err), "error");
     } finally {
@@ -271,7 +261,12 @@ export function BulkPaymentsPage() {
         </div>
       </div>
 
-      {error ? <ErrorNotice message={error} onRetry={() => void load()} /> : null}
+      {error ? (
+        <ErrorNotice
+          message={error}
+          onRetry={() => void load(appliedRangeRef.current)}
+        />
+      ) : null}
 
       {!loading && payments.length > 0 ? (
         <div className="admin-bulk-summary" data-testid="bulk-summary">
@@ -290,7 +285,7 @@ export function BulkPaymentsPage() {
           <div className="admin-bulk-summary-item admin-bulk-summary-selected">
             <span className="admin-hint">已选合计</span>
             <strong data-testid="bulk-selected-total">
-              {formatYuanAmount(selectedTotalCents)}
+              {formatMoney(selectedTotalCents)}
             </strong>
           </div>
           <div className="admin-bulk-summary-actions">
@@ -385,7 +380,7 @@ export function BulkPaymentsPage() {
                             : "—"}
                         </div>
                       </td>
-                      <td className="admin-total">{formatYuanAmount(payment.totalCents)}</td>
+                      <td className="admin-total">{formatMoney(payment.totalCents)}</td>
                       <td>
                         <PaymentStatusChip status={payment.status} />
                       </td>

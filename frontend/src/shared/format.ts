@@ -3,6 +3,22 @@ export function formatMoney(cents: number | null | undefined): string {
   return `¥${(cents / 100).toFixed(2)}`;
 }
 
+const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function formatShanghaiDate(date: Date = new Date(), separator = "-"): string {
+  const parts = dateKeyFormatter.formatToParts(date);
+  const values: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== "literal") values[part.type] = part.value;
+  }
+  return `${values.year}${separator}${values.month}${separator}${values.day}`;
+}
+
 const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
