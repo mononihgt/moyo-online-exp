@@ -32,6 +32,9 @@ def localize(value: datetime, timezone_name: str) -> datetime:
 def week_deadline_utc(value: datetime, timezone_name: str) -> datetime:
     local = localize(value, timezone_name)
     days_to_sunday = 6 - local.weekday()
+    if days_to_sunday == 0:
+        # 周日支付上一周日至当周周六的报酬；周日产生的事件顺延到下一个周日
+        days_to_sunday = 7
     sunday = local.replace(hour=0, minute=0, second=0, microsecond=0)
     from datetime import timedelta
 

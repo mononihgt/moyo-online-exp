@@ -209,6 +209,19 @@ def test_payment_deadline_is_sunday_midnight_shanghai():
     assert week_deadline_utc(value, "Asia/Shanghai") == datetime(2026, 10, 25, 16, 0, 0)
 
 
+def test_payment_deadline_on_sunday_moves_to_next_sunday():
+    # 2026-10-25 10:00 上海时间（周日） -> 2026-11-01 24:00 上海 = 2026-11-01 16:00 UTC
+    value = datetime(2026, 10, 25, 2, 0, 0)
+    assert week_deadline_utc(value, "Asia/Shanghai") == datetime(2026, 11, 1, 16, 0, 0)
+
+
+def test_payment_deadline_uses_next_sunday_for_sunday_completion():
+    timezone = get_settings().timezone
+    room = Room(starts_at=datetime(2026, 10, 21, 2, 0, 0))
+    completion = datetime(2026, 10, 25, 2, 0, 0)
+    assert payment_deadline(room, completion) == datetime(2026, 11, 1, 16, 0, 0)
+
+
 def test_payment_deadline_uses_later_of_start_week_and_completion_week():
     timezone = get_settings().timezone
     room = Room(starts_at=datetime(2026, 10, 21, 2, 0, 0))

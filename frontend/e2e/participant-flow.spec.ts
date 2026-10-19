@@ -64,7 +64,7 @@ const ACCOUNT_PENDING_QUESTIONNAIRE =
   "你已完成正式实验但尚未提交后测问卷。完成问卷后才能结束本次实验；不能预约新的场次。";
 const ACCOUNT_COMPLETED = "你已完成全部实验，无法再预约新的场次。";
 const COMPLETE_TRANSFER_NOTE =
-  "报酬将在提交后测问卷所在周的周日 24:00 前通过支付宝完成转账。如逾期未收到，请通过“联系主试”与实验组织者核对。";
+  "报酬将在提交后测问卷后的第一个周日 24:00 前通过支付宝完成转账。如逾期未收到，请通过“联系主试”与实验组织者核对。";
 
 const COMPLETED_TITLE = "实验已完成";
 const COMPLETED_DETAIL =
@@ -79,7 +79,7 @@ const CONTACT_SCENARIOS = [
   "无法登录、预约、取消预约，或无法重新预约。",
 ];
 const CONTACT_DEADLINE_NOTE =
-  "技术中止的到场费支付截止日期为中止日期所在周的周日 24:00（北京时间）；如逾期未收到，请通过以上方式联系实验主试。";
+  "技术中止的到场费支付截止日期为中止后的第一个周日 24:00（北京时间）；如逾期未收到，请通过以上方式联系实验主试。";
 
 function roster(names: string[], prefix: string): RosterEntry[] {
   return names.map((name, index) => ({

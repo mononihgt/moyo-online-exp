@@ -85,7 +85,7 @@ export default function ContactPage() {
             <li>无法登录、预约、取消预约，或无法重新预约。</li>
           </ul>
           <p className="p-muted contact-note">
-            技术中止的到场费支付截止日期为中止日期所在周的周日
+            技术中止的到场费支付截止日期为中止后的第一个周日
             24:00（北京时间）；如逾期未收到，请通过以上方式联系实验主试。
           </p>
         </section>

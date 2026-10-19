@@ -90,11 +90,11 @@ export const COMPLETE_PENDING_DETAIL =
 export const COMPLETE_PENDING_ARCHIVED_DETAIL =
   "你已完成本次正式实验，但后测问卷尚未提交，本次实验未完成，不产生报酬。房间已归档，你仍可以继续填写并提交问卷；提交后将按完成实验结算基础费与绩效费。完成问卷前，你无法预约新的实验。";
 export const COMPLETE_TRANSFER_NOTE =
-  "报酬将在提交后测问卷所在周的周日 24:00 前通过支付宝完成转账。如逾期未收到，请通过“联系主试”与实验组织者核对。";
+  "报酬将在提交后测问卷后的第一个周日 24:00 前通过支付宝完成转账。如逾期未收到，请通过“联系主试”与实验组织者核对。";
 export const COMPLETE_ARCHIVED_SUBMITTED_NOTE =
   "你已提交后测问卷，归档不影响你的完成状态与报酬。";
 export const COMPLETE_TECH_SHOWUP_NOTE =
-  "本次实验未完成，不产生基础费与绩效费。到场费将在中止日期所在周的周日 24:00 前通过支付宝完成转账。";
+  "本次实验未完成，不产生基础费与绩效费。到场费将在中止后的第一个周日 24:00 前通过支付宝完成转账。";
 export const COMPLETE_TECH_ZERO_NOTE =
   "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。你可以重新预约其他时间段参与实验。";
 export const COMPLETE_REBOOK_NOTE = "你可以重新预约其他时间段参与实验。";
