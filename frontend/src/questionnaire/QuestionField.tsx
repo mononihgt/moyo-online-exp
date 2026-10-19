@@ -1,6 +1,9 @@
+import { Lock } from "lucide-react";
 import { useState } from "react";
 
-import type { QuestionnaireQuestion } from "../shared/types";
+import type { DocumentType, QuestionnaireQuestion } from "../shared/types";
+import { isProtectedQuestionType, isQuestionRequired } from "./questions";
+import { isIdentityDocumentAnswer } from "./validation";
 
 interface QuestionFieldProps {
   question: QuestionnaireQuestion;
@@ -25,18 +28,30 @@ export default function QuestionField({
   const helpId = question.help ? `${fieldId}-help` : null;
   const errorId = error ? `${fieldId}-error` : null;
   const describedBy = joinIds([helpId, errorId]);
+  const protectedQuestion = isProtectedQuestionType(question.type);
+  const required = isQuestionRequired(question);
 
   const label = (
     <>
       {question.label}
-      {question.required ? (
-        <>
-          <span className="q-required" aria-hidden="true">
-            {" "}
-            *
-          </span>
-          <span className="q-sr-only">（必填）</span>
-        </>
+      {required ? (
+        protectedQuestion ? (
+          <>
+            <span className="q-required-lock" aria-hidden="true">
+              <Lock size={13} aria-hidden="true" />
+              必填
+            </span>
+            <span className="q-sr-only">（必填，不可取消）</span>
+          </>
+        ) : (
+          <>
+            <span className="q-required" aria-hidden="true">
+              {" "}
+              *
+            </span>
+            <span className="q-sr-only">（必填）</span>
+          </>
+        )
       ) : null}
     </>
   );
@@ -105,7 +120,7 @@ export default function QuestionField({
                     }}
                     aria-invalid={error ? true : undefined}
                     aria-describedby={describedBy}
-                    aria-required={question.required || undefined}
+                    aria-required={required || undefined}
                   />
                   <span>{option.label}</span>
                 </label>
@@ -197,7 +212,128 @@ export default function QuestionField({
             onChange={(event) => onChange(event.target.value)}
             aria-invalid={error ? true : undefined}
             aria-describedby={describedBy}
-            aria-required={question.required || undefined}
+            aria-required={required || undefined}
+          />
+          {errorMessage}
+        </div>
+      </div>
+    );
+  }
+
+  if (
+    question.type === "short_text" ||
+    question.type === "real_name" ||
+    question.type === "alipay_phone"
+  ) {
+    const phone = question.type === "alipay_phone";
+    return (
+      <div className={`q-card${error ? " q-card-error" : ""}`}>
+        <div className="q-group">
+          <label className="q-question-label" htmlFor={inputId}>
+            {label}
+          </label>
+          {help}
+          <input
+            id={inputId}
+            className={`q-input${phone ? " q-input-phone" : ""}`}
+            type={phone ? "tel" : "text"}
+            inputMode={phone ? "tel" : undefined}
+            autoComplete="off"
+            maxLength={question.type === "short_text" ? question.maxLength : undefined}
+            value={typeof value === "string" ? value : ""}
+            disabled={disabled}
+            onChange={(event) => onChange(event.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy}
+            aria-required={required || undefined}
+          />
+          {errorMessage}
+        </div>
+      </div>
+    );
+  }
+
+  if (question.type === "identity_document") {
+    const document = isIdentityDocumentAnswer(value) ? value : null;
+    const documentType: DocumentType = document?.documentType ?? "id_card";
+    const documentNumber = document?.number ?? "";
+    const typeId = `${fieldId}-type`;
+    return (
+      <div className={`q-card${error ? " q-card-error" : ""}`}>
+        <div
+          className="q-group"
+          role="group"
+          aria-labelledby={labelId}
+          aria-describedby={describedBy}
+        >
+          <p className="q-question-label" id={labelId}>
+            {label}
+          </p>
+          {help}
+          <div className="q-identity">
+            <div className="q-field">
+              <label className="q-field-label" htmlFor={typeId}>
+                证件类型
+              </label>
+              <select
+                id={typeId}
+                className="q-select"
+                value={documentType}
+                disabled={disabled}
+                onChange={(event) =>
+                  onChange({
+                    documentType: event.target.value as DocumentType,
+                    number: documentNumber,
+                  })
+                }
+              >
+                <option value="id_card">身份证</option>
+                <option value="passport">护照</option>
+              </select>
+            </div>
+            <div className="q-field q-field-grow">
+              <label className="q-field-label" htmlFor={inputId}>
+                证件号码
+              </label>
+              <input
+                id={inputId}
+                className="q-input"
+                type="text"
+                autoComplete="off"
+                autoCapitalize="characters"
+                value={documentNumber}
+                disabled={disabled}
+                onChange={(event) =>
+                  onChange({ documentType, number: event.target.value })
+                }
+                aria-invalid={error ? true : undefined}
+                aria-describedby={describedBy}
+                aria-required={required || undefined}
+              />
+            </div>
+          </div>
+          {errorMessage}
+        </div>
+      </div>
+    );
+  }
+
+  if (question.type === "number") {
+    return (
+      <div className={`q-card${error ? " q-card-error" : ""}`}>
+        <div className="q-group">
+          <label className="q-question-label" htmlFor={inputId}>
+            {label}
+          </label>
+          {help}
+          <NumberControl
+            id={inputId}
+            question={question}
+            value={value}
+            disabled={disabled}
+            error={error}
+            describedBy={describedBy}
+            onChange={onChange}
           />
           {errorMessage}
         </div>
@@ -206,23 +342,10 @@ export default function QuestionField({
   }
 
   return (
-    <div className={`q-card${error ? " q-card-error" : ""}`}>
-      <div className="q-group">
-        <label className="q-question-label" htmlFor={inputId}>
-          {label}
-        </label>
-        {help}
-        <NumberControl
-          id={inputId}
-          question={question}
-          value={value}
-          disabled={disabled}
-          error={error}
-          describedBy={describedBy}
-          onChange={onChange}
-        />
-        {errorMessage}
-      </div>
+    <div className="q-card q-card-error">
+      <p className="q-question-label">{label}</p>
+      {help}
+      <p className="q-question-error">题目配置不完整，请联系主试。</p>
     </div>
   );
 }
@@ -262,7 +385,7 @@ function NumberControl({ id, question, value, disabled, error, describedBy, onCh
       }}
       aria-invalid={error ? true : undefined}
       aria-describedby={describedBy}
-      aria-required={question.required || undefined}
+      aria-required={isQuestionRequired(question) || undefined}
     />
   );
 }

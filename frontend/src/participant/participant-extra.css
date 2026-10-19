@@ -307,6 +307,34 @@
   pointer-events: none;
 }
 
+.exp-board-top-right {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.exp-trial-info {
+  flex: 0 0 auto;
+}
+
+.exp-hud-trial-info {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.exp-hud-has-trial-info {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .exp-hud-trial-info {
+    margin-left: auto;
+  }
+}
+
 .exp-war-cell {
   border: 2px solid var(--participant-error);
   animation: exp-war-flash 1s linear 1 both;

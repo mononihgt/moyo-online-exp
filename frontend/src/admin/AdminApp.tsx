@@ -25,6 +25,7 @@ import {
   Users,
   Wallet,
   X,
+  Map,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { ApiError } from "../shared/api";
@@ -37,9 +38,11 @@ import { ConsentPage } from "./pages/ConsentPage";
 import { RoomsPage } from "./pages/RoomsPage";
 import { RoomDetailPage } from "./pages/RoomDetailPage";
 import { InstructionsPage } from "./pages/InstructionsPage";
-import { ConditionsPage } from "./pages/ConditionsPage";
+import { TroopProfilesPage } from "./pages/TroopProfilesPage";
+import { MapGroupsPage } from "./pages/MapGroupsPage";
 import { QuestionnairesPage } from "./pages/QuestionnairesPage";
 import { PaymentsPage } from "./pages/PaymentsPage";
+import { BulkPaymentsPage } from "./pages/BulkPaymentsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ErrorNotice, LoadingBlock, UiProvider } from "./ui";
@@ -58,8 +61,9 @@ const NAV_ITEMS: NavItem[] = [
   { key: "participants", label: "被试名单", to: "/admin/participants", icon: Users },
   { key: "consent", label: "知情同意", to: "/admin/consent", icon: FileText },
   { key: "rooms", label: "房间", to: "/admin/rooms", icon: CalendarDays },
+  { key: "troop-profiles", label: "兵力方案", to: "/admin/troop-profiles", icon: SlidersHorizontal },
+  { key: "map-groups", label: "地图组", to: "/admin/map-groups", icon: Map },
   { key: "instructions", label: "指导语", to: "/admin/instructions", icon: BookOpen },
-  { key: "conditions", label: "条件", to: "/admin/conditions", icon: SlidersHorizontal },
   { key: "questionnaires", label: "问卷", to: "/admin/questionnaires", icon: ClipboardList },
   { key: "payments", label: "付款", to: "/admin/payments", icon: Wallet },
   { key: "audit", label: "审计", to: "/admin/audit", icon: ScrollText },
@@ -197,10 +201,12 @@ function AdminPages() {
       <Route path="consent" element={<ConsentPage />} />
       <Route path="rooms" element={<RoomsPage />} />
       <Route path="rooms/:roomId" element={<RoomDetailPage />} />
+      <Route path="troop-profiles" element={<TroopProfilesPage />} />
+      <Route path="map-groups" element={<MapGroupsPage />} />
       <Route path="instructions" element={<InstructionsPage />} />
-      <Route path="conditions" element={<ConditionsPage />} />
       <Route path="questionnaires" element={<QuestionnairesPage />} />
       <Route path="payments" element={<PaymentsPage />} />
+      <Route path="payments/bulk" element={<BulkPaymentsPage />} />
       <Route path="audit" element={<AuditPage />} />
       <Route path="settings" element={<SettingsPage />} />
       <Route path="*" element={<Navigate to="/admin" replace />} />

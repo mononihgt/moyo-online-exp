@@ -149,7 +149,7 @@ export function DashboardPage() {
                     <tr>
                       <th>内部名称</th>
                       <th>开始时间</th>
-                      <th>条件</th>
+                      <th>地图组</th>
                       <th>状态</th>
                       <th>报名</th>
                       <th>操作</th>
@@ -161,7 +161,7 @@ export function DashboardPage() {
                         <td>{room.internalLabel}</td>
                         <td>{formatDateTime(room.startsAt)}</td>
                         <td>
-                          {room.condition.name} v{room.condition.version}
+                          {room.mapGroup.name} v{room.mapGroup.version}
                         </td>
                         <td>
                           <RoomStatusChip status={room.status} />
@@ -249,7 +249,7 @@ export function DashboardPage() {
                   <Archive size={13} style={{ marginRight: "4px" }} />
                   {counts.archived ?? 0} 个已归档
                 </StatusChip>
-                <Link className="admin-btn admin-btn-secondary admin-btn-sm" to="/admin/rooms?status=archived">
+                <Link className="admin-btn admin-btn-secondary admin-btn-sm" to="/admin/rooms?section=archived">
                   查看归档
                 </Link>
               </div>

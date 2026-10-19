@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Search, Wallet } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Download, ListChecks, Search, Wallet } from "lucide-react";
 import type { PaymentAdmin, PaymentStatus } from "../../shared/types";
 import { formatDateTime, formatMoney } from "../../shared/format";
 import { adminApi, adminDownload, errorMessage } from "../api";
@@ -17,8 +18,46 @@ import {
   useUi,
   yuanFromCents,
 } from "../ui";
+import "../admin-payments.css";
 
 type StatusFilter = "" | PaymentStatus;
+type ExportKind = "payment" | "reimbursement";
+
+interface DateRange {
+  from: string;
+  to: string;
+}
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function formatDateValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function defaultDateRange(): DateRange {
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - 6);
+  return { from: formatDateValue(from), to: formatDateValue(to) };
+}
+
+function readDateRange(params: URLSearchParams): DateRange {
+  const from = params.get("from") ?? "";
+  const to = params.get("to") ?? "";
+  if (DATE_PATTERN.test(from) && DATE_PATTERN.test(to) && from <= to) {
+    return { from, to };
+  }
+  return defaultDateRange();
+}
+
+function rangeErrorFor(range: DateRange): string | null {
+  if (!range.from || !range.to) return "请选择开始日期和结束日期";
+  if (range.from > range.to) return "开始日期不能晚于结束日期";
+  return null;
+}
 
 function paymentActionPayload(
   payment: PaymentAdmin,
@@ -33,12 +72,15 @@ function paymentActionPayload(
 
 export function PaymentsPage() {
   const { notify, confirm } = useUi();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [range, setRange] = useState<DateRange>(() => readDateRange(searchParams));
   const [payments, setPayments] = useState<PaymentAdmin[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ExportKind | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [overrideTarget, setOverrideTarget] = useState<PaymentAdmin | null>(null);
   const [overrideAmount, setOverrideAmount] = useState("");
@@ -186,37 +228,115 @@ export function PaymentsPage() {
     }
   }
 
-  async function handleExport() {
-    setExporting(true);
+  const dateRangeError = rangeErrorFor(range);
+
+  function updateRange(part: "from" | "to", value: string) {
+    setRange((current) => ({ ...current, [part]: value }));
+  }
+
+  async function handleExport(kind: ExportKind) {
+    if (dateRangeError) {
+      notify(dateRangeError, "error");
+      return;
+    }
+    setExporting(kind);
     try {
-      const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      await adminDownload("/payments/export.csv", `payments-${date}.csv`);
-      notify("付款 CSV 已导出");
+      const params = new URLSearchParams({ from: range.from, to: range.to });
+      const path =
+        kind === "payment"
+          ? "/payments/export-payment-list.csv"
+          : "/payments/export-reimbursement-list.csv";
+      const prefix = kind === "payment" ? "payment-list" : "reimbursement-list";
+      await adminDownload(
+        `${path}?${params.toString()}`,
+        `${prefix}-${range.to.replace(/-/g, "")}.csv`,
+      );
+      notify(kind === "payment" ? "支付名单已导出" : "报销清单已导出");
     } catch (err) {
       notify(errorMessage(err), "error");
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
+  }
+
+  function openBulkPayments() {
+    if (dateRangeError) {
+      notify(dateRangeError, "error");
+      return;
+    }
+    const params = new URLSearchParams({ from: range.from, to: range.to });
+    navigate(`/admin/payments/bulk?${params.toString()}`);
   }
 
   return (
     <div>
       <PageHeader
         title="付款"
-        subtitle="核对参与者付款金额，覆盖金额必须填写备注。付款名单 CSV 仅包含完成实验者与技术中止到场费记录。"
+        subtitle="核对参与者付款金额，覆盖金额必须填写备注。支付名单导出口径为问卷完成、待支付且非技术中止；报销清单导出口径为问卷完成、已支付且非技术中止。"
         actions={
-          <button
-            type="button"
-            className="admin-btn admin-btn-primary"
-            onClick={() => void handleExport()}
-            disabled={exporting}
-            data-testid="payment-export"
-          >
-            <Download size={16} />
-            {exporting ? "导出中" : "导出 CSV"}
-          </button>
+          <>
+            <button
+              type="button"
+              className="admin-btn admin-btn-secondary"
+              onClick={openBulkPayments}
+              disabled={dateRangeError !== null}
+              data-testid="payment-bulk-entry"
+            >
+              <ListChecks size={16} />
+              批量付款
+            </button>
+            <button
+              type="button"
+              className="admin-btn admin-btn-secondary"
+              onClick={() => void handleExport("payment")}
+              disabled={exporting !== null || dateRangeError !== null}
+              data-testid="payment-export-list"
+            >
+              <Download size={16} />
+              {exporting === "payment" ? "导出中" : "支付名单"}
+            </button>
+            <button
+              type="button"
+              className="admin-btn admin-btn-primary"
+              onClick={() => void handleExport("reimbursement")}
+              disabled={exporting !== null || dateRangeError !== null}
+              data-testid="payment-export-reimbursement"
+            >
+              <Download size={16} />
+              {exporting === "reimbursement" ? "导出中" : "报销清单"}
+            </button>
+          </>
         }
       />
+
+      <div className="admin-payment-range">
+        <Field label="开始日期" htmlFor="payment-range-from">
+          <input
+            id="payment-range-from"
+            className="admin-input"
+            type="date"
+            value={range.from}
+            onChange={(event) => updateRange("from", event.target.value)}
+            data-testid="payment-range-from"
+          />
+        </Field>
+        <Field label="结束日期" htmlFor="payment-range-to">
+          <input
+            id="payment-range-to"
+            className="admin-input"
+            type="date"
+            value={range.to}
+            onChange={(event) => updateRange("to", event.target.value)}
+            data-testid="payment-range-to"
+          />
+        </Field>
+        <div className="admin-payment-range-note">
+          <span className="admin-hint">
+            日期按北京时间自然日计算，包含首尾两天。导出与批量付款会写入审计日志。
+          </span>
+          {dateRangeError ? <span className="admin-error">{dateRangeError}</span> : null}
+        </div>
+      </div>
 
       {error ? <ErrorNotice message={error} onRetry={() => void load()} /> : null}
 

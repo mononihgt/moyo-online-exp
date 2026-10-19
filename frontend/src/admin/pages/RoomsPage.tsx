@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { CalendarDays, CalendarPlus, Copy, Layers, Plus } from "lucide-react";
-import type { RoomStatus, RoomSummary } from "../../shared/types";
-import { formatDateTime, formatMoney } from "../../shared/format";
-import { adminApi, errorMessage } from "../api";
+import {
+  CalendarDays,
+  Copy,
+  Download,
+  FileJson,
+  Layers,
+  Plus,
+} from "lucide-react";
+import type { RoomSection, RoomSummary } from "../../shared/types";
+import { formatDateTime } from "../../shared/format";
+import { adminApi, adminDownload, errorMessage } from "../api";
 import type { RoomListResponse, RoomResponse } from "../types";
 import {
   EmptyState,
@@ -16,6 +23,7 @@ import {
   PageHeader,
   RoomStatusChip,
   fromShanghaiInput,
+  useNow,
   useUi,
 } from "../ui";
 import {
@@ -26,7 +34,7 @@ import {
   usePublishedOptions,
 } from "../roomForm";
 import type { RoomFormState } from "../roomForm";
-import { ROOM_STATUS_LABELS } from "../labels";
+import { ARCHIVE_REASON_LABELS } from "../labels";
 
 type ModalState =
   | { type: "create" }
@@ -34,48 +42,91 @@ type ModalState =
   | { type: "copy"; room: RoomSummary }
   | null;
 
-const STATUS_OPTIONS = Object.keys(ROOM_STATUS_LABELS) as RoomStatus[];
+const SECTION_OPTIONS: { key: RoomSection; label: string; description: string }[] = [
+  { key: "draft", label: "未开放预约", description: "草稿房间，可继续编辑配置并开放预约。" },
+  { key: "open", label: "开放预约", description: "可报名与已满、尚未开始的房间。" },
+  { key: "in_progress", label: "进行中", description: "等待、指导语、对局与问卷阶段的房间。" },
+  { key: "unpaid", label: "未完全支付", description: "已归档且仍有待支付付款的房间。" },
+  { key: "archived", label: "已归档", description: "已归档且没有待支付付款的房间。" },
+];
+
+const EMPTY_COUNTS: Record<RoomSection, number> = {
+  draft: 0,
+  open: 0,
+  in_progress: 0,
+  unpaid: 0,
+  archived: 0,
+};
+
+const IN_PROGRESS_STATUSES = ["waiting", "instructions", "playing", "questionnaire"];
+const PRE_START_STATUSES = ["draft", "open", "full"];
+
+function resolveSection(params: URLSearchParams): RoomSection {
+  const section = params.get("section");
+  if (section !== null) {
+    const match = SECTION_OPTIONS.find((entry) => entry.key === section);
+    if (match) return match.key;
+  }
+  const status = params.get("status");
+  switch (status) {
+    case "draft":
+      return "draft";
+    case "open":
+    case "full":
+      return "open";
+    case "waiting":
+    case "instructions":
+    case "playing":
+    case "questionnaire":
+      return "in_progress";
+    case "archived":
+      return "archived";
+    default:
+      return "draft";
+  }
+}
 
 export function RoomsPage() {
   const { notify, confirm } = useUi();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") ?? "");
+  const [section, setSection] = useState<RoomSection>(() => resolveSection(searchParams));
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [counts, setCounts] = useState<Record<RoomSection, number>>(EMPTY_COUNTS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [modal, setModal] = useState<ModalState>(null);
-  const [form, setForm] = useState<RoomFormState>(() => defaultRoomForm({
-    conditions: [],
-    instructions: [],
-    questionnaires: [],
-  }));
+  const [form, setForm] = useState<RoomFormState>(() =>
+    defaultRoomForm({ mapGroups: [], instructions: [], questionnaires: [] }),
+  );
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [modalError, setModalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [batchCount, setBatchCount] = useState("2");
-  const [batchConditionIds, setBatchConditionIds] = useState<string[]>([]);
   const [copyLabel, setCopyLabel] = useState("");
   const [copyStartsAt, setCopyStartsAt] = useState(defaultStartInput());
   const [busyId, setBusyId] = useState<string | null>(null);
+  const now = useNow(30000);
   const { options, loading: optionsLoading, error: optionsError } = usePublishedOptions();
+
+  const sectionMeta = SECTION_OPTIONS.find((entry) => entry.key === section) ?? SECTION_OPTIONS[0];
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (statusFilter) params.set("status", statusFilter);
-      params.set("limit", "300");
+      params.set("section", section);
       const response = await adminApi.get<RoomListResponse>(`/rooms?${params.toString()}`);
       setRooms(response.rooms);
+      setCounts({ ...EMPTY_COUNTS, ...response.counts });
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [section]);
 
   useEffect(() => {
     void load();
@@ -85,13 +136,15 @@ export function RoomsPage() {
 
   useEffect(() => {
     if (!createRequested || optionsLoading) return;
-    const nextForm = defaultRoomForm(options);
-    setForm(nextForm);
+    setForm(defaultRoomForm(options));
+    setSection("draft");
     setFormErrors({});
     setModalError(null);
     setModal({ type: "create" });
     const next = new URLSearchParams(searchParams);
     next.delete("create");
+    next.delete("status");
+    next.set("section", "draft");
     setSearchParams(next, { replace: true });
     // 仅响应一次 URL 中的创建请求
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -101,6 +154,14 @@ export function RoomsPage() {
     setReloadNonce((value) => value + 1);
   }, []);
 
+  function changeSection(next: RoomSection) {
+    setSection(next);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("status");
+    nextParams.set("section", next);
+    setSearchParams(nextParams, { replace: true });
+  }
+
   function openCreate() {
     setForm(defaultRoomForm(options));
     setFormErrors({});
@@ -109,9 +170,7 @@ export function RoomsPage() {
   }
 
   function openBatch() {
-    const nextForm = defaultRoomForm(options);
-    setForm(nextForm);
-    setBatchConditionIds(nextForm.conditionVersionId ? [nextForm.conditionVersionId] : []);
+    setForm(defaultRoomForm(options));
     setBatchCount("2");
     setFormErrors({});
     setModalError(null);
@@ -169,9 +228,8 @@ export function RoomsPage() {
       const response = await adminApi.post<{ rooms: RoomSummary[] }>("/rooms/batch", {
         template: result.payload,
         count,
-        conditionVersionIds: batchConditionIds.length > 0 ? batchConditionIds : undefined,
       });
-      notify(`已创建 ${response.rooms.length} 个并行 Room`);
+      notify(`已创建 ${response.rooms.length} 个 Room`);
       setModal(null);
       refresh();
     } catch (err) {
@@ -184,20 +242,26 @@ export function RoomsPage() {
   async function handleCopy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (modal?.type !== "copy") return;
-    if (!copyLabel.trim()) {
-      setFormErrors({ copyLabel: "请填写内部名称" });
-      return;
+    const nextErrors: Record<string, string> = {};
+    if (!copyLabel.trim()) nextErrors.copyLabel = "请填写内部名称";
+    if (!copyStartsAt) nextErrors.copyStartsAt = "请选择新的开始时间";
+    let startsAt: string | null = null;
+    if (copyStartsAt) {
+      try {
+        startsAt = fromShanghaiInput(copyStartsAt);
+        if (Number.isNaN(new Date(startsAt).getTime())) throw new Error("invalid");
+      } catch {
+        nextErrors.copyStartsAt = "开始时间格式不正确";
+      }
     }
-    if (!copyStartsAt) {
-      setFormErrors({ copyStartsAt: "请选择新的开始时间" });
-      return;
-    }
+    setFormErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
     setSubmitting(true);
     setModalError(null);
     try {
       const response = await adminApi.post<RoomResponse>(`/rooms/${modal.room.id}/copy`, {
         internalLabel: copyLabel.trim(),
-        startsAt: fromShanghaiInput(copyStartsAt),
+        startsAt,
       });
       notify("Room 已复制");
       setModal(null);
@@ -212,22 +276,45 @@ export function RoomsPage() {
 
   async function publishRoom(room: RoomSummary) {
     const ok = await confirm({
-      title: "发布 Room",
+      title: "开放预约",
       message: [
-        `确认发布「${room.internalLabel}」？`,
+        `确认开放「${room.internalLabel}」的预约？`,
         `开始时间：${formatDateTime(room.startsAt)}`,
-        `条件：${room.condition.name} v${room.condition.version}`,
+        `地图组：${room.mapGroup.name} v${room.mapGroup.version}`,
         `指导语：${room.instructions.player1.name} v${room.instructions.player1.version} / ${room.instructions.player2.name} v${room.instructions.player2.version}`,
         `问卷：${room.questionnaire.name} v${room.questionnaire.version}`,
-        "发布后房间进入可报名状态。",
+        "开放后房间进入可报名状态。",
       ].join("\n"),
-      confirmLabel: "发布",
+      confirmLabel: "开放预约",
     });
     if (!ok) return;
     setBusyId(room.id);
     try {
       await adminApi.post(`/rooms/${room.id}/publish`);
-      notify("Room 已发布");
+      notify("Room 已开放预约");
+      refresh();
+    } catch (err) {
+      notify(errorMessage(err), "error");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function closeBooking(room: RoomSummary) {
+    const ok = await confirm({
+      title: "关闭预约",
+      message: [
+        `确认关闭「${room.internalLabel}」的预约？`,
+        "关闭后房间回到草稿状态，可继续修改配置。",
+        "仅在没有有效预约时可以关闭预约。",
+      ].join("\n"),
+      confirmLabel: "关闭预约",
+    });
+    if (!ok) return;
+    setBusyId(room.id);
+    try {
+      await adminApi.post(`/rooms/${room.id}/close-booking`);
+      notify("Room 已关闭预约并回到草稿状态");
       refresh();
     } catch (err) {
       notify(errorMessage(err), "error");
@@ -276,38 +363,55 @@ export function RoomsPage() {
     }
   }
 
-  function toggleBatchCondition(id: string, checked: boolean) {
-    setBatchConditionIds((current) =>
-      checked ? [...current, id] : current.filter((item) => item !== id),
-    );
+  async function exportRoom(room: RoomSummary, kind: "json" | "analysis") {
+    try {
+      if (kind === "json") {
+        await adminDownload(`/rooms/${room.id}/export.json`, `room-${room.id}.json`);
+      } else {
+        await adminDownload(`/rooms/${room.id}/analysis.zip`, `analysis-${room.id}.zip`);
+      }
+    } catch (err) {
+      notify(errorMessage(err), "error");
+    }
   }
+
+  function roomStarted(room: RoomSummary): boolean {
+    return Date.parse(room.startsAt) <= now;
+  }
+
+  const canCloseBooking = (room: RoomSummary): boolean =>
+    ["open", "full"].includes(room.status) && !roomStarted(room) && room.bookedCount === 0;
 
   return (
     <div>
       <PageHeader
         title="房间"
-        subtitle="创建、发布和管理实验房间。房间列表中的状态为实时数据库状态。"
+        subtitle="按分区创建、开放和归档实验房间。列表状态为实时数据库状态。"
         actions={
-          <div className="admin-btn-row">
-            <button
-              type="button"
-              className="admin-btn admin-btn-secondary"
-              onClick={openBatch}
-              data-testid="room-batch-create"
-            >
-              <Layers size={16} />
-              批量创建
-            </button>
-            <button
-              type="button"
-              className="admin-btn admin-btn-primary"
-              onClick={openCreate}
-              data-testid="room-create"
-            >
-              <Plus size={16} />
-              创建 Room
-            </button>
-          </div>
+          section === "draft" ? (
+            <div className="admin-btn-row">
+              <button
+                type="button"
+                className="admin-btn admin-btn-secondary"
+                onClick={openBatch}
+                disabled={optionsLoading}
+                data-testid="room-batch-create"
+              >
+                <Layers size={16} />
+                批量创建
+              </button>
+              <button
+                type="button"
+                className="admin-btn admin-btn-primary"
+                onClick={openCreate}
+                disabled={optionsLoading}
+                data-testid="room-create"
+              >
+                <Plus size={16} />
+                创建 Room
+              </button>
+            </div>
+          ) : undefined
         }
       />
 
@@ -317,26 +421,21 @@ export function RoomsPage() {
       <div className="admin-toolbar">
         <select
           className="admin-select"
-          value={statusFilter}
-          onChange={(event) => {
-            setStatusFilter(event.target.value);
-            const next = new URLSearchParams(searchParams);
-            if (event.target.value) next.set("status", event.target.value);
-            else next.delete("status");
-            setSearchParams(next, { replace: true });
-          }}
-          aria-label="按状态筛选房间"
-          style={{ maxWidth: "200px" }}
-          data-testid="room-status-filter"
+          value={section}
+          onChange={(event) => changeSection(event.target.value as RoomSection)}
+          aria-label="按分区筛选房间"
+          style={{ maxWidth: "240px" }}
+          data-testid="room-section-filter"
         >
-          <option value="">全部状态</option>
-          {STATUS_OPTIONS.map((status) => (
-            <option key={status} value={status}>
-              {ROOM_STATUS_LABELS[status]}
+          {SECTION_OPTIONS.map((entry) => (
+            <option key={entry.key} value={entry.key}>
+              {entry.label}（{counts[entry.key] ?? 0}）
             </option>
           ))}
         </select>
-        <span className="admin-hint">共 {rooms.length} 个房间</span>
+        <span className="admin-hint">
+          {sectionMeta.description} 共 {rooms.length} 个房间
+        </span>
       </div>
 
       {loading ? (
@@ -344,12 +443,14 @@ export function RoomsPage() {
       ) : rooms.length === 0 ? (
         <EmptyState
           icon={CalendarDays}
-          title="暂无房间"
-          description="创建 Room 并发布后，参与者就可以报名。"
+          title="该分区暂无房间"
+          description={sectionMeta.description}
           action={
-            <button type="button" className="admin-btn admin-btn-primary" onClick={openCreate}>
-              创建 Room
-            </button>
+            section === "draft" ? (
+              <button type="button" className="admin-btn admin-btn-primary" onClick={openCreate}>
+                创建 Room
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -359,88 +460,145 @@ export function RoomsPage() {
               <tr>
                 <th>内部名称</th>
                 <th>开始时间</th>
-                <th>条件</th>
-                <th>状态</th>
-                <th>报名人数</th>
+                <th>地图组</th>
+                <th>指导语</th>
                 <th>问卷</th>
+                <th>预约</th>
+                <th>状态</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              {rooms.map((room) => (
-                <tr key={room.id}>
-                  <td>
-                    <Link className="admin-row-link" to={`/admin/rooms/${room.id}`}>
-                      {room.internalLabel}
-                    </Link>
-                  </td>
-                  <td>{formatDateTime(room.startsAt)}</td>
-                  <td>
-                    <div>{room.condition.name}</div>
-                    <div className="admin-hint">v{room.condition.version}</div>
-                  </td>
-                  <td>
-                    <RoomStatusChip status={room.status} />
-                    {room.archiveReason ? (
-                      <div className="admin-hint" style={{ marginTop: "2px" }}>
-                        {room.archiveReason}
+              {rooms.map((room) => {
+                const started = roomStarted(room);
+                return (
+                  <tr key={room.id}>
+                    <td>
+                      <Link className="admin-row-link" to={`/admin/rooms/${room.id}`}>
+                        {room.internalLabel}
+                      </Link>
+                    </td>
+                    <td>{formatDateTime(room.startsAt)}</td>
+                    <td>
+                      <div>
+                        {room.mapGroup.name} v{room.mapGroup.version}
                       </div>
-                    ) : null}
-                  </td>
-                  <td>
-                    {room.bookedCount}/{room.capacity}
-                  </td>
-                  <td>
-                    <div>{room.questionnaire.name}</div>
-                    <div className="admin-hint">v{room.questionnaire.version}</div>
-                  </td>
-                  <td className="admin-actions-cell">
-                    <Link className="admin-btn admin-btn-ghost admin-btn-sm" to={`/admin/rooms/${room.id}`}>
-                      查看
-                    </Link>
-                    {room.status === "draft" ? (
+                      <div className="admin-hint">
+                        {room.mapGroup.rows} × {room.mapGroup.cols} ·{" "}
+                        {room.mapGroup.mode === "both" ? "Both" : "A/B"}
+                      </div>
+                    </td>
+                    <td>
+                      <div>
+                        P1: {room.instructions.player1.name} v{room.instructions.player1.version}
+                      </div>
+                      <div className="admin-hint">
+                        P2: {room.instructions.player2.name} v{room.instructions.player2.version}
+                      </div>
+                    </td>
+                    <td>
+                      <div>{room.questionnaire.name}</div>
+                      <div className="admin-hint">v{room.questionnaire.version}</div>
+                    </td>
+                    <td>
+                      {room.bookedCount}/{room.capacity}
+                    </td>
+                    <td>
+                      <RoomStatusChip status={room.status} />
+                      {room.archiveReason ? (
+                        <div className="admin-hint" style={{ marginTop: "2px" }}>
+                          {ARCHIVE_REASON_LABELS[room.archiveReason] ?? room.archiveReason}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="admin-actions-cell">
+                      <Link className="admin-btn admin-btn-ghost admin-btn-sm" to={`/admin/rooms/${room.id}`}>
+                        查看
+                      </Link>
+                      {room.status === "draft" ? (
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-ghost admin-btn-sm"
+                          onClick={() => void publishRoom(room)}
+                          disabled={busyId === room.id || started}
+                          title={started ? "开始时间必须晚于当前时间" : undefined}
+                          data-testid="room-publish"
+                          data-room-id={room.id}
+                        >
+                          开放预约
+                        </button>
+                      ) : null}
+                      {["open", "full"].includes(room.status) ? (
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-ghost admin-btn-sm"
+                          onClick={() => void closeBooking(room)}
+                          disabled={busyId === room.id || !canCloseBooking(room)}
+                          title={
+                            started
+                              ? "开始时间已过，不能关闭预约"
+                              : room.bookedCount > 0
+                                ? "存在有效预约，无法关闭预约"
+                                : undefined
+                          }
+                          data-testid="room-close-booking"
+                          data-room-id={room.id}
+                        >
+                          关闭预约
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="admin-btn admin-btn-ghost admin-btn-sm"
-                        onClick={() => void publishRoom(room)}
+                        onClick={() => openCopy(room)}
                         disabled={busyId === room.id}
-                        data-testid="room-publish"
-                        data-room-id={room.id}
+                        data-testid="room-copy"
                       >
-                        发布
+                        <Copy size={13} />
+                        复制
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-ghost admin-btn-sm"
-                      onClick={() => openCopy(room)}
-                    >
-                      <Copy size={13} />
-                      复制
-                    </button>
-                    {["draft", "open", "full"].includes(room.status) ? (
+                      {PRE_START_STATUSES.includes(room.status) ? (
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-ghost admin-btn-sm"
+                          onClick={() => void cancelRoom(room)}
+                          disabled={busyId === room.id}
+                        >
+                          取消
+                        </button>
+                      ) : null}
+                      {IN_PROGRESS_STATUSES.includes(room.status) ? (
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-ghost admin-btn-sm"
+                          onClick={() => void archiveRoom(room)}
+                          disabled={busyId === room.id}
+                        >
+                          归档
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="admin-btn admin-btn-ghost admin-btn-sm"
-                        onClick={() => void cancelRoom(room)}
-                        disabled={busyId === room.id}
+                        onClick={() => void exportRoom(room, "json")}
+                        data-testid="room-export-json"
                       >
-                        取消
+                        <FileJson size={13} />
+                        导出 JSON
                       </button>
-                    ) : null}
-                    {["waiting", "instructions", "playing", "questionnaire"].includes(room.status) ? (
                       <button
                         type="button"
                         className="admin-btn admin-btn-ghost admin-btn-sm"
-                        onClick={() => void archiveRoom(room)}
-                        disabled={busyId === room.id}
+                        onClick={() => void exportRoom(room, "analysis")}
+                        data-testid="room-export-analysis"
                       >
-                        归档
+                        <Download size={13} />
+                        分析 ZIP
                       </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -479,7 +637,7 @@ export function RoomsPage() {
         <Modal title="批量创建并行 Room" onClose={closeModal} wide>
           <form onSubmit={handleBatch}>
             <InlineNotice tone="info">
-              所有 Room 使用相同的开始时间和模板配置。内部名称会按数量追加序号，条件按下方勾选顺序循环分配。
+              所有 Room 使用相同的地图组、指导语、问卷、开始时间与窗口配置。内部名称会按数量追加序号。
             </InlineNotice>
             {optionsLoading ? <LoadingBlock rows={3} label="正在加载版本选项" /> : null}
             <RoomConfigFields
@@ -490,42 +648,19 @@ export function RoomsPage() {
               disabled={submitting}
             />
             <div className="admin-form-section">
-              <div className="admin-form-row">
-                <Field label="创建数量" htmlFor="batch-count" error={formErrors.batchCount}>
-                  <input
-                    id="batch-count"
-                    className="admin-input"
-                    type="number"
-                    min="1"
-                    max="20"
-                    step="1"
-                    value={batchCount}
-                    onChange={(event) => setBatchCount(event.target.value)}
-                    data-testid="room-batch-count"
-                  />
-                </Field>
-                <Field label="条件分配" hint="至少勾选一个条件。未勾选时使用模板中的条件。">
-                  <div className="admin-checklist">
-                    {options.conditions.length === 0 ? (
-                      <div className="admin-hint">暂无可选条件。</div>
-                    ) : (
-                      options.conditions.map((condition) => (
-                        <label key={condition.id} className="admin-check-item">
-                          <input
-                            type="checkbox"
-                            checked={batchConditionIds.includes(condition.id)}
-                            onChange={(event) => toggleBatchCondition(condition.id, event.target.checked)}
-                            data-testid={`room-batch-condition-${condition.id}`}
-                          />
-                          <span>
-                            {condition.name} v{condition.version}
-                          </span>
-                        </label>
-                      ))
-                    )}
-                  </div>
-                </Field>
-              </div>
+              <Field label="创建数量" htmlFor="batch-count" error={formErrors.batchCount}>
+                <input
+                  id="batch-count"
+                  className="admin-input"
+                  type="number"
+                  min="1"
+                  max="20"
+                  step="1"
+                  value={batchCount}
+                  onChange={(event) => setBatchCount(event.target.value)}
+                  data-testid="room-batch-count"
+                />
+              </Field>
             </div>
             {modalError ? <InlineNotice tone="error">{modalError}</InlineNotice> : null}
             <div className="admin-modal-actions">
@@ -549,7 +684,7 @@ export function RoomsPage() {
         <Modal title="复制 Room" onClose={closeModal}>
           <form onSubmit={handleCopy}>
             <InlineNotice tone="info">
-              复制会保留条件、指导语、问卷、费用和窗口配置，不复制预约和运行数据。
+              复制会保留地图组、指导语、问卷与窗口配置，不复制预约和运行数据。付款参数与容量继承自地图组。
             </InlineNotice>
             <Field label="内部名称" htmlFor="copy-label" error={formErrors.copyLabel}>
               <input
@@ -572,8 +707,7 @@ export function RoomsPage() {
             </Field>
             <div className="admin-hint">
               来源：{modal.room.internalLabel}（{formatDateTime(modal.room.startsAt)}，
-              {modal.room.condition.name} v{modal.room.condition.version}，基础费{" "}
-              {formatMoney(modal.room.basePayCents)}）
+              {modal.room.mapGroup.name} v{modal.room.mapGroup.version}）
             </div>
             {modalError ? <InlineNotice tone="error">{modalError}</InlineNotice> : null}
             <div className="admin-modal-actions">

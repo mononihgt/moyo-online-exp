@@ -1,0 +1,77 @@
+.room-map-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room-map-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.room-map-preview__board-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.room-map-preview__board {
+  position: relative;
+  line-height: 0;
+  border: 1px solid var(--admin-border);
+  background: #ffffff;
+}
+
+.room-map-preview__board canvas {
+  display: block;
+}
+
+.room-map-preview__markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.room-map-preview__marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.room-map-preview__marker-shape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #1c1c1e;
+  color: #1c1c1e;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.room-map-preview__marker-a .room-map-preview__marker-shape {
+  border-radius: 50%;
+}
+
+.room-map-preview__marker-b .room-map-preview__marker-shape {
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.room-map-preview__marker-b .room-map-preview__marker-label {
+  transform: rotate(-45deg);
+}
+
+.room-map-preview__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

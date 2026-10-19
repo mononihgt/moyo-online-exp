@@ -8,6 +8,7 @@ export type RoomStatus =
   | "playing"
   | "questionnaire"
   | "archived";
+export type RoomSection = "draft" | "open" | "in_progress" | "unpaid" | "archived";
 export type ArchiveReason =
   | "completed"
   | "not_full"
@@ -23,6 +24,10 @@ export type BookingStatus = "booked" | "canceled" | "attended" | "no_show";
 export type QuestionnaireStatus = "not_started" | "in_progress" | "completed";
 export type VersionStatus = "draft" | "published" | "archived";
 export type PaymentStatus = "pending" | "paid";
+export type MapGroupMode = "both" | "ab";
+export type MapSlot = "Both" | "A" | "B";
+export type DocumentType = "id_card" | "passport";
+export type Role = 1 | 2;
 
 export interface ParticipantMe {
   id: string;
@@ -66,7 +71,7 @@ export interface CurrentRoom {
   canEnter: boolean;
   canCancel: boolean;
   bookingStatus: BookingStatus;
-  role: 1 | 2 | null;
+  role: Role | null;
   instructionCompleted: boolean;
   questionnaireStatus: QuestionnaireStatus | null;
   completedAt: string | null;
@@ -97,7 +102,7 @@ export interface ExperimentRecord {
   roomStatus: RoomStatus;
   archiveReason: ArchiveReason | null;
   bookingStatus: BookingStatus;
-  role: 1 | 2 | null;
+  role: Role | null;
   instructionCompleted: boolean;
   questionnaireStatus: QuestionnaireStatus | null;
   completedAt: string | null;
@@ -121,63 +126,105 @@ export interface MediaAsset {
   url: string;
 }
 
-export interface ConditionCell {
-  row: number;
-  col: number;
-  initialOwner: 0 | 1 | 2;
-  initialSoldiers: number;
-  reinforcementA: number;
-  reinforcementB: number;
+export interface TroopProfileRow {
+  soldiersA: number;
+  soldiersB: number;
 }
 
-export interface ConditionVisual {
-  color: string | null;
-  backgroundAssetId: string | null;
-}
-
-export interface ReinforcementOverrideEntry {
-  cellIndex: number;
-  value: number;
-}
-
-export interface ReinforcementOverrides {
-  player1?: ReinforcementOverrideEntry[];
-  player2?: ReinforcementOverrideEntry[];
-}
-
-export interface TrialParam {
-  sourceIndex: number;
-  isPractice: boolean;
-  formalTrial: number;
-  baseSoldiersA: number;
-  baseSoldiersB: number;
-  reinforcementOverrides: ReinforcementOverrides | null;
-}
-
-export interface ConditionVersion {
+export interface TroopProfileVersion {
   id: string;
+  profileId: string;
   name: string;
+  builtIn: boolean;
   version: number;
-  schemaVersion: number;
-  description: string | null;
-  rows: number;
-  cols: number;
-  cells: ConditionCell[];
-  visuals: { player1: ConditionVisual[]; player2: ConditionVisual[] };
-  baseAIndex: number;
-  baseBIndex: number;
+  rows: TroopProfileRow[];
   practiceTrials: number;
   formalTrials: number;
-  turnCount: number;
-  turnSeconds: number;
-  restSeconds: number;
-  randomizeFormal: boolean;
-  trialParams: TrialParam[];
-  metadata: Record<string, unknown>;
   status: VersionStatus;
   contentHash: string | null;
   publishedAt: string | null;
   createdAt: string;
+}
+
+export interface TroopProfile {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  createdAt: string;
+  versions: TroopProfileVersion[];
+}
+
+export interface MapGroupPayment {
+  basePayCents: number;
+  performanceRateCents: number;
+  performanceCapCents: number;
+  showupPayCents: number;
+}
+
+export interface TroopProfileRef {
+  profileId: string;
+  versionId: string;
+  name: string;
+  version: number;
+  builtIn: boolean;
+  rows: TroopProfileRow[];
+}
+
+export interface MapInfo {
+  slot: MapSlot;
+  name: string;
+  description: string;
+  sizeToken: string;
+  factorLevel: string;
+  playerSuffix: MapSlot;
+  cells: (string | null)[];
+}
+
+export interface MapGroupVersion {
+  id: string;
+  versionId: string;
+  name: string;
+  version: number;
+  mode: MapGroupMode;
+  rows: number;
+  cols: number;
+  spawns: { A: number; B: number };
+  practiceTrials: number;
+  formalTrials: number;
+  practiceTurnCap: number;
+  practiceTurnSeconds: number;
+  formalTurnCap: number;
+  formalTurnSeconds: number;
+  restSeconds: number;
+  randomizeFormal: boolean;
+  payment: MapGroupPayment;
+  profile: TroopProfileRef;
+  maps: MapInfo[];
+  status: VersionStatus;
+  contentHash: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+}
+
+export interface MapGroupSummary {
+  id: string;
+  versionId: string;
+  name: string;
+  version: number;
+  mode: MapGroupMode;
+  rows: number;
+  cols: number;
+  practiceTrials: number;
+  formalTrials: number;
+  maps: { slot: MapSlot; name: string; description: string; factorLevel: string }[];
+  troopProfile: {
+    id: string;
+    versionId: string;
+    name: string;
+    version: number;
+    builtIn: boolean;
+  };
+  payment: MapGroupPayment;
 }
 
 export interface InstructionVersion {
@@ -185,7 +232,8 @@ export interface InstructionVersion {
   versionId: string;
   name: string;
   version: number;
-  role: 1 | 2;
+  role: Role;
+  mapGroupPrefix: string;
   minReadingSeconds: number;
   contentMarkdown: string;
   contentHtml: string;
@@ -195,7 +243,18 @@ export interface InstructionVersion {
   createdAt: string;
 }
 
-export type QuestionType = "single_choice" | "multiple_choice" | "likert" | "text" | "number";
+export type QuestionType =
+  | "single_choice"
+  | "multiple_choice"
+  | "likert"
+  | "text"
+  | "short_text"
+  | "number"
+  | "real_name"
+  | "alipay_phone"
+  | "identity_document";
+
+export type ProtectedQuestionType = "real_name" | "alipay_phone" | "identity_document";
 
 export interface QuestionnaireOption {
   value: string;
@@ -212,7 +271,13 @@ export interface QuestionnaireQuestion {
   max?: number;
   minLabel?: string;
   maxLabel?: string;
+  maxLength?: number;
   help?: string;
+}
+
+export interface IdentityDocumentAnswer {
+  documentType: DocumentType;
+  number: string;
 }
 
 export interface QuestionnairePage {
@@ -232,6 +297,7 @@ export interface QuestionnaireVersion {
   name: string;
   version: number;
   contentHash: string | null;
+  protectedQuestionIds: string[];
   status: VersionStatus;
   publishedAt: string | null;
   createdAt: string;
@@ -246,15 +312,12 @@ export interface RoomSummary {
   archiveReason: ArchiveReason | null;
   bookedCount: number;
   capacity: number;
-  condition: { id: string; name: string; version: number };
+  mapGroup: MapGroupSummary;
   instructions: {
     player1: { id: string; name: string; version: number };
     player2: { id: string; name: string; version: number };
   };
   questionnaire: { id: string; name: string; version: number };
-  basePayCents: number;
-  performanceRateCents: number;
-  showupPayCents: number;
   waitWindowSeconds: number;
   reconnectWindowSeconds: number;
   configLockedAt: string | null;
@@ -287,7 +350,7 @@ export interface AdminBooking {
 
 export interface AdminRoomParticipant {
   id: string;
-  role: 1 | 2;
+  role: Role;
   analysisCode: string;
   name: string;
   phoneMasked: string;
@@ -320,7 +383,7 @@ export interface RoomMonitor {
   turnDeadline: string | null;
   restDeadline: string | null;
   participants: {
-    role: 1 | 2;
+    role: Role;
     name: string;
     online: boolean;
     instructionCompleted: boolean;
@@ -345,6 +408,20 @@ export interface PaymentAdmin extends Payment {
   name: string;
   phoneMasked: string;
   roomStartsAt: string;
+}
+
+export interface BulkPaymentRecord {
+  paymentId: string;
+  participantId: string;
+  analysisCode: string | null;
+  name: string;
+  phone: string;
+  roomId: string;
+  roomStartsAt: string;
+  archiveReason: ArchiveReason | null;
+  totalCents: number;
+  status: PaymentStatus;
+  paidAt: string | null;
 }
 
 export interface AuditEntry {
@@ -384,6 +461,19 @@ export interface BoardState {
   soldiers: number[];
 }
 
+export interface ConditionVisual {
+  color: string | null;
+  backgroundAssetId: string | null;
+}
+
+export interface TrialParameters {
+  initialSoldiersA: number;
+  initialSoldiersB: number;
+  reinforcementA: number;
+  reinforcementB: number;
+  sourceIndex: number | null;
+}
+
 export interface PartnerState {
   online: boolean;
   entered: boolean;
@@ -395,7 +485,7 @@ export interface PartnerState {
 }
 
 export interface InstructionState {
-  role: 1 | 2;
+  role: Role;
   contentMarkdown: string;
   contentHtml: string;
   minReadingSeconds: number;
@@ -413,7 +503,7 @@ export interface TrialScores {
   player2: number;
 }
 
-export interface GameState {
+export interface GameState extends TrialParameters {
   phase: "turn" | "rest" | "questionnaire" | string;
   trialIndex: number;
   gameNumber: number;
@@ -447,7 +537,7 @@ export interface RoomStateMessage {
   bookedCount: number;
   capacity: number;
   phase: string | null;
-  role: 1 | 2 | null;
+  role: Role | null;
   enterRequests: string[];
   self: {
     startRequested: boolean;
@@ -479,6 +569,11 @@ export interface TurnMessage {
   board: BoardState;
   submitted: boolean;
   partnerSubmitted: boolean;
+  initialSoldiersA?: number;
+  initialSoldiersB?: number;
+  reinforcementA?: number;
+  reinforcementB?: number;
+  sourceIndex?: number | null;
 }
 
 export interface TurnResultMessage {
@@ -497,6 +592,11 @@ export interface TurnResultMessage {
   resultDisplayMs?: number;
   nextRound?: number;
   deadline?: string;
+  initialSoldiersA?: number;
+  initialSoldiersB?: number;
+  reinforcementA?: number;
+  reinforcementB?: number;
+  sourceIndex?: number | null;
 }
 
 export interface RestMessage {
@@ -517,7 +617,7 @@ export interface RestMessage {
   ready: Record<string, boolean>;
 }
 
-export interface TrialStartMessage {
+export interface TrialStartMessage extends TrialParameters {
   type: "trial_start";
   roomId: string;
   trialIndex: number;
@@ -556,6 +656,5 @@ export type ServerMessage =
       canRebook: boolean;
       rewardKind: RewardKind;
     }
-  | { type: "trial_start"; roomId: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; serverNow: string };

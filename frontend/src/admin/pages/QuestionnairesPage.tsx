@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type {
+  ProtectedQuestionType,
   QuestionType,
   QuestionnaireOption,
   QuestionnaireSchema,
@@ -31,16 +32,29 @@ import {
   VersionStatusChip,
   useUi,
 } from "../ui";
+import { QUESTION_TYPE_LABELS } from "../labels";
 
 type Selection = string | "new" | null;
 
-const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
-  single_choice: "单选",
-  multiple_choice: "多选",
-  likert: "李克特量表",
-  text: "文本",
-  number: "数字",
+const PROTECTED_TYPES: ProtectedQuestionType[] = [
+  "real_name",
+  "alipay_phone",
+  "identity_document",
+];
+
+function isProtectedType(type: QuestionType): type is ProtectedQuestionType {
+  return type === "real_name" || type === "alipay_phone" || type === "identity_document";
+}
+
+const PROTECTED_DEFAULT_LABELS: Record<ProtectedQuestionType, string> = {
+  real_name: "真实姓名",
+  alipay_phone: "支付宝手机号",
+  identity_document: "身份证明",
 };
+
+function defaultLabelForType(type: QuestionType): string {
+  return isProtectedType(type) ? PROTECTED_DEFAULT_LABELS[type] : "";
+}
 
 interface DraftQuestion {
   id: string;
@@ -52,6 +66,7 @@ interface DraftQuestion {
   max: string;
   minLabel: string;
   maxLabel: string;
+  maxLength: string;
   help: string;
 }
 
@@ -91,7 +106,7 @@ function newQuestion(id: string, type: QuestionType = "text"): DraftQuestion {
   return {
     id,
     type,
-    label: "",
+    label: defaultLabelForType(type),
     required: true,
     options:
       type === "single_choice" || type === "multiple_choice"
@@ -104,6 +119,7 @@ function newQuestion(id: string, type: QuestionType = "text"): DraftQuestion {
     max: type === "likert" ? "5" : "",
     minLabel: "",
     maxLabel: "",
+    maxLength: "",
     help: "",
   };
 }
@@ -135,6 +151,10 @@ function draftFromVersion(version: QuestionnaireVersion): QuestionnaireDraft {
         max: question.max === undefined || question.max === null ? "" : String(question.max),
         minLabel: question.minLabel ?? "",
         maxLabel: question.maxLabel ?? "",
+        maxLength:
+          question.maxLength === undefined || question.maxLength === null
+            ? ""
+            : String(question.maxLength),
         help: question.help ?? "",
       })),
     })),
@@ -153,6 +173,28 @@ function parseOptionalInteger(value: string): number | null {
   if (trimmed === "") return null;
   const parsed = Number(trimmed);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+function protectedTypeCount(draft: QuestionnaireDraft, type: ProtectedQuestionType): number {
+  return draft.pages.reduce(
+    (total, page) =>
+      total + page.questions.filter((question) => question.type === type).length,
+    0,
+  );
+}
+
+function protectedIssueMessages(draft: QuestionnaireDraft): string[] {
+  return PROTECTED_TYPES.flatMap((type) => {
+    const count = protectedTypeCount(draft, type);
+    const label = QUESTION_TYPE_LABELS[type] ?? type;
+    if (count === 0) return [`缺少受保护字段：${label}`];
+    if (count > 1) return [`受保护字段重复：${label}（${count} 题）`];
+    return [];
+  });
+}
+
+function protectedCoveredCount(draft: QuestionnaireDraft): number {
+  return PROTECTED_TYPES.filter((type) => protectedTypeCount(draft, type) === 1).length;
 }
 
 function buildQuestionnairePayload(draft: QuestionnaireDraft): {
@@ -194,7 +236,7 @@ function buildQuestionnairePayload(draft: QuestionnaireDraft): {
         id: questionId,
         type: question.type,
         label,
-        required: question.required,
+        required: isProtectedType(question.type) ? true : question.required,
       };
       if (question.type === "single_choice" || question.type === "multiple_choice") {
         if (question.options.length < 2) {
@@ -244,6 +286,16 @@ function buildQuestionnairePayload(draft: QuestionnaireDraft): {
         if (minimum !== null) base.min = minimum;
         if (maximum !== null) base.max = maximum;
       }
+      if (question.type === "short_text") {
+        const maxLength = parseOptionalInteger(question.maxLength);
+        if (question.maxLength.trim() !== "") {
+          if (maxLength === null || maxLength <= 0) {
+            errors.push(`${prefix}的最大字数必须是正整数`);
+          } else {
+            base.maxLength = maxLength;
+          }
+        }
+      }
       const help = question.help.trim();
       if (help) base.help = help;
       return base;
@@ -269,6 +321,12 @@ function QuestionPreviewItem({ question }: { question: DraftQuestion }) {
         {question.required ? <span className="q-required">*</span> : null}
       </div>
       {question.help.trim() ? <div className="q-help">{question.help}</div> : null}
+      {isProtectedType(question.type) ? (
+        <div className="q-protected">
+          <Lock size={12} />
+          受保护字段 · 必填
+        </div>
+      ) : null}
       {question.type === "single_choice" || question.type === "multiple_choice" ? (
         <div className="q-options">
           {question.options.map((option, index) => (
@@ -302,8 +360,31 @@ function QuestionPreviewItem({ question }: { question: DraftQuestion }) {
       {question.type === "text" ? (
         <textarea disabled aria-label="文本输入预览" rows={3} />
       ) : null}
+      {question.type === "short_text" ? (
+        <input
+          type="text"
+          disabled
+          aria-label="单行填空预览"
+          maxLength={parseOptionalInteger(question.maxLength) ?? undefined}
+        />
+      ) : null}
       {question.type === "number" ? (
         <input type="number" disabled aria-label="数字输入预览" />
+      ) : null}
+      {question.type === "real_name" ? (
+        <input type="text" disabled aria-label="真实姓名输入预览" placeholder="真实姓名" />
+      ) : null}
+      {question.type === "alipay_phone" ? (
+        <input type="tel" disabled aria-label="支付宝手机号输入预览" placeholder="支付宝手机号" />
+      ) : null}
+      {question.type === "identity_document" ? (
+        <div className="q-identity-preview">
+          <select disabled aria-label="证件类型预览">
+            <option>身份证</option>
+            <option>护照</option>
+          </select>
+          <input type="text" disabled aria-label="证件号码预览" placeholder="证件号码" />
+        </div>
       ) : null}
     </div>
   );
@@ -436,7 +517,36 @@ export function QuestionnairesPage() {
     }));
   }
 
+  function protectedTypeUsedElsewhere(
+    type: ProtectedQuestionType,
+    pageIndex: number,
+    questionIndex: number,
+  ): boolean {
+    return draft.pages.some((page, pIndex) =>
+      page.questions.some(
+        (question, qIndex) =>
+          !(pIndex === pageIndex && qIndex === questionIndex) && question.type === type,
+      ),
+    );
+  }
+
   function changeQuestionType(pageIndex: number, questionIndex: number, type: QuestionType) {
+    if (isProtectedType(type)) {
+      const alreadyUsed = draft.pages.some((page, pIndex) =>
+        page.questions.some(
+          (question, qIndex) =>
+            !(pIndex === pageIndex && qIndex === questionIndex) &&
+            question.type === type,
+        ),
+      );
+      if (alreadyUsed) {
+        notify(
+          `受保护字段「${PROTECTED_DEFAULT_LABELS[type]}」已存在，每种受保护类型只能有一题`,
+          "error",
+        );
+        return;
+      }
+    }
     setDraft((current) => ({
       ...current,
       pages: current.pages.map((page, pIndex) =>
@@ -448,6 +558,10 @@ export function QuestionnairesPage() {
                 return {
                   ...question,
                   type,
+                  required: isProtectedType(type) ? true : question.required,
+                  label: question.label.trim()
+                    ? question.label
+                    : defaultLabelForType(type),
                   options:
                     (type === "single_choice" || type === "multiple_choice") &&
                     question.options.length < 2
@@ -646,6 +760,11 @@ export function QuestionnairesPage() {
       notify("请先修正问卷配置错误", "error");
       return;
     }
+    const protectedIssues = protectedIssueMessages(draft);
+    if (protectedIssues.length > 0) {
+      notify(protectedIssues.join("；"), "error");
+      return;
+    }
     const ok = await confirm({
       title: "发布问卷版本",
       message:
@@ -672,6 +791,9 @@ export function QuestionnairesPage() {
   const pageCount = draft.pages.length;
   const questionCount = draft.pages.reduce((total, page) => total + page.questions.length, 0);
   const draftJSON = buildQuestionnairePayload(draft);
+  const protectedIssues = protectedIssueMessages(draft);
+  const protectedCovered = protectedCoveredCount(draft);
+  const publishBlocked = protectedIssues.length > 0;
   const editorTitle = isNew
     ? "新建问卷"
     : selected
@@ -682,7 +804,7 @@ export function QuestionnairesPage() {
     <div>
       <PageHeader
         title="问卷"
-        subtitle="按页面组织题目，支持单选、多选、李克特量表、文本和数字题。发布后的版本只读。"
+        subtitle="按页面组织题目，支持单选、多选、李克特量表、文本、单行填空、数字与三种受保护身份字段。发布后的版本只读。"
         actions={
           <button
             type="button"
@@ -770,6 +892,13 @@ export function QuestionnairesPage() {
                   <span className="admin-hint">
                     {pageCount} 页 · {questionCount} 题
                   </span>
+                  <span
+                    className={`admin-chip${
+                      protectedCovered === PROTECTED_TYPES.length ? " admin-chip-success" : ""
+                    }`}
+                  >
+                    受保护字段 {protectedCovered}/3
+                  </span>
                 </div>
               </div>
               <div className="admin-btn-row">
@@ -794,7 +923,8 @@ export function QuestionnairesPage() {
                       type="button"
                       className="admin-btn admin-btn-primary"
                       onClick={() => void handlePublish()}
-                      disabled={saving || publishing}
+                      disabled={saving || publishing || publishBlocked}
+                      title={publishBlocked ? protectedIssues.join("；") : undefined}
                       data-testid="questionnaire-publish"
                     >
                       <CheckCircle2 size={15} />
@@ -815,6 +945,18 @@ export function QuestionnairesPage() {
               </InlineNotice>
             ) : null}
             {saveError ? <InlineNotice tone="error">{saveError}</InlineNotice> : null}
+            {!readOnly && protectedIssues.length > 0 ? (
+              <InlineNotice tone="warning">
+                <div data-testid="questionnaire-protected-status">
+                  发布前需要真实姓名、支付宝手机号、身份证明各恰好一题，且始终必填。
+                  <ul className="admin-validation-list">
+                    {protectedIssues.map((message) => (
+                      <li key={message}>{message}</li>
+                    ))}
+                  </ul>
+                </div>
+              </InlineNotice>
+            ) : null}
 
             {readOnly ? (
               <div className="admin-stack">
@@ -1003,6 +1145,11 @@ export function QuestionnairesPage() {
                             <Field
                               label="题型"
                               htmlFor={`questionnaire-question-type-${pageIndex}-${questionIndex}`}
+                              hint={
+                                isProtectedType(question.type)
+                                  ? "受保护字段会加密存储。"
+                                  : undefined
+                              }
                             >
                               <select
                                 id={`questionnaire-question-type-${pageIndex}-${questionIndex}`}
@@ -1018,19 +1165,40 @@ export function QuestionnairesPage() {
                                 data-testid={`questionnaire-question-type-${pageIndex}-${questionIndex}`}
                               >
                                 {(Object.keys(QUESTION_TYPE_LABELS) as QuestionType[]).map(
-                                  (type) => (
-                                    <option key={type} value={type}>
-                                      {QUESTION_TYPE_LABELS[type]}
-                                    </option>
-                                  ),
+                                  (type) => {
+                                    const takenElsewhere =
+                                      isProtectedType(type) &&
+                                      protectedTypeUsedElsewhere(
+                                        type,
+                                        pageIndex,
+                                        questionIndex,
+                                      );
+                                    return (
+                                      <option key={type} value={type} disabled={takenElsewhere}>
+                                        {QUESTION_TYPE_LABELS[type]}
+                                        {takenElsewhere ? "（已使用）" : ""}
+                                      </option>
+                                    );
+                                  },
                                 )}
                               </select>
                             </Field>
-                            <Field label="必答">
+                            <Field
+                              label={
+                                isProtectedType(question.type)
+                                  ? "必答（受保护字段）"
+                                  : "必答"
+                              }
+                            >
                               <label className="admin-check-item">
                                 <input
                                   type="checkbox"
-                                  checked={question.required}
+                                  checked={
+                                    isProtectedType(question.type)
+                                      ? true
+                                      : question.required
+                                  }
+                                  disabled={isProtectedType(question.type)}
                                   onChange={(event) =>
                                     updateQuestion(pageIndex, questionIndex, {
                                       required: event.target.checked,
@@ -1038,7 +1206,19 @@ export function QuestionnairesPage() {
                                   }
                                   data-testid={`questionnaire-required-${pageIndex}-${questionIndex}`}
                                 />
-                                <span>参与者必须回答</span>
+                                <span>
+                                  {isProtectedType(question.type) ? (
+                                    <>
+                                      <Lock
+                                        size={12}
+                                        style={{ verticalAlign: "-2px", marginRight: "4px" }}
+                                      />
+                                      受保护字段始终必填
+                                    </>
+                                  ) : (
+                                    "参与者必须回答"
+                                  )}
+                                </span>
                               </label>
                             </Field>
                           </div>
@@ -1073,6 +1253,38 @@ export function QuestionnairesPage() {
                               }
                             />
                           </Field>
+
+                          {isProtectedType(question.type) ? (
+                            <div className="admin-protected-hint">
+                              <Lock size={13} />
+                              受保护字段会加密存储，始终必填；每种受保护类型每份问卷只能有一题。
+                            </div>
+                          ) : null}
+
+                          {question.type === "short_text" ? (
+                            <div className="admin-form-row">
+                              <Field
+                                label="最大字数（可选）"
+                                htmlFor={`questionnaire-question-max-length-${pageIndex}-${questionIndex}`}
+                                hint="留空表示不限制。"
+                              >
+                                <input
+                                  id={`questionnaire-question-max-length-${pageIndex}-${questionIndex}`}
+                                  className="admin-input"
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  value={question.maxLength}
+                                  onChange={(event) =>
+                                    updateQuestion(pageIndex, questionIndex, {
+                                      maxLength: event.target.value,
+                                    })
+                                  }
+                                  data-testid={`questionnaire-question-max-length-${pageIndex}-${questionIndex}`}
+                                />
+                              </Field>
+                            </div>
+                          ) : null}
 
                           {question.type === "single_choice" ||
                           question.type === "multiple_choice" ? (

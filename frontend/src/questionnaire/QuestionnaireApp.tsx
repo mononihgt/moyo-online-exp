@@ -23,9 +23,13 @@ import {
   countAnswered,
   flattenQuestions,
   hasAnswer,
+  isProtectedQuestionType,
+  normalizeAnswers,
+  omitProtectedAnswers,
   sanitizeAnswers,
   validateAnswers,
 } from "./questions";
+import { isIdentityDocumentAnswer } from "./validation";
 
 type Screen = "loading" | "error" | "form" | "done";
 type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
@@ -110,6 +114,7 @@ export default function QuestionnaireApp() {
       const restored = sanitizeAnswers(
         context.questionnaire.schema,
         context.draftAnswers ?? context.existingAnswers,
+        context.questionnaire.protectedQuestionIds,
       );
       setAnswers(restored);
       setDraftRestored(Object.keys(restored).length > 0);
@@ -145,7 +150,13 @@ export default function QuestionnaireApp() {
     draftTimerRef.current = window.setTimeout(() => {
       draftTimerRef.current = null;
       setSaveState("saving");
-      void saveQuestionnaireDraft(loaded.base, loaded.token, answers)
+      const questionnaire = loaded.context.questionnaire;
+      const draftAnswers = omitProtectedAnswers(
+        flattenQuestions(questionnaire.schema),
+        answers,
+        questionnaire.protectedQuestionIds,
+      );
+      void saveQuestionnaireDraft(loaded.base, loaded.token, draftAnswers)
         .then(() => {
           if (sequence === saveSequenceRef.current) setSaveState("saved");
         })
@@ -163,6 +174,10 @@ export default function QuestionnaireApp() {
 
   const schema = loaded?.context.questionnaire.schema ?? null;
   const questions = useMemo(() => (schema ? flattenQuestions(schema) : []), [schema]);
+  const hasProtectedQuestions = useMemo(
+    () => questions.some((question) => isProtectedQuestionType(question.type)),
+    [questions],
+  );
   const answeredCount = useMemo(() => countAnswered(questions, answers), [questions, answers]);
   const validationErrors = useMemo(
     () => (submitAttempted ? validateAnswers(questions, answers) : {}),
@@ -175,7 +190,7 @@ export default function QuestionnaireApp() {
   function setAnswer(questionId: string, value: unknown) {
     dirtyRef.current = true;
     setAnswers((previous) => {
-      if (!hasAnswer(value)) {
+      if (!hasAnswer(value) && !isIdentityDocumentAnswer(value)) {
         if (!(questionId in previous)) return previous;
         const next = { ...previous };
         delete next[questionId];
@@ -198,7 +213,8 @@ export default function QuestionnaireApp() {
     if (!loaded || screen !== "form" || submitLockRef.current) return;
     setSubmitAttempted(true);
     setSubmitIssue(null);
-    const errors = validateAnswers(questions, answers);
+    const normalizedAnswers = normalizeAnswers(questions, answers);
+    const errors = validateAnswers(questions, normalizedAnswers);
     const firstInvalid = questions.find((question) => errors[question.id] !== undefined);
     if (firstInvalid) {
       focusQuestion(firstInvalid.id);
@@ -209,7 +225,7 @@ export default function QuestionnaireApp() {
     try {
       const jatos = loaded.jatos;
       await submitJatosResultData(jatos, {
-        answers,
+        answers: normalizedAnswers,
         questionnaireVersionId: loaded.context.questionnaire.versionId,
         contentHash: loaded.context.questionnaire.contentHash,
         analysisCode: loaded.context.analysisCode,
@@ -220,7 +236,7 @@ export default function QuestionnaireApp() {
       }
       const result = await completeQuestionnaire(loaded.base, {
         token: loaded.token,
-        answers,
+        answers: normalizedAnswers,
         jatosWorkerId: ids.workerId,
         jatosStudyResultId: ids.studyResultId,
         jatosComponentResultId: ids.componentResultId,
@@ -363,6 +379,12 @@ export default function QuestionnaireApp() {
         </div>
 
         {draftRestored ? <p className="q-note">已恢复上次未提交的答案。</p> : null}
+
+        {hasProtectedQuestions ? (
+          <p className="q-note">
+            受保护的身份信息仅用于报酬发放，不会保存为问卷草稿；刷新页面后需要重新填写。
+          </p>
+        ) : null}
 
         {submitIssue ? (
           <div className="q-error" role="alert">

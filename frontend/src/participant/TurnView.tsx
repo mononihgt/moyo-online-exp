@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { TrialInfoBadge } from "../shared/board/TrialInfoBadge";
 import type {
   BoardState,
   GameState,
@@ -10,8 +11,14 @@ import type {
 import { ExitControl } from "./ExitControl";
 import { TURN_SELF_DISCONNECTED } from "./flowCopy";
 import { GameBoard } from "./GameBoard";
+import type { GameBoardLayout } from "./GameBoard";
 import type { SocketStatus } from "./RoomSocket";
 import { formatClock, secondsLeft, useNow } from "./time";
+import {
+  TRIAL_INFO_MIN_SCALE,
+  trialInfoPlacement,
+  type TrialInfoPlacement,
+} from "./trialInfo";
 
 function hudTrialLabel(game: GameState, round: number): string {
   const turnCount = game.turnCount > 0 ? game.turnCount : 0;
@@ -54,6 +61,8 @@ export function TurnView({
 }) {
   const now = useNow(250);
   const [selected, setSelected] = useState<number[]>([]);
+  const [trialInfo, setTrialInfo] = useState<TrialInfoPlacement | null>(null);
+  const inHudRef = useRef(false);
   const socketActive = socketStatus === "open";
   const clockActive = socketActive && partner.online;
   const roundKey = `${game.trialIndex}:${game.round}`;
@@ -94,6 +103,22 @@ export function TurnView({
   const submittedView = result !== null || submitted;
   const autoSelectedBySelf =
     result !== null && result.autoSelected[roleKey] === true;
+  const handleBoardLayout = useCallback((layout: GameBoardLayout) => {
+    const placement = trialInfoPlacement(layout, inHudRef.current);
+    inHudRef.current = placement.inHud;
+    setTrialInfo(placement);
+  }, []);
+  const trialInfoBadge =
+    trialInfo === null ? null : (
+      <TrialInfoBadge
+        initialSoldiersA={game.initialSoldiersA}
+        initialSoldiersB={game.initialSoldiersB}
+        reinforcementA={game.reinforcementA}
+        reinforcementB={game.reinforcementB}
+        scale={trialInfo.inHud ? TRIAL_INFO_MIN_SCALE : trialInfo.scale}
+        className="exp-trial-info"
+      />
+    );
 
   const toggleCell = (index: number) => {
     if (result !== null || submitted || !socketActive || exitPending) return;
@@ -167,7 +192,13 @@ export function TurnView({
             </span>
           </span>
         </div>
-        <div className="exp-hud-right">
+        <div
+          className={
+            trialInfo?.inHud === true
+              ? "exp-hud-right exp-hud-has-trial-info"
+              : "exp-hud-right"
+          }
+        >
           <span className="exp-hud-role">你是玩家 {role === 1 ? "○" : "◇"}</span>
           <span className="exp-hud-partner" data-testid="hud-partner">
             <span
@@ -180,6 +211,9 @@ export function TurnView({
           </span>
           {canExit ? (
             <ExitControl onConfirm={onExit} disabled={exitPending} />
+          ) : null}
+          {trialInfo?.inHud === true ? (
+            <div className="exp-hud-trial-info">{trialInfoBadge}</div>
           ) : null}
         </div>
       </div>
@@ -202,11 +236,15 @@ export function TurnView({
             warCells={warCells}
             flashKey={flashKey}
             disabled={result !== null || submitted || !socketActive || exitPending}
+            topRightOverlay={
+              trialInfo !== null && !trialInfo.inHud ? trialInfoBadge : null
+            }
             onToggle={toggleCell}
             onClear={() => {
               if (result !== null || submitted || !socketActive || exitPending) return;
               setSelected([]);
             }}
+            onLayout={handleBoardLayout}
           />
           <div className="exp-actions exp-actions-column">
             <button

@@ -1,6 +1,8 @@
 import type {
   ArchiveReason,
   BookingStatus,
+  MapGroupMode,
+  MapSlot,
   ParticipantStatus,
   PaymentStatus,
   QuestionnaireStatus,
@@ -181,7 +183,22 @@ export const QUESTION_TYPE_LABELS: Record<string, string> = {
   multiple_choice: "多选",
   likert: "李克特量表",
   text: "文本",
+  short_text: "单行填空",
   number: "数字",
+  real_name: "真实姓名",
+  alipay_phone: "支付宝手机号",
+  identity_document: "身份证明",
+};
+
+export const MAP_GROUP_MODE_LABELS: Record<MapGroupMode, string> = {
+  both: "Both 单图",
+  ab: "A/B 双图",
+};
+
+export const MAP_SLOT_LABELS: Record<MapSlot, string> = {
+  Both: "Both",
+  A: "A",
+  B: "B",
 };
 
 export const PHASE_LABELS: Record<string, string> = {

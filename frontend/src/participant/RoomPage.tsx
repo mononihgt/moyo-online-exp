@@ -79,6 +79,11 @@ function mergeTurn(current: GameState | null, message: TurnMessage): GameState {
     turnCount: message.turnCount ?? current?.turnCount ?? 0,
     turnSeconds: message.turnSeconds ?? current?.turnSeconds ?? 30,
     restSeconds: current?.restSeconds ?? 0,
+    initialSoldiersA: message.initialSoldiersA ?? current?.initialSoldiersA ?? 0,
+    initialSoldiersB: message.initialSoldiersB ?? current?.initialSoldiersB ?? 0,
+    reinforcementA: message.reinforcementA ?? current?.reinforcementA ?? 0,
+    reinforcementB: message.reinforcementB ?? current?.reinforcementB ?? 0,
+    sourceIndex: message.sourceIndex ?? current?.sourceIndex ?? null,
     board: message.board,
     visuals: current?.visuals ?? [],
     turnDeadline: message.deadline,
@@ -107,6 +112,11 @@ function gameFromTrialStart(
     turnCount: message.turnCount,
     turnSeconds: message.turnSeconds,
     restSeconds: current?.restSeconds ?? 0,
+    initialSoldiersA: message.initialSoldiersA,
+    initialSoldiersB: message.initialSoldiersB,
+    reinforcementA: message.reinforcementA,
+    reinforcementB: message.reinforcementB,
+    sourceIndex: message.sourceIndex,
     board: message.board,
     visuals: message.visuals,
     turnDeadline: null,
@@ -290,6 +300,15 @@ export default function RoomPage() {
               ? current
               : {
                   ...current,
+                  initialSoldiersA:
+                    message.initialSoldiersA ?? current.initialSoldiersA,
+                  initialSoldiersB:
+                    message.initialSoldiersB ?? current.initialSoldiersB,
+                  reinforcementA:
+                    message.reinforcementA ?? current.reinforcementA,
+                  reinforcementB:
+                    message.reinforcementB ?? current.reinforcementB,
+                  sourceIndex: message.sourceIndex ?? current.sourceIndex,
                   board: message.board,
                   submitted: true,
                   partnerSubmitted: true,

@@ -1,13 +1,17 @@
 import type {
   AdminParticipant,
-  ConditionCell,
-  ConditionVersion,
-  ConditionVisual,
+  BulkPaymentRecord,
   InstructionVersion,
+  MapGroupPayment,
+  MapGroupVersion,
+  MapSlot,
   MediaAsset,
   QuestionnaireVersion,
+  RoomSection,
   RoomSummary,
-  TrialParam,
+  TroopProfile,
+  TroopProfileRow,
+  TroopProfileVersion,
   VersionStatus,
 } from "../shared/types";
 
@@ -86,24 +90,71 @@ export interface MediaUploadResponse {
   asset: MediaAsset;
 }
 
-export interface ConditionListResponse {
-  conditions: ConditionVersion[];
+export interface TroopProfileListResponse {
+  profiles: TroopProfile[];
 }
 
-export interface ConditionResponse {
-  condition: ConditionVersion;
+export interface TroopProfileResponse {
+  troopProfile: TroopProfileVersion;
+}
+
+export interface TroopProfileDraftPayload {
+  name: string;
+  rows: TroopProfileRow[];
+}
+
+export interface MapGroupListResponse {
+  mapGroups: MapGroupVersion[];
+}
+
+export interface MapGroupResponse {
+  mapGroup: MapGroupVersion;
+}
+
+export interface MapGroupMapPayload {
+  slot: MapSlot;
+  description: string;
+  factorLevel: string;
+  cells: (string | null)[];
+}
+
+export interface MapGroupDraftPayload {
+  mode: "both" | "ab";
+  rows: number;
+  cols: number;
+  spawns: { A: number; B: number };
+  troopProfileVersionId: string;
+  practiceTrials: number;
+  formalTrials: number;
+  practiceTurnCap: number;
+  practiceTurnSeconds: number;
+  formalTurnCap: number;
+  formalTurnSeconds: number;
+  restSeconds: number;
+  randomizeFormal: boolean;
+  payment: MapGroupPayment;
+  maps: MapGroupMapPayload[];
 }
 
 export interface InstructionListResponse {
   instructions: InstructionVersion[];
 }
 
+export interface InstructionResponse {
+  instruction: InstructionVersion;
+}
+
 export interface QuestionnaireListResponse {
   questionnaires: QuestionnaireVersion[];
 }
 
+export interface QuestionnaireResponse {
+  questionnaire: QuestionnaireVersion;
+}
+
 export interface RoomListResponse {
   rooms: RoomSummary[];
+  counts: Record<RoomSection, number>;
 }
 
 export interface RoomResponse {
@@ -115,37 +166,20 @@ export interface RoomCopyPayload {
   internalLabel?: string;
 }
 
-export interface ConditionDraftPayload {
-  name: string;
-  description: string | null;
-  rows: number;
-  cols: number;
-  cells: ConditionCell[];
-  visuals: { player1: ConditionVisual[]; player2: ConditionVisual[] };
-  baseAIndex: number;
-  baseBIndex: number;
-  practiceTrials: number;
-  formalTrials: number;
-  turnCount: number;
-  turnSeconds: number;
-  restSeconds: number;
-  randomizeFormal: boolean;
-  trialParams: TrialParam[];
-  metadata: Record<string, unknown>;
-}
-
 export interface RoomDraftPayload {
   internalLabel: string;
   startsAt: string;
-  conditionVersionId: string;
+  mapGroupVersionId: string;
   instructionVersionP1Id: string;
   instructionVersionP2Id: string;
   questionnaireVersionId: string;
-  basePayCents: number;
-  performanceRateCents: number;
-  showupPayCents: number;
   waitWindowSeconds: number;
   reconnectWindowSeconds: number;
+}
+
+export interface RoomBatchPayload {
+  template: RoomDraftPayload;
+  count: number;
 }
 
 export interface QuestionnaireLink {
@@ -159,6 +193,18 @@ export interface ResendQuestionnaireResponse {
 
 export interface PaymentsResponse {
   payments: import("../shared/types").PaymentAdmin[];
+}
+
+export interface BulkPaymentsResponse {
+  payments: BulkPaymentRecord[];
+  from: string;
+  to: string;
+}
+
+export interface BulkMarkPaidResponse {
+  updated: number;
+  skipped: number;
+  payments: BulkPaymentRecord[];
 }
 
 export interface AuditResponse {

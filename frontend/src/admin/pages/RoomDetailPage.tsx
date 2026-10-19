@@ -25,6 +25,7 @@ import type {
   AdminBooking,
   AdminRoomParticipant,
   ArchiveReason,
+  MapGroupVersion,
   Payment,
   RoomDetail,
   RoomMonitor,
@@ -38,6 +39,7 @@ import {
 } from "../../shared/format";
 import { adminApi, adminDownload, errorMessage } from "../api";
 import type {
+  MapGroupResponse,
   ParticipantListResponse,
   QuestionnaireLink,
   ResendQuestionnaireResponse,
@@ -77,6 +79,7 @@ import {
   usePublishedOptions,
 } from "../roomForm";
 import type { RoomFormState } from "../roomForm";
+import { RoomMapPreview } from "./room-preview";
 
 type TabKey = "overview" | "bookings" | "monitor" | "data" | "payments";
 
@@ -87,8 +90,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "data", label: "数据" },
   { key: "payments", label: "付款" },
 ];
-
-const EDITABLE_STATUSES = ["draft", "open", "full", "waiting"];
 
 function findBookingForParticipant(
   detail: RoomDetail,
@@ -112,7 +113,7 @@ function findBookingForParticipant(
 export function RoomDetailPage() {
   const { roomId = "" } = useParams();
   const { notify, confirm } = useUi();
-  const { options } = usePublishedOptions();
+  const { options, loading: optionsLoading } = usePublishedOptions();
   const now = useNow(1000);
 
   const [detail, setDetail] = useState<RoomDetail | null>(null);
@@ -140,6 +141,9 @@ export function RoomDetailPage() {
   const [monitor, setMonitor] = useState<RoomMonitor | null>(null);
   const [monitorLoading, setMonitorLoading] = useState(false);
   const [monitorError, setMonitorError] = useState<string | null>(null);
+  const [previewMapGroup, setPreviewMapGroup] = useState<MapGroupVersion | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [archiveReasonChoice, setArchiveReasonChoice] = useState<string | null>(null);
   const [extendOpen, setExtendOpen] = useState(false);
@@ -234,9 +238,46 @@ export function RoomDetailPage() {
   }, [tab]);
 
   const room = detail?.room ?? null;
-  const canEdit = room !== null && EDITABLE_STATUSES.includes(room.status);
-  const lockStartsAt = room !== null && room.status === "waiting";
   const roomStarted = room !== null && Date.parse(room.startsAt) <= Date.now();
+  const canEdit =
+    room !== null && ["draft", "open", "full"].includes(room.status) && !roomStarted;
+  const lockStartsAt = room !== null && room.status !== "draft";
+  const previewVersionId = room?.mapGroup.versionId ?? "";
+  const optionMapGroup = useMemo(
+    () =>
+      options.mapGroups.find(
+        (item) => item.versionId === previewVersionId || item.id === previewVersionId,
+      ) ?? null,
+    [options.mapGroups, previewVersionId],
+  );
+
+  useEffect(() => {
+    if (!previewVersionId || optionsLoading) return;
+    if (optionMapGroup) {
+      setPreviewMapGroup(optionMapGroup);
+      setPreviewError(null);
+      setPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewMapGroup(null);
+    adminApi
+      .get<MapGroupResponse>(`/map-groups/${previewVersionId}`)
+      .then((response) => {
+        if (!cancelled) setPreviewMapGroup(response.mapGroup);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setPreviewError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [optionsLoading, optionMapGroup, previewVersionId]);
   const archiveOptions =
     room === null ? [] : archiveReasonOptionsForStatus(room.status, roomStarted);
   const defaultArchiveReason =
@@ -260,7 +301,7 @@ export function RoomDetailPage() {
   }, [detail]);
 
   function beginEdit() {
-    if (!room) return;
+    if (!room || !canEdit) return;
     setEditForm(roomFormFromSummary(room));
     setEditErrors({});
     setEditError(null);
@@ -270,6 +311,10 @@ export function RoomDetailPage() {
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editForm || !room) return;
+    if (!canEdit) {
+      setEditError("房间已开始或当前状态不可编辑，无法保存配置");
+      return;
+    }
     const result = buildRoomPayload(editForm);
     setEditErrors(result.errors);
     if (!result.payload) return;
@@ -277,7 +322,7 @@ export function RoomDetailPage() {
     setEditError(null);
     try {
       const payload: Record<string, unknown> = { ...result.payload };
-      if (room.status === "waiting") {
+      if (room.status !== "draft") {
         delete payload.startsAt;
       }
       await adminApi.patch(`/rooms/${room.id}`, payload);
@@ -743,7 +788,7 @@ export function RoomDetailPage() {
               报名 {room.bookedCount}/{room.capacity}
             </span>
             <span className="admin-hint">
-              条件 {room.condition.name} v{room.condition.version}
+              地图组 {room.mapGroup.name} v{room.mapGroup.version}
             </span>
             {room.configLockedAt ? (
               <span className="admin-hint">配置锁定 {formatDateTime(room.configLockedAt)}</span>
@@ -792,8 +837,8 @@ export function RoomDetailPage() {
               <form onSubmit={saveEdit}>
                 <InlineNotice tone="info">
                   {lockStartsAt
-                    ? "房间已进入等待阶段，开始时间不可修改。其他配置变动会写入配置变更历史。"
-                    : "保存后配置变动会写入配置变更历史。"}
+                    ? "非草稿房间不可修改开始时间。地图组、指导语、问卷与窗口配置的变动会写入配置变更历史。"
+                    : "保存后配置变动会写入配置变更历史。开始时间之后不能再修改配置。"}
                 </InlineNotice>
                 <RoomConfigFields
                   form={editForm}
@@ -801,14 +846,14 @@ export function RoomDetailPage() {
                   options={options}
                   onChange={setEditForm}
                   lockStartsAt={lockStartsAt}
-                  disabled={savingEdit}
+                  disabled={savingEdit || !canEdit}
                 />
                 {editError ? <InlineNotice tone="error">{editError}</InlineNotice> : null}
                 <div className="admin-form-actions">
                   <button
                     type="submit"
                     className="admin-btn admin-btn-primary"
-                    disabled={savingEdit}
+                    disabled={savingEdit || !canEdit}
                     data-testid="room-edit-save"
                   >
                     {savingEdit ? "保存中" : "保存配置"}
@@ -841,9 +886,32 @@ export function RoomDetailPage() {
                   <dd>{formatDateTime(room.startsAt)}</dd>
                 </div>
                 <div>
-                  <dt>条件</dt>
+                  <dt>地图组</dt>
                   <dd>
-                    {room.condition.name} v{room.condition.version}
+                    {room.mapGroup.name} v{room.mapGroup.version}（
+                    {room.mapGroup.mode === "both" ? "Both 模式" : "A/B 模式"}）
+                  </dd>
+                </div>
+                <div>
+                  <dt>地图</dt>
+                  <dd>
+                    {room.mapGroup.maps.map((map) => (
+                      <div key={map.slot}>
+                        {map.slot}：{map.name}
+                      </div>
+                    ))}
+                  </dd>
+                </div>
+                <div>
+                  <dt>兵力方案</dt>
+                  <dd>
+                    {room.mapGroup.troopProfile.name} v{room.mapGroup.troopProfile.version}
+                  </dd>
+                </div>
+                <div>
+                  <dt>地图尺寸</dt>
+                  <dd>
+                    {room.mapGroup.rows} × {room.mapGroup.cols}
                   </dd>
                 </div>
                 <div>
@@ -865,16 +933,24 @@ export function RoomDetailPage() {
                   </dd>
                 </div>
                 <div>
-                  <dt>基础费</dt>
-                  <dd>{formatMoney(room.basePayCents)}</dd>
+                  <dt>容量</dt>
+                  <dd>{room.capacity}（固定）</dd>
                 </div>
                 <div>
-                  <dt>绩效单价</dt>
-                  <dd>{formatMoney(room.performanceRateCents)} / 士兵</dd>
+                  <dt>基础费（继承自地图组）</dt>
+                  <dd>{formatMoney(room.mapGroup.payment.basePayCents)}</dd>
                 </div>
                 <div>
-                  <dt>到场费</dt>
-                  <dd>{formatMoney(room.showupPayCents)}</dd>
+                  <dt>绩效单价（继承自地图组）</dt>
+                  <dd>{formatMoney(room.mapGroup.payment.performanceRateCents)} / 士兵</dd>
+                </div>
+                <div>
+                  <dt>绩效上限（继承自地图组）</dt>
+                  <dd>{formatMoney(room.mapGroup.payment.performanceCapCents)}</dd>
+                </div>
+                <div>
+                  <dt>到场费（继承自地图组）</dt>
+                  <dd>{formatMoney(room.mapGroup.payment.showupPayCents)}</dd>
                 </div>
                 <div>
                   <dt>等待窗口</dt>
@@ -900,6 +976,22 @@ export function RoomDetailPage() {
                 </div>
               </dl>
             )}
+          </section>
+
+          <section className="admin-card">
+            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
+              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
+                地图预览
+              </h2>
+              <span className="admin-hint">
+                只读预览，不显示归属、兵力与收益
+              </span>
+            </div>
+            <RoomMapPreview
+              mapGroup={previewMapGroup}
+              loading={optionsLoading || previewLoading}
+              error={previewError}
+            />
           </section>
 
           <section className="admin-card">

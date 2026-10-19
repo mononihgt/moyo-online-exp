@@ -1,23 +1,27 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
-  ConditionVersion,
   InstructionVersion,
+  MapGroupVersion,
   QuestionnaireVersion,
   RoomSummary,
 } from "../shared/types";
+import { formatMoney } from "../shared/format";
 import { adminApi, errorMessage } from "./api";
-import type { ConditionListResponse, InstructionListResponse, QuestionnaireListResponse, RoomDraftPayload } from "./types";
+import type {
+  InstructionListResponse,
+  MapGroupListResponse,
+  QuestionnaireListResponse,
+  RoomDraftPayload,
+} from "./types";
 import {
   Field,
   LoadingBlock,
-  centsFromYuan,
   fromShanghaiInput,
   toShanghaiInput,
-  yuanFromCents,
 } from "./ui";
 
 export interface RoomOptions {
-  conditions: ConditionVersion[];
+  mapGroups: MapGroupVersion[];
   instructions: InstructionVersion[];
   questionnaires: QuestionnaireVersion[];
 }
@@ -25,13 +29,10 @@ export interface RoomOptions {
 export interface RoomFormState {
   internalLabel: string;
   startsAt: string;
-  conditionVersionId: string;
+  mapGroupVersionId: string;
   instructionVersionP1Id: string;
   instructionVersionP2Id: string;
   questionnaireVersionId: string;
-  basePay: string;
-  performanceRate: string;
-  showupPay: string;
   waitMinutes: string;
   reconnectMinutes: string;
 }
@@ -47,7 +48,7 @@ export function usePublishedOptions(): {
   error: string | null;
 } {
   const [options, setOptions] = useState<RoomOptions>({
-    conditions: [],
+    mapGroups: [],
     instructions: [],
     questionnaires: [],
   });
@@ -58,13 +59,13 @@ export function usePublishedOptions(): {
     setLoading(true);
     setError(null);
     try {
-      const [conditions, instructions, questionnaires] = await Promise.all([
-        adminApi.get<ConditionListResponse>("/conditions"),
+      const [mapGroups, instructions, questionnaires] = await Promise.all([
+        adminApi.get<MapGroupListResponse>("/map-groups"),
         adminApi.get<InstructionListResponse>("/instructions"),
         adminApi.get<QuestionnaireListResponse>("/questionnaires"),
       ]);
       setOptions({
-        conditions: conditions.conditions.filter((item) => item.status === "published"),
+        mapGroups: mapGroups.mapGroups.filter((item) => item.status === "published"),
         instructions: instructions.instructions.filter((item) => item.status === "published"),
         questionnaires: questionnaires.questionnaires.filter((item) => item.status === "published"),
       });
@@ -88,20 +89,35 @@ export function defaultStartInput(): string {
   return toShanghaiInput(date.toISOString());
 }
 
+export function mapGroupVersionIdOf(group: MapGroupVersion): string {
+  return group.versionId;
+}
+
+export function instructionsForGroup(
+  options: RoomOptions,
+  mapGroupVersionId: string,
+  role: 1 | 2,
+): InstructionVersion[] {
+  const group = options.mapGroups.find(
+    (item) => item.versionId === mapGroupVersionId || item.id === mapGroupVersionId,
+  );
+  if (!group) return [];
+  return options.instructions.filter(
+    (item) => item.role === role && item.mapGroupPrefix === group.name,
+  );
+}
+
 export function defaultRoomForm(options: RoomOptions): RoomFormState {
-  const instructionP1 = options.instructions.find((item) => item.role === 1);
-  const instructionP2 = options.instructions.find((item) => item.role === 2);
+  const mapGroup = options.mapGroups[0];
+  const mapGroupVersionId = mapGroup ? mapGroupVersionIdOf(mapGroup) : "";
   return {
     internalLabel: "",
     startsAt: defaultStartInput(),
-    conditionVersionId: options.conditions[0]?.id ?? "",
-    instructionVersionP1Id: instructionP1?.id ?? "",
-    instructionVersionP2Id: instructionP2?.id ?? "",
-    questionnaireVersionId: options.questionnaires[0]?.id ?? "",
-    basePay: "40.00",
-    performanceRate: "0.00",
-    showupPay: "10.00",
-    waitMinutes: "15",
+    mapGroupVersionId,
+    instructionVersionP1Id: instructionsForGroup(options, mapGroupVersionId, 1)[0]?.versionId ?? "",
+    instructionVersionP2Id: instructionsForGroup(options, mapGroupVersionId, 2)[0]?.versionId ?? "",
+    questionnaireVersionId: options.questionnaires[0]?.versionId ?? "",
+    waitMinutes: "10",
     reconnectMinutes: "10",
   };
 }
@@ -110,13 +126,10 @@ export function roomFormFromSummary(room: RoomSummary): RoomFormState {
   return {
     internalLabel: room.internalLabel,
     startsAt: toShanghaiInput(room.startsAt),
-    conditionVersionId: room.condition.id,
+    mapGroupVersionId: room.mapGroup.versionId,
     instructionVersionP1Id: room.instructions.player1.id,
     instructionVersionP2Id: room.instructions.player2.id,
     questionnaireVersionId: room.questionnaire.id,
-    basePay: yuanFromCents(room.basePayCents),
-    performanceRate: yuanFromCents(room.performanceRateCents),
-    showupPay: yuanFromCents(room.showupPayCents),
     waitMinutes: String(Math.round(room.waitWindowSeconds / 60)),
     reconnectMinutes: String(Math.round(room.reconnectWindowSeconds / 60)),
   };
@@ -138,17 +151,11 @@ export function buildRoomPayload(form: RoomFormState): RoomPayloadResult {
       errors.startsAt = "开始时间格式不正确";
     }
   }
-  if (!form.conditionVersionId) errors.conditionVersionId = "请选择条件版本";
+
+  if (!form.mapGroupVersionId) errors.mapGroupVersionId = "请选择地图组";
   if (!form.instructionVersionP1Id) errors.instructionVersionP1Id = "请选择玩家 1 指导语";
   if (!form.instructionVersionP2Id) errors.instructionVersionP2Id = "请选择玩家 2 指导语";
   if (!form.questionnaireVersionId) errors.questionnaireVersionId = "请选择问卷版本";
-
-  const basePay = centsFromYuan(form.basePay);
-  if (basePay === null) errors.basePay = "基础费必须是非负金额";
-  const performanceRate = centsFromYuan(form.performanceRate);
-  if (performanceRate === null) errors.performanceRate = "绩效单价必须是非负金额";
-  const showupPay = centsFromYuan(form.showupPay);
-  if (showupPay === null) errors.showupPay = "到场费必须是非负金额";
 
   const waitMinutes = Number(form.waitMinutes);
   if (!Number.isFinite(waitMinutes) || waitMinutes <= 0) {
@@ -168,13 +175,10 @@ export function buildRoomPayload(form: RoomFormState): RoomPayloadResult {
     payload: {
       internalLabel,
       startsAt,
-      conditionVersionId: form.conditionVersionId,
+      mapGroupVersionId: form.mapGroupVersionId,
       instructionVersionP1Id: form.instructionVersionP1Id,
       instructionVersionP2Id: form.instructionVersionP2Id,
       questionnaireVersionId: form.questionnaireVersionId,
-      basePayCents: basePay as number,
-      performanceRateCents: performanceRate as number,
-      showupPayCents: showupPay as number,
       waitWindowSeconds: Math.round(waitMinutes * 60),
       reconnectWindowSeconds: Math.round(reconnectMinutes * 60),
     },
@@ -200,16 +204,39 @@ export function RoomConfigFields({
     onChange({ ...form, [key]: value });
   };
 
-  if (options.conditions.length === 0 && options.instructions.length === 0 && options.questionnaires.length === 0) {
-    return (
-      <div className="admin-hint">
-        尚无可选版本。请先在条件、指导语和问卷页面创建并发布版本。
-      </div>
-    );
-  }
+  const selectedGroup = options.mapGroups.find(
+    (item) => item.versionId === form.mapGroupVersionId || item.id === form.mapGroupVersionId,
+  );
+  const p1Options = selectedGroup ? instructionsForGroup(options, form.mapGroupVersionId, 1) : [];
+  const p2Options = selectedGroup ? instructionsForGroup(options, form.mapGroupVersionId, 2) : [];
 
-  const p1Options = options.instructions.filter((item) => item.role === 1);
-  const p2Options = options.instructions.filter((item) => item.role === 2);
+  function changeMapGroup(nextId: string) {
+    const group = options.mapGroups.find(
+      (item) => item.versionId === nextId || item.id === nextId,
+    );
+    const prefix = group?.name ?? "";
+    const validForGroup = (instructionId: string, role: 1 | 2) =>
+      options.instructions.some(
+        (item) =>
+          item.versionId === instructionId && item.role === role && item.mapGroupPrefix === prefix,
+      );
+    const nextP1 = validForGroup(form.instructionVersionP1Id, 1)
+      ? form.instructionVersionP1Id
+      : options.instructions.find(
+          (item) => item.role === 1 && item.mapGroupPrefix === prefix,
+        )?.versionId ?? "";
+    const nextP2 = validForGroup(form.instructionVersionP2Id, 2)
+      ? form.instructionVersionP2Id
+      : options.instructions.find(
+          (item) => item.role === 2 && item.mapGroupPrefix === prefix,
+        )?.versionId ?? "";
+    onChange({
+      ...form,
+      mapGroupVersionId: nextId,
+      instructionVersionP1Id: nextP1,
+      instructionVersionP2Id: nextP2,
+    });
+  }
 
   return (
     <div>
@@ -229,7 +256,11 @@ export function RoomConfigFields({
           label="开始时间（Asia/Shanghai）"
           htmlFor="room-starts-at"
           error={errors.startsAt}
-          hint={lockStartsAt ? "房间已进入等待阶段，开始时间已锁定。" : undefined}
+          hint={
+            lockStartsAt
+              ? "非草稿房间不可修改开始时间。"
+              : "开始时间之后不能修改房间配置。"
+          }
         >
           <input
             id="room-starts-at"
@@ -242,115 +273,104 @@ export function RoomConfigFields({
           />
         </Field>
       </div>
-      <div className="admin-form-row admin-form-row-3">
-        <Field label="条件版本" htmlFor="room-condition" error={errors.conditionVersionId}>
+      <div className="admin-form-row">
+        <Field
+          label="地图组"
+          htmlFor="room-map-group"
+          error={errors.mapGroupVersionId}
+          hint={selectedGroup ? `容量固定为 2；地图组尺寸 ${selectedGroup.rows} × ${selectedGroup.cols}` : undefined}
+        >
           <select
-            id="room-condition"
+            id="room-map-group"
             className="admin-select"
-            value={form.conditionVersionId}
-            onChange={(event) => set("conditionVersionId", event.target.value)}
+            value={form.mapGroupVersionId}
+            onChange={(event) => changeMapGroup(event.target.value)}
             disabled={disabled}
-            data-testid="room-form-condition"
+            data-testid="room-form-map-group"
           >
             <option value="">请选择</option>
-            {options.conditions.map((condition) => (
-              <option key={condition.id} value={condition.id}>
-                {condition.name} v{condition.version}
+            {options.mapGroups.map((group) => (
+              <option key={group.versionId} value={group.versionId}>
+                {group.name} v{group.version}（{group.mode === "both" ? "Both" : "A/B"}）
               </option>
             ))}
           </select>
         </Field>
-        <Field label="玩家 1 指导语" htmlFor="room-instruction-p1" error={errors.instructionVersionP1Id}>
+        <div className="admin-field">
+          <span className="admin-label">付款参数（继承自地图组）</span>
+          {selectedGroup ? (
+            <div className="admin-hint" style={{ lineHeight: 1.7 }}>
+              基础费 {formatMoney(selectedGroup.payment.basePayCents)} · 绩效单价{" "}
+              {formatMoney(selectedGroup.payment.performanceRateCents)} / 士兵 · 绩效上限{" "}
+              {formatMoney(selectedGroup.payment.performanceCapCents)} · 到场费{" "}
+              {formatMoney(selectedGroup.payment.showupPayCents)}
+            </div>
+          ) : (
+            <div className="admin-hint">选择地图组后显示继承的付款参数。</div>
+          )}
+        </div>
+      </div>
+      <div className="admin-form-row admin-form-row-3">
+        <Field
+          label="玩家 1 指导语"
+          htmlFor="room-instruction-p1"
+          error={errors.instructionVersionP1Id}
+          hint={selectedGroup && p1Options.length === 0 ? "该地图组前缀下暂无已发布指导语。" : undefined}
+        >
           <select
             id="room-instruction-p1"
             className="admin-select"
             value={form.instructionVersionP1Id}
             onChange={(event) => set("instructionVersionP1Id", event.target.value)}
-            disabled={disabled}
+            disabled={disabled || !selectedGroup}
             data-testid="room-form-instruction-p1"
           >
             <option value="">请选择</option>
             {p1Options.map((instruction) => (
-              <option key={instruction.id} value={instruction.id}>
+              <option key={instruction.versionId} value={instruction.versionId}>
                 {instruction.name} v{instruction.version}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="玩家 2 指导语" htmlFor="room-instruction-p2" error={errors.instructionVersionP2Id}>
+        <Field
+          label="玩家 2 指导语"
+          htmlFor="room-instruction-p2"
+          error={errors.instructionVersionP2Id}
+          hint={selectedGroup && p2Options.length === 0 ? "该地图组前缀下暂无已发布指导语。" : undefined}
+        >
           <select
             id="room-instruction-p2"
             className="admin-select"
             value={form.instructionVersionP2Id}
             onChange={(event) => set("instructionVersionP2Id", event.target.value)}
-            disabled={disabled}
+            disabled={disabled || !selectedGroup}
             data-testid="room-form-instruction-p2"
           >
             <option value="">请选择</option>
             {p2Options.map((instruction) => (
-              <option key={instruction.id} value={instruction.id}>
+              <option key={instruction.versionId} value={instruction.versionId}>
                 {instruction.name} v{instruction.version}
               </option>
             ))}
           </select>
         </Field>
-      </div>
-      <Field label="问卷版本" htmlFor="room-questionnaire" error={errors.questionnaireVersionId}>
-        <select
-          id="room-questionnaire"
-          className="admin-select"
-          value={form.questionnaireVersionId}
-          onChange={(event) => set("questionnaireVersionId", event.target.value)}
-          disabled={disabled}
-          data-testid="room-form-questionnaire"
-        >
-          <option value="">请选择</option>
-          {options.questionnaires.map((questionnaire) => (
-            <option key={questionnaire.id} value={questionnaire.id}>
-              {questionnaire.name} v{questionnaire.version}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <div className="admin-form-row admin-form-row-3">
-        <Field label="基础费（元）" htmlFor="room-base-pay" error={errors.basePay}>
-          <input
-            id="room-base-pay"
-            className="admin-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={form.basePay}
-            onChange={(event) => set("basePay", event.target.value)}
+        <Field label="问卷版本" htmlFor="room-questionnaire" error={errors.questionnaireVersionId}>
+          <select
+            id="room-questionnaire"
+            className="admin-select"
+            value={form.questionnaireVersionId}
+            onChange={(event) => set("questionnaireVersionId", event.target.value)}
             disabled={disabled}
-            data-testid="room-form-base-pay"
-          />
-        </Field>
-        <Field label="绩效单价（元）" htmlFor="room-performance-rate" error={errors.performanceRate}>
-          <input
-            id="room-performance-rate"
-            className="admin-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={form.performanceRate}
-            onChange={(event) => set("performanceRate", event.target.value)}
-            disabled={disabled}
-            data-testid="room-form-performance-rate"
-          />
-        </Field>
-        <Field label="到场费（元）" htmlFor="room-showup-pay" error={errors.showupPay}>
-          <input
-            id="room-showup-pay"
-            className="admin-input"
-            type="number"
-            min="0"
-            step="0.01"
-            value={form.showupPay}
-            onChange={(event) => set("showupPay", event.target.value)}
-            disabled={disabled}
-            data-testid="room-form-showup-pay"
-          />
+            data-testid="room-form-questionnaire"
+          >
+            <option value="">请选择</option>
+            {options.questionnaires.map((questionnaire) => (
+              <option key={questionnaire.versionId} value={questionnaire.versionId}>
+                {questionnaire.name} v{questionnaire.version}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
       <div className="admin-form-row">
@@ -381,8 +401,17 @@ export function RoomConfigFields({
           />
         </Field>
       </div>
+      {options.mapGroups.length === 0 ? (
+        <p className="admin-hint">尚无可选地图组。请先在地图组页面创建并发布版本。</p>
+      ) : null}
+      {options.instructions.length === 0 ? (
+        <p className="admin-hint">尚无可选指导语。请先在指导语页面创建并发布版本。</p>
+      ) : null}
+      {options.questionnaires.length === 0 ? (
+        <p className="admin-hint">尚无可选问卷。请先在问卷页面创建并发布版本。</p>
+      ) : null}
       <p className="admin-hint" style={{ margin: 0 }}>
-        金额以元输入，保存时转换为整数分。开始时间按 Asia/Shanghai 解释。
+        付款参数与容量继承自所选地图组。开始时间按 Asia/Shanghai 解释。
       </p>
     </div>
   );
