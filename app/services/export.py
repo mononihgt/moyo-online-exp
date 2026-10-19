@@ -118,10 +118,7 @@ def _turn_payload(turn: Turn) -> dict:
 
 def _trial_params(raw: dict | None) -> dict:
     data = raw if isinstance(raw, dict) else {}
-    return {
-        "soldiersA": data.get("soldiersA", data.get("baseSoldiersA", data.get("initialSoldiersA"))),
-        "soldiersB": data.get("soldiersB", data.get("baseSoldiersB", data.get("initialSoldiersB"))),
-    }
+    return {"soldiersA": data.get("soldiersA"), "soldiersB": data.get("soldiersB")}
 
 
 def _trial_plan_payload(plan: dict | None) -> dict:
