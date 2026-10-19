@@ -283,10 +283,7 @@ export default function RoomPage() {
           break;
         }
         case "turn_result": {
-          const resultDisplayMs =
-            message.resultDisplayMs ??
-            (message.warLocation.length > 0 ? RESULT_DISPLAY_MS : 0);
-          setResult(resultDisplayMs > 0 ? message : null);
+          setResult(message);
           setSubmittedLocal(true);
           setGame((current) =>
             current === null

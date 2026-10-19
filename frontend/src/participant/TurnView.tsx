@@ -57,6 +57,7 @@ export function TurnView({
   const socketActive = socketStatus === "open";
   const clockActive = socketActive && partner.online;
   const roundKey = `${game.trialIndex}:${game.round}`;
+  const roleKey = role === 1 ? "player1" : "player2";
   const lastRemainingRef = useRef(game.turnSeconds);
 
   useEffect(() => {
@@ -69,19 +70,21 @@ export function TurnView({
     }
   }, [result]);
 
-  const board: BoardState | null = result?.board ?? turn?.board ?? game.board;
+  const board: BoardState | null =
+    result?.board ?? game.board ?? turn?.board ?? null;
   const warCells = result?.warLocation ?? [];
   const flashKey = result === null ? "" : `war-${result.trialIndex}-${result.round}`;
   const displayRound = result?.round ?? game.round;
-  const deadline = result?.deadline ?? turn?.deadline ?? game.turnDeadline;
+  const deadline = result?.deadline ?? game.turnDeadline ?? turn?.deadline;
+  const turnSeconds = game.turnSeconds > 0 ? game.turnSeconds : 30;
   const rawRemaining = secondsLeft(deadline, now, serverOffsetMs);
   if (rawRemaining !== null && clockActive) {
-    lastRemainingRef.current = rawRemaining;
+    lastRemainingRef.current =
+      result !== null ? Math.min(rawRemaining, turnSeconds) : rawRemaining;
   }
   const remaining = clockActive
     ? rawRemaining ?? lastRemainingRef.current
     : lastRemainingRef.current;
-  const turnSeconds = game.turnSeconds > 0 ? game.turnSeconds : 30;
   const displayRemaining = result !== null ? turnSeconds : remaining;
   const progress = Math.max(0, Math.min(100, (displayRemaining / turnSeconds) * 100));
   const countdownTone =
@@ -89,6 +92,8 @@ export function TurnView({
   const partnerText = partner.online ? "另一名玩家在线" : "另一名玩家离线";
   const boardSelected = result !== null ? [] : selected;
   const submittedView = result !== null || submitted;
+  const autoSelectedBySelf =
+    result !== null && result.autoSelected[roleKey] === true;
 
   const toggleCell = (index: number) => {
     if (result !== null || submitted || !socketActive || exitPending) return;
@@ -211,18 +216,24 @@ export function TurnView({
               disabled={!canSubmit}
               onClick={submit}
             >
-              {submittedView ? "已提交" : "确认选择"}
+              {submittedView
+                ? autoSelectedBySelf
+                  ? "已自动选择"
+                  : "已提交"
+                : "确认选择"}
             </button>
             <p className="exp-hint" role="status">
               {exitPending
                 ? "正在退出实验，请稍候…"
-                : submittedView
-                  ? "已提交，等待另一名参与者或回合结算。"
-                  : !socketActive
-                    ? "连接中断，正在重新连接…"
-                    : selected.length === 0
-                      ? "至少选择一个格子"
-                      : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
+                : autoSelectedBySelf
+                  ? "已自动选择，等待下一回合。"
+                  : submittedView
+                    ? "已提交，等待另一名参与者或回合结算。"
+                    : !socketActive
+                      ? "连接中断，正在重新连接…"
+                      : selected.length === 0
+                        ? "至少选择一个格子"
+                        : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
             </p>
           </div>
         </div>

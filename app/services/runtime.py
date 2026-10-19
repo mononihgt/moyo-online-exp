@@ -236,6 +236,8 @@ class RuntimeManager:
                 await self._broadcast_partner_state(db, room)
                 if resumed and state["phase"] == PHASE_TURN:
                     await self._broadcast_turn(db, room, state)
+                elif resumed and state["phase"] == PHASE_REST:
+                    await self._broadcast_rest(db, room, state)
                 return room.id
 
     async def disconnect(self, participant, websocket: WebSocket) -> None:
@@ -630,12 +632,7 @@ class RuntimeManager:
             _save_state(room, state)
             await db.commit()
             await self._broadcast_partner_state(db, room)
-            for role_row in rows:
-                await self._send_json(
-                    room.id,
-                    role_row.participant_id,
-                    {"type": "rest", "roomId": room.id, **self._rest_payload(state, room)},
-                )
+            await self._broadcast_rest(db, room, state)
 
     async def _begin_game(self, db: AsyncSession, room: Room, state: dict) -> None:
         condition = room.config_snapshot["condition"]
@@ -875,7 +872,9 @@ class RuntimeManager:
         else:
             next_turn_seconds = condition["turnSeconds"] + result_animation_ms // 1000
             state["round"] = round_number + 1
-            self._set_turn_deadline(state, next_turn_seconds)
+            self._set_turn_deadline(
+                state, next_turn_seconds, paused_seconds=condition["turnSeconds"]
+            )
             state["turn_generation"] += 1
             if state["turn_deadline"] is not None:
                 self._record_timer(db, room, "turn", utcnow() + timedelta(seconds=next_turn_seconds))
@@ -974,7 +973,9 @@ class RuntimeManager:
             await self._enter_questionnaire(db, room, state)
         else:
             rest_seconds = condition["restSeconds"] + result_animation_ms // 1000
-            self._set_rest_deadline(state, rest_seconds)
+            self._set_rest_deadline(
+                state, rest_seconds, paused_seconds=condition["restSeconds"]
+            )
             state["rest_ready"] = {}
             if state["rest_deadline"] is not None:
                 self._record_timer(db, room, "rest", utcnow() + timedelta(seconds=rest_seconds))
@@ -1181,18 +1182,26 @@ class RuntimeManager:
             )
         state["instruction"]["connected_since"].pop(participant_id, None)
 
-    def _set_turn_deadline(self, state: dict, seconds: int) -> None:
+    def _set_turn_deadline(
+        self, state: dict, seconds: int, paused_seconds: int | None = None
+    ) -> None:
         if state["disconnected"]:
             state["turn_deadline"] = None
-            state["turn_paused_remaining"] = float(seconds)
+            state["turn_paused_remaining"] = float(
+                paused_seconds if paused_seconds is not None else seconds
+            )
             return
         state["turn_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=seconds))
         state["turn_paused_remaining"] = None
 
-    def _set_rest_deadline(self, state: dict, seconds: int) -> None:
+    def _set_rest_deadline(
+        self, state: dict, seconds: int, paused_seconds: int | None = None
+    ) -> None:
         if state["disconnected"]:
             state["rest_deadline"] = None
-            state["rest_paused_remaining"] = float(seconds)
+            state["rest_paused_remaining"] = float(
+                paused_seconds if paused_seconds is not None else seconds
+            )
             return
         state["rest_deadline"] = isoformat_utc(utcnow() + timedelta(seconds=seconds))
         state["rest_paused_remaining"] = None
@@ -1572,6 +1581,12 @@ class RuntimeManager:
             "deadline": state["rest_deadline"],
             "ready": state["rest_ready"],
         }
+
+    async def _broadcast_rest(self, db: AsyncSession, room: Room, state: dict) -> None:
+        rows = await self._room_participant_rows(db, room.id)
+        payload = {"type": "rest", "roomId": room.id, **self._rest_payload(state, room)}
+        for row in rows:
+            await self._send_json(room.id, row.participant_id, payload)
 
     async def _broadcast_trial_start(
         self, db: AsyncSession, room: Room, state: dict, *, announce_game_start: bool = False

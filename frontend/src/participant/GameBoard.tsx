@@ -276,6 +276,10 @@ export function GameBoard({
     if (disabled) setHovered(null);
   }, [disabled]);
 
+  useEffect(() => {
+    setHovered(null);
+  }, [size.height, size.width]);
+
   const cellFromEvent = (event: MouseEvent<HTMLDivElement>): number | null => {
     if (size.width <= 0 || size.height <= 0) return null;
     const rect = event.currentTarget.getBoundingClientRect();

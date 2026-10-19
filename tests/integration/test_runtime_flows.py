@@ -375,6 +375,71 @@ def test_disconnect_pauses_turn_and_reconnect_resumes(server):
 
 
 @pytest.mark.integration
+def test_reconnect_during_rest_broadcasts_deadline_to_partner(server):
+    context = Context(server)
+    import_roster(context.admin, [("休息甲", "13700000043"), ("重连乙", "13700000044")])
+    room = context.room(
+        starts_in_seconds=2,
+        formal=2,
+        turn_count=1,
+        turn_seconds=5,
+        rest_seconds=15,
+        reconnect_window_seconds=30,
+    )
+    participant_a = context.participant("休息甲", "13700000043")
+    participant_b = context.participant("重连乙", "13700000044")
+    _book(context, room, participant_a, participant_b)
+    wait_until(
+        lambda: participant_a.json("GET", "/api/my-room")["room"]["status"] == "waiting",
+        timeout=20,
+    )
+    ws_a, ws_b, role_a, role_b, turn_a, turn_b = _start_game(
+        context, room, participant_a, participant_b
+    )
+    owned_a = [index for index, owner in enumerate(turn_a["board"]["owners"]) if owner == role_a]
+    ws_a.send(
+        "submit_selection",
+        roomId=room["id"],
+        trialIndex=turn_a["trialIndex"],
+        round=turn_a["round"],
+        cells=[owned_a[0]],
+        clientMsgId="rest-a-1",
+    )
+    ws_a.recv_until("turn")
+    owned_b = [index for index, owner in enumerate(turn_b["board"]["owners"]) if owner == role_b]
+    ws_b.send(
+        "submit_selection",
+        roomId=room["id"],
+        trialIndex=turn_b["trialIndex"],
+        round=turn_b["round"],
+        cells=[owned_b[0]],
+        clientMsgId="rest-b-1",
+    )
+    assert ws_a.recv_until("turn_result")["trialEnded"] is True
+    assert ws_b.recv_until("turn_result")["trialEnded"] is True
+    assert ws_a.recv_until("rest")["deadline"] is not None
+    assert ws_b.recv_until("rest")["deadline"] is not None
+
+    ws_b.close()
+    wait_until(
+        lambda: context.admin.json("GET", f"/admin/api/rooms/{room['id']}/monitor")[
+            "restDeadline"
+        ]
+        is None,
+        timeout=10,
+    )
+    ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
+    ws_b.send("enter_room", roomId=room["id"])
+    state_b = ws_b.recv_until("room_state")
+    assert state_b["game"]["restDeadline"] is not None
+    rest_a_after = ws_a.recv_until("rest", timeout=10)
+    assert rest_a_after["deadline"] == state_b["game"]["restDeadline"]
+    ws_a.close()
+    ws_b.close()
+    _close_participants(context.admin, participant_a, participant_b)
+
+
+@pytest.mark.integration
 def test_reconnect_timeout_archives_technical_abort(server):
     context = Context(server)
     import_roster(context.admin, [("在线甲", "13700000051"), ("超时乙", "13700000052")])

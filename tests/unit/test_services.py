@@ -41,6 +41,7 @@ from app.services.rooms import (
     booking_lock_message,
     participant_reward_kind,
 )
+from app.services.runtime import RuntimeManager, _default_state
 from app.timeutil import week_deadline_utc
 
 
@@ -277,3 +278,17 @@ def test_participant_reward_kind_matrix():
         showup_pay_cents=500,
     )
     assert participant_reward_kind(not_full_room, pending, attended) == "none"
+
+
+def test_paused_deadline_excludes_result_animation():
+    manager = RuntimeManager()
+    state = _default_state()
+    state["disconnected"] = {"participant-id": "2026-10-19T00:00:00Z"}
+    manager._set_turn_deadline(state, 61, paused_seconds=60)
+    assert state["turn_deadline"] is None
+    assert state["turn_paused_remaining"] == 60.0
+    manager._set_rest_deadline(state, 31, paused_seconds=30)
+    assert state["rest_deadline"] is None
+    assert state["rest_paused_remaining"] == 30.0
+    manager._set_turn_deadline(state, 61)
+    assert state["turn_paused_remaining"] == 61.0
