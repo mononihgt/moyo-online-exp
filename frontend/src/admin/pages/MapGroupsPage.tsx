@@ -123,6 +123,28 @@ function resizeCells(
   return result;
 }
 
+function remapCellIndex(
+  index: number,
+  oldRows: number,
+  oldCols: number,
+  rows: number,
+  cols: number,
+): number | null {
+  if (
+    !Number.isInteger(index) ||
+    oldRows <= 0 ||
+    oldCols <= 0 ||
+    index < 0 ||
+    index >= oldRows * oldCols
+  ) {
+    return null;
+  }
+  const row = Math.floor(index / oldCols);
+  const col = index % oldCols;
+  if (row >= rows || col >= cols) return null;
+  return row * cols + col;
+}
+
 function parseDimension(value: string): number | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
@@ -240,10 +262,18 @@ export function MapGroupsPage() {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadTarget, setUploadTarget] = useState<{ slot: MapSlot; index: number } | null>(
-    null,
-  );
+  const [uploadTarget, setUploadTarget] = useState<{
+    slot: MapSlot;
+    index: number;
+    session: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const editSessionRef = useRef(0);
+  const formRef = useRef(form);
+
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
 
   const selectedVersion =
     selection !== "new" && selection !== null
@@ -284,6 +314,7 @@ export function MapGroupsPage() {
   }, [profileEntries, form.troopProfileVersionId]);
 
   const applyVersion = useCallback((version: MapGroupVersion) => {
+    editSessionRef.current += 1;
     setSelection(version.id);
     setForm(formFromVersion(version));
     setSelectedIndex(null);
@@ -419,6 +450,7 @@ export function MapGroupsPage() {
 
   function changeMode(mode: MapGroupMode) {
     if (readOnly) return;
+    editSessionRef.current += 1;
     setForm((current) => ({
       ...current,
       mode,
@@ -443,6 +475,9 @@ export function MapGroupsPage() {
       if (rows === null || cols === null || rows * cols > 100) {
         return { ...current, ...textPatch };
       }
+      if (rows === current.gridRows && cols === current.gridCols) {
+        return { ...current, ...textPatch };
+      }
       const total = rows * cols;
       const cells: SlotCells = {
         Both: resizeCells(
@@ -455,10 +490,22 @@ export function MapGroupsPage() {
         A: resizeCells(current.cells.A, current.gridRows, current.gridCols, rows, cols),
         B: resizeCells(current.cells.B, current.gridRows, current.gridCols, rows, cols),
       };
-      let spawnA = current.spawnA;
-      let spawnB = current.spawnB;
-      if (!Number.isInteger(spawnA) || spawnA < 0 || spawnA >= total) spawnA = 0;
-      if (!Number.isInteger(spawnB) || spawnB < 0 || spawnB >= total) spawnB = total - 1;
+      let spawnA = remapCellIndex(
+        current.spawnA,
+        current.gridRows,
+        current.gridCols,
+        rows,
+        cols,
+      );
+      let spawnB = remapCellIndex(
+        current.spawnB,
+        current.gridRows,
+        current.gridCols,
+        rows,
+        cols,
+      );
+      if (spawnA === null) spawnA = 0;
+      if (spawnB === null) spawnB = total - 1;
       if (spawnA === spawnB) spawnB = spawnA === total - 1 ? 0 : total - 1;
       return {
         ...current,
@@ -470,6 +517,21 @@ export function MapGroupsPage() {
         spawnB,
       };
     });
+    const rows = parseDimension(field === "rows" ? value : form.rowsText);
+    const cols = parseDimension(field === "cols" ? value : form.colsText);
+    if (
+      rows !== null &&
+      cols !== null &&
+      rows * cols <= 100 &&
+      (rows !== form.gridRows || cols !== form.gridCols)
+    ) {
+      editSessionRef.current += 1;
+      setSelectedIndex((current) =>
+        current === null
+          ? null
+          : remapCellIndex(current, form.gridRows, form.gridCols, rows, cols),
+      );
+    }
   }
 
   function changeProfile(profileVersionId: string) {
@@ -505,7 +567,11 @@ export function MapGroupsPage() {
       notify("请先选择一个格子", "error");
       return;
     }
-    setUploadTarget({ slot: form.activeSlot, index: effectiveSelectedIndex });
+    setUploadTarget({
+      slot: form.activeSlot,
+      index: effectiveSelectedIndex,
+      session: editSessionRef.current,
+    });
     fileInputRef.current?.click();
   }
 
@@ -542,14 +608,23 @@ export function MapGroupsPage() {
         "/media",
         imageUploadForm(file, "map-cell"),
       );
+      const slotCells = formRef.current.cells[target.slot];
+      if (
+        target.session !== editSessionRef.current ||
+        target.index < 0 ||
+        target.index >= slotCells.length
+      ) {
+        notify("已切换版本，过期上传已丢弃", "error");
+        return;
+      }
       setForm((current) => {
-        const slotCells = current.cells[target.slot];
-        if (target.index >= slotCells.length) return current;
+        const currentCells = current.cells[target.slot];
+        if (target.index >= currentCells.length) return current;
         return {
           ...current,
           cells: {
             ...current.cells,
-            [target.slot]: slotCells.map((cell, cellIndex) =>
+            [target.slot]: currentCells.map((cell, cellIndex) =>
               cellIndex === target.index ? response.asset.id : cell,
             ),
           },
@@ -727,6 +802,7 @@ export function MapGroupsPage() {
   }
 
   function startNewGroup() {
+    editSessionRef.current += 1;
     const entry = preferredProfileEntry(profiles);
     setSelection("new");
     setForm(newFormState(entry?.version.id ?? "", entry?.version.formalTrials ?? 0));
@@ -738,6 +814,7 @@ export function MapGroupsPage() {
   }
 
   function startNextVersion() {
+    editSessionRef.current += 1;
     setSelection("new");
     setSelectedIndex(null);
     setValidationErrors([]);
