@@ -1,3 +1,4 @@
+import { formatShanghaiDate } from "../shared/format";
 import type { IdentityDocumentAnswer, QuestionnaireQuestion } from "../shared/types";
 
 const ALIPAY_PHONE_PATTERN = /^1[3-9]\d{9}$/;
@@ -92,11 +93,14 @@ function isValidBirthDate(value: string): boolean {
   const year = Number(value.slice(0, 4));
   const month = Number(value.slice(4, 6));
   const day = Number(value.slice(6, 8));
-  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
-  const daysInMonth = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return day <= daysInMonth[month - 1];
-}
-
-function isLeapYear(year: number): boolean {
-  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  if (year < 1900) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return false;
+  }
+  return value <= formatShanghaiDate(new Date(), "");
 }

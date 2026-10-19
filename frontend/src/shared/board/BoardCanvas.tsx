@@ -1,4 +1,10 @@
-import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import type { CSSProperties } from "react";
 
 import type { BoardState, ConditionVisual } from "../types";
@@ -6,6 +12,7 @@ import {
   boardImagesReady,
   drawBoard,
   getBoardImageVersion,
+  retryFailedBoardImages,
   subscribeBoardImages,
 } from "./renderBoard";
 
@@ -51,6 +58,25 @@ export function BoardCanvas({
     () => 0,
   );
   const imagesReady = useMemo(() => boardImagesReady(visuals), [visuals, version]);
+
+  useEffect(() => {
+    retryFailedBoardImages();
+  }, [board, visuals]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      retryFailedBoardImages();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") retryFailedBoardImages();
+    };
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;

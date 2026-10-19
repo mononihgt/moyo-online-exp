@@ -99,6 +99,18 @@ export function boardImagesReady(visuals: ConditionVisual[]): boolean {
   return true;
 }
 
+export function retryFailedBoardImages(): void {
+  let changed = false;
+  for (const [assetId, entry] of imageCache) {
+    if (!entry.failed) continue;
+    entry.image.onload = null;
+    entry.image.onerror = null;
+    imageCache.delete(assetId);
+    changed = true;
+  }
+  if (changed) notifyBoardImages();
+}
+
 export interface DrawBoardOptions {
   width: number;
   height: number;
