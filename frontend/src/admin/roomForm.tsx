@@ -4,6 +4,7 @@ import type {
   MapGroupVersion,
   QuestionnaireVersion,
   RoomSummary,
+  VersionStatus,
 } from "../shared/types";
 import { formatMoney } from "../shared/format";
 import { adminApi, errorMessage } from "./api";
@@ -65,9 +66,9 @@ export function usePublishedOptions(): {
         adminApi.get<QuestionnaireListResponse>("/questionnaires"),
       ]);
       setOptions({
-        mapGroups: mapGroups.mapGroups.filter((item) => item.status === "published"),
-        instructions: instructions.instructions.filter((item) => item.status === "published"),
-        questionnaires: questionnaires.questionnaires.filter((item) => item.status === "published"),
+        mapGroups: mapGroups.mapGroups.filter((item) => item.status !== "draft"),
+        instructions: instructions.instructions.filter((item) => item.status !== "draft"),
+        questionnaires: questionnaires.questionnaires.filter((item) => item.status !== "draft"),
       });
     } catch (err) {
       setError(errorMessage(err));
@@ -81,6 +82,10 @@ export function usePublishedOptions(): {
   }, [load]);
 
   return { options, loading, error };
+}
+
+function archivedSuffix(status: VersionStatus): string {
+  return status === "archived" ? "（已归档）" : "";
 }
 
 export function defaultStartInput(): string {
@@ -292,6 +297,7 @@ export function RoomConfigFields({
             {options.mapGroups.map((group) => (
               <option key={group.versionId} value={group.versionId}>
                 {group.name} v{group.version}（{group.mode === "both" ? "Both" : "A/B"}）
+                {archivedSuffix(group.status)}
               </option>
             ))}
           </select>
@@ -315,7 +321,7 @@ export function RoomConfigFields({
           label="玩家 1 指导语"
           htmlFor="room-instruction-p1"
           error={errors.instructionVersionP1Id}
-          hint={selectedGroup && p1Options.length === 0 ? "该地图组前缀下暂无已发布指导语。" : undefined}
+          hint={selectedGroup && p1Options.length === 0 ? "该地图组前缀下暂无可用指导语。" : undefined}
         >
           <select
             id="room-instruction-p1"
@@ -329,6 +335,7 @@ export function RoomConfigFields({
             {p1Options.map((instruction) => (
               <option key={instruction.versionId} value={instruction.versionId}>
                 {instruction.name} v{instruction.version}
+                {archivedSuffix(instruction.status)}
               </option>
             ))}
           </select>
@@ -337,7 +344,7 @@ export function RoomConfigFields({
           label="玩家 2 指导语"
           htmlFor="room-instruction-p2"
           error={errors.instructionVersionP2Id}
-          hint={selectedGroup && p2Options.length === 0 ? "该地图组前缀下暂无已发布指导语。" : undefined}
+          hint={selectedGroup && p2Options.length === 0 ? "该地图组前缀下暂无可用指导语。" : undefined}
         >
           <select
             id="room-instruction-p2"
@@ -351,6 +358,7 @@ export function RoomConfigFields({
             {p2Options.map((instruction) => (
               <option key={instruction.versionId} value={instruction.versionId}>
                 {instruction.name} v{instruction.version}
+                {archivedSuffix(instruction.status)}
               </option>
             ))}
           </select>
@@ -368,6 +376,7 @@ export function RoomConfigFields({
             {options.questionnaires.map((questionnaire) => (
               <option key={questionnaire.versionId} value={questionnaire.versionId}>
                 {questionnaire.name} v{questionnaire.version}
+                {archivedSuffix(questionnaire.status)}
               </option>
             ))}
           </select>
@@ -402,13 +411,13 @@ export function RoomConfigFields({
         </Field>
       </div>
       {options.mapGroups.length === 0 ? (
-        <p className="admin-hint">尚无可选地图组。请先在地图组页面创建并发布版本。</p>
+        <p className="admin-hint">暂无可用地图组。请先在地图组页面创建并发布版本。</p>
       ) : null}
       {options.instructions.length === 0 ? (
-        <p className="admin-hint">尚无可选指导语。请先在指导语页面创建并发布版本。</p>
+        <p className="admin-hint">暂无可用指导语。请先在指导语页面创建并发布版本。</p>
       ) : null}
       {options.questionnaires.length === 0 ? (
-        <p className="admin-hint">尚无可选问卷。请先在问卷页面创建并发布版本。</p>
+        <p className="admin-hint">暂无可用问卷。请先在问卷页面创建并发布版本。</p>
       ) : null}
       <p className="admin-hint" style={{ margin: 0 }}>
         付款参数与容量继承自所选地图组。开始时间按 Asia/Shanghai 解释。
