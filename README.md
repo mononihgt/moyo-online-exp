@@ -5,8 +5,9 @@
 权威功能规格位于上层目录 `specs/`：
 
 - `specs/SPEC_EXPERIMENT_PLATFORM.md`
+- `specs/PARTICIPANT_FLOW.md`
 - `specs/UI_DESIGN.md`
-- `specs/DATA_FORMAT_V4.md`
+- `specs/DATA_FORMAT_V5.md`
 
 ## 技术组成
 
@@ -21,15 +22,15 @@
 ```text
 app/
   api/            参与者、管理端、JATOS、媒体和 WebSocket 路由
-  services/       名单、条件、指导语、问卷、Room、运行时、付款、导出
+  services/       名单、兵力配置方案、地图组、指导语、问卷、Room、运行时、付款、导出
   game/           任意 m×n 战斗引擎和 trial 计划
   main.py         应用工厂、健康检查、安全中间件、前端静态文件
-alembic/          数据库迁移
+alembic/          数据库迁移（v5 迁移为破坏性迁移）
 frontend/
   src/participant 参与者端
   src/admin       管理端
   src/questionnaire JATOS 问卷组件
-  src/shared      类型、API 客户端和格式化
+  src/shared      类型、API 客户端、棋盘渲染器和格式化
   e2e             Node Playwright 冒烟测试
 tests/
   unit/           引擎、校验、手机号、付款和格式单元测试
@@ -79,6 +80,7 @@ PUBLIC_BASE_URL=http://127.0.0.1:8000
 SECRET_KEY=<openssl rand -hex 32>
 PHONE_HMAC_KEY=<openssl rand -hex 32>
 PHONE_ENCRYPTION_KEY=<openssl rand -base64 32 | tr '+/' '-_'>
+IDENTITY_ENCRYPTION_KEY=<openssl rand -base64 32 | tr '+/' '-_'>
 DATABASE_URL=mysql+aiomysql://moyo:moyo_dev_password@127.0.0.1:3307/moyo?charset=utf8mb4
 ADMIN_USERNAME=admin
 ADMIN_INITIAL_PASSWORD=<至少 12 位密码>
@@ -89,7 +91,19 @@ COOKIE_SECURE=false
 TZ=Asia/Shanghai
 ```
 
-生产环境必须使用 HTTPS，`COOKIE_SECURE=true`，并设置 `TRUST_PROXY_HEADERS=true`。
+生产环境必须使用 HTTPS，`COOKIE_SECURE=true`，并设置 `TRUST_PROXY_HEADERS=true`。`IDENTITY_ENCRYPTION_KEY` 是受保护问卷字段的 Fernet 密钥，必须与 `PHONE_ENCRYPTION_KEY` 不同，并与数据库和媒体备份分开保存。
+
+### 破坏性迁移与备份
+
+v5 迁移 `5b8e2f4c9a71` 是破坏性迁移，执行 `uv run alembic upgrade head` 前必须完成备份：
+
+- 删除全部 Room 相关数据：Room、预约、参与者关联、trial、回合、回合提交、问卷草稿、问卷响应、付款、事件、计时器和配置修订。
+- 删除全部旧指导语版本。
+- 删除 `condition_versions` 表，并从 `rooms` 删除旧条件外键和 Room 级费用字段。
+- 不删除被试白名单、问卷版本、同意书版本和管理员账号。
+- 不提供 v4 数据读取路径；降级迁移只能恢复表结构，不能恢复被删除的数据。
+
+部署前备份 MariaDB 的 `moyo` 数据库、`data/media` 和 JATOS 数据卷。备份必须包含 `IDENTITY_ENCRYPTION_KEY`；该密钥丢失后，已保存的真实姓名、支付宝手机号和证件号码无法解密。
 
 ### 启动
 
@@ -103,7 +117,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 
 必须使用单 worker。匹配队列不保存在进程内，但 WebSocket 连接和运行时定时任务保存在进程内。
 
-首次启动会创建管理员账号并写入内置条件预设 `ref0` 到 `ref5` 和 `asym`。管理员通过 `/admin/login` 登录；参与者通过 `/login` 登录。
+首次启动会创建管理员账号并写入内置只读兵力配置方案 `default-pracEqual-formalEqAndIneq`。管理员通过 `/admin/login` 登录；参与者通过 `/login` 登录。
 
 开发前端时可单独运行：
 
@@ -129,6 +143,8 @@ JATOS study 的批次必须允许 `GeneralMultiple`。API 创建的 study 默认
 
 问卷组件支持草稿、重新进入、平台双写和按 JATOS result ID 幂等。管理端可以重新签发问卷链接，并手动补齐 JATOS 结果。
 
+问卷必须包含真实姓名、支付宝手机号和身份证明三个受保护题型。平台在草稿、上下文回显和导出中移除这些字段，提交时使用 `IDENTITY_ENCRYPTION_KEY` 加密保存到平台身份记录。JATOS 自身仍可能保存组件提交的原始答案，包括受保护字段；JATOS 管理权限、数据库和备份必须按同样的个人信息标准保护。
+
 ## 测试
 
 所有测试使用真实代码、真实 MariaDB、真实 uvicorn、真实 WebSocket 客户端、真实 JATOS 和真实浏览器，不使用 mock。
@@ -137,8 +153,14 @@ JATOS study 的批次必须允许 `GeneralMultiple`。API 创建的 study 默认
 # 单元测试（不需要数据库）
 uv run pytest tests/unit
 
+# v5 身份字段与材料校验单元测试
+uv run pytest tests/unit/test_identity.py tests/unit/test_materials_v5.py
+
 # 集成测试（需要 moyo_test 数据库）
 uv run pytest tests/integration -m "not jatos"
+
+# v5 参与者流程与运行时集成测试
+uv run pytest tests/integration/test_participant_flow.py tests/integration/test_runtime_flows.py
 
 # 真实 JATOS 双写与问卷组件测试（需要 JATOS 与 API token）
 uv run pytest tests/integration/test_jatos.py
@@ -166,21 +188,27 @@ CHROME_PATH（Node Playwright）
 
 ## 数据与导出
 
-- 统一 `schemaVersion = 4`。
+- 统一 `schemaVersion = 5`。
 - 完整 Room JSON：`GET /admin/api/rooms/{id}/export.json`。
-- 分析 ZIP：`GET /admin/api/rooms/{id}/analysis.zip`，包含 manifest、room、participants、trials、turns、questionnaire、events、payment 和媒体快照。
-- 付款名单：`GET /admin/api/payments/export.csv`，包含姓名和手机号，仅管理员可下载，并写入审计日志。
-- 分析导出使用假名分析编号 `P-` 加 12 位十六进制，不包含姓名、手机号和内部参与者 UUID。
-- 旧 `schemaVersion = 3` 数据不迁移，不提供兼容导出。
+- 分析 ZIP：`GET /admin/api/rooms/{id}/analysis.zip`，包含 manifest、room、participants、trials、turns、questionnaire、events、payment 和媒体快照。`payment.csv` 保留全部 Payment 记录。
+- 支付名单：`GET /admin/api/payments/export-payment-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、待支付、非技术中止的记录，包含姓名和支付宝手机号，仅管理员可下载，并写入审计日志。
+- 报销清单：`GET /admin/api/payments/export-reimbursement-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、已支付、非技术中止的记录，包含姓名、手机号和证件号码，仅管理员可下载，并写入审计日志。
+- 批量付款：`GET /admin/api/payments/bulk?from=YYYY-MM-DD&to=YYYY-MM-DD` 返回区间内全部 Payment，包含技术中止到场费和已支付记录；`POST /admin/api/payments/bulk-mark-paid` 只更新待支付记录并统计跳过数量。
+- 分析导出使用假名分析编号 `P-` 加 12 位十六进制，不包含姓名、手机号、身份证号和内部参与者 UUID。受保护问卷字段不进入分析 ZIP。
+- 归档快照保存地图组、指导语、问卷结构、配置和媒体清单；导出材料优先使用该快照，运行数据、问卷答案和付款实时读取。
+- v4 数据和读取路径已删除，不提供兼容导出。
 - 平台不包含分析脚本。
 
 ## 安全
 
-- 手机号使用 HMAC-SHA256 查找和 Fernet 加密存储，日志不记录手机号、token、密码和会话 cookie。
+- 手机号使用 HMAC-SHA256 查找和 Fernet 加密存储，日志不记录手机号、token、密码和登录 cookie。
+- 真实姓名、支付宝手机号和证件号码使用独立的 `IDENTITY_ENCRYPTION_KEY` 加密，不进入问卷答案 JSON、草稿、Room JSON 和分析导出；支付名单和报销清单按规则解密生成。
 - 管理员密码使用 Argon2。
-- 会话 cookie 为 HttpOnly、Secure（HTTPS）和 SameSite=Lax；管理端和参与者写操作校验 CSRF。
+- 登录 cookie 为 HttpOnly、Secure（HTTPS）和 SameSite=Lax；管理端和参与者写操作校验 CSRF。
 - 登录和问卷接口限流。
-- 媒体文件通过鉴权路由访问；上传仅接受 PNG、JPEG、WebP，服务端重新编码并剥离 EXIF，不接受 SVG。
+- 媒体文件通过鉴权路由访问；上传仅接受 PNG、JPEG、WebP，服务端重新编码并剥离 EXIF，不接受 SVG。地图单元格只接受 PNG 和 JPEG。
+- 支付名单、报销清单和批量付款页面包含个人信息，只允许管理员访问并写入审计日志。
+- JATOS 原始结果可能保留受保护答案，需要单独保护 JATOS 管理权限、数据库和备份。
 - 公开 API 文档关闭。
 - 全站建议由 Caddy 终止 HTTPS 并启用 HSTS。
 
@@ -195,4 +223,4 @@ CHROME_PATH（Node Playwright）
 - `scripts/backup.sh`
 - `DEPLOYMENT.md`
 
-部署需要用户提供云服务器、域名和 DNS。`DEPLOYMENT.md` 包含服务器检查清单、密钥生成、JATOS study 与组件配置、证书验证、备份和恢复演练步骤。
+部署需要用户提供云服务器、域名和 DNS。`DEPLOYMENT.md` 包含服务器检查清单、密钥生成、破坏性迁移、JATOS study 与组件配置、证书验证、备份和恢复演练步骤。数据库备份、媒体备份和 `IDENTITY_ENCRYPTION_KEY` 必须同时保留；密钥丢失会导致已保存的身份字段无法解密。

@@ -34,7 +34,7 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 ```
 
-重新登录 SSH 会话后检查：
+重新登录 SSH 终端后检查：
 
 ```bash
 docker --version
@@ -90,6 +90,7 @@ moyo_backup_data
 openssl rand -hex 32   # SECRET_KEY
 openssl rand -hex 32   # PHONE_HMAC_KEY
 openssl rand -base64 32 | tr '+/' '-_'   # PHONE_ENCRYPTION_KEY
+openssl rand -base64 32 | tr '+/' '-_'   # IDENTITY_ENCRYPTION_KEY
 openssl rand -hex 24   # MYSQL_ROOT_PASSWORD
 openssl rand -hex 24   # MYSQL_PASSWORD
 openssl rand -hex 24   # JATOS_DB_PASSWORD
@@ -112,9 +113,10 @@ chmod 600 .env
 | `PUBLIC_BASE_URL` | 平台的公网地址，必须是 `https://` |
 | `JATOS_DOMAIN` | JATOS 域名主机名，不带协议 |
 | `JATOS_BASE_URL` | JATOS 的公网地址，必须是 `https://` |
-| `SECRET_KEY` | 会话和签名密钥，64 位十六进制 |
+| `SECRET_KEY` | 登录状态和签名密钥，64 位十六进制 |
 | `PHONE_HMAC_KEY` | 手机号查询索引的 HMAC 密钥 |
 | `PHONE_ENCRYPTION_KEY` | 手机号加密的 Fernet 密钥 |
+| `IDENTITY_ENCRYPTION_KEY` | 受保护问卷字段（真实姓名、支付宝手机号和身份证明）的 Fernet 密钥，必须与 `PHONE_ENCRYPTION_KEY` 不同 |
 | `MYSQL_ROOT_PASSWORD` | MariaDB root 密码 |
 | `MYSQL_PASSWORD` | 平台数据库用户 `moyo` 的密码 |
 | `DATABASE_URL` | 已由 `MYSQL_PASSWORD` 插值生成，保持默认写法 |
@@ -123,7 +125,7 @@ chmod 600 .env
 | `ADMIN_INITIAL_PASSWORD` | 管理员初始密码 |
 | `JATOS_STUDY_CODE` | JATOS study code，JATOS 配置完成后填写 |
 | `JATOS_API_TOKEN` | JATOS API token，JATOS 配置完成后填写 |
-| `JATOS_SECRET` | JATOS 会话密钥，首次启动后不要更换 |
+| `JATOS_SECRET` | JATOS 登录状态密钥，首次启动后不要更换 |
 | `COOKIE_SECURE` | 正式环境保持 `true` |
 | `LOG_LEVEL` | 默认 `INFO` |
 | `TZ` | 默认 `Asia/Shanghai` |
@@ -138,8 +140,9 @@ docker compose config --quiet
 
 以下值在首次启动后不要随意更换：
 
-- `SECRET_KEY`：更换会使现有会话失效。
-- `JATOS_SECRET`：更换会影响 JATOS 的会话和内部签名。
+- `SECRET_KEY`：更换会使现有登录状态失效。
+- `JATOS_SECRET`：更换会影响 JATOS 的登录状态和内部签名。
+- `IDENTITY_ENCRYPTION_KEY`：更换会使已保存的真实姓名、支付宝手机号和证件号码无法解密。该密钥必须与数据库、媒体和 JATOS 备份分开保存，并保留至少一份异地副本。
 - `MYSQL_PASSWORD`、`JATOS_DB_PASSWORD`：MariaDB 只在数据卷首次初始化时使用这些值创建用户。直接修改 `.env` 不会更新数据库中的密码，会导致应用无法连接。必须先在数据库中修改用户密码，再同步修改 `.env`。
 
 ## 4. 首次启动
@@ -279,6 +282,8 @@ WebSocket 和完整流程验证：
 - `SHA256SUMS`
 - `manifest.txt`
 
+自动备份不包含 `.env`。`IDENTITY_ENCRYPTION_KEY` 必须单独保存在凭据管理系统或离线介质中，并至少保留一份异地副本。数据库恢复后必须使用同一密钥解密身份记录；密钥丢失会使已保存的真实姓名、支付宝手机号和证件号码无法恢复。
+
 目录结构与保留策略：
 
 - `/backups/daily/<时间戳>/`：保留 7 份。
@@ -317,7 +322,7 @@ rsync -a --delete /srv/moyo-offsite/ <备份服务器>:/srv/moyo-backups/
 
 对象存储、快照或异地服务器至少选择一种。只保留服务器本地备份无法应对整机故障。
 
-备份包含姓名、手机号密文和 JATOS 结果，属于研究数据和个人信息。备份目录在容器内权限为 `700`，文件为 `600`。异地存储应使用加密传输和加密存储，并限制访问人员。
+备份包含姓名、手机号密文、证件号码密文和 JATOS 结果，属于研究数据和个人信息。备份目录在容器内权限为 `700`，文件为 `600`。异地存储应使用加密传输和加密存储，并限制访问人员。
 
 ## 9. 恢复演练
 
@@ -372,6 +377,8 @@ docker run --rm \
   -xzf /backups/daily/<时间戳>/jatos_data.tar.gz -C /data --strip-components=1
 ```
 
+数据库和文件备份不包含 `IDENTITY_ENCRYPTION_KEY`。恢复 `.env` 时必须使用加密身份记录时的同一密钥；从独立安全副本取得该密钥，不能重新生成。缺少原密钥时，`participant_identities` 中的真实姓名、支付宝手机号和证件号码无法解密。
+
 启动服务并验证：
 
 ```bash
@@ -383,6 +390,10 @@ curl -fsS https://<平台域名>/healthz
 然后登录管理端，检查参与者、Room、导出和 JATOS 结果。恢复后如健康检查失败，查看 `docker compose logs app db jatos`，不要继续写入数据。
 
 ## 10. 升级流程
+
+迁移 `5b8e2f4c9a71` 是破坏性迁移。从 v4 升级时，它删除全部 Room、预约、参与者关联、trial、回合、回合提交、问卷草稿、问卷响应、付款、事件、计时器和配置修订，删除全部旧指导语版本，删除 `condition_versions` 表，并从 `rooms` 删除旧条件外键和 Room 级费用字段。被试白名单、问卷版本、同意书版本和管理员账号保留。平台不提供 v4 数据读取路径；降级迁移只恢复表结构，不恢复已删除的数据。
+
+执行迁移前必须完成完整备份，并确认 `.env` 中的 `IDENTITY_ENCRYPTION_KEY` 有独立安全副本。
 
 1. 先手动备份：
 
@@ -447,7 +458,7 @@ docker system df
 - Caddy 证书续期日志。
 - 备份是否按日生成，异机副本是否更新。
 - 磁盘空间。JATOS 结果上传和平台媒体会持续增长。
-- 服务器时间同步。会话过期和签名校验依赖准确的系统时间。
+- 服务器时间同步。登录状态过期和签名校验依赖准确的系统时间。
 
 故障排查起点：
 
@@ -463,6 +474,6 @@ docker compose logs --tail=200 caddy
 ## 12. 已知限制
 
 - 单服务器、单 worker，不支持水平扩展、多 worker 或跨服务器恢复进行中的 Room。
-- 备份是每日逻辑快照，不是时间点恢复。接受最多约 24 小时的数据丢失窗口。
+- 备份是每日逻辑快照，恢复粒度最细到一天。接受最多约 24 小时的数据丢失窗口。
 - 异地备份需要部署者自行配置并定期验证。
 - JATOS 组件和平台问卷的兼容性需要在部署后用一个真实 Room 验证。

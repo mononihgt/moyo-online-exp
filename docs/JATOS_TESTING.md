@@ -32,7 +32,7 @@ cd /Users/mpxuann/Documents/research/projects/26-Moyo/canvasOnlineGame
 4. 检测安装包与安装目录。存在且 `VERSION` 为 `3.11.3` 时直接复用；安装包缺失时下载 `jatos_mac_aarch64_java.zip`，支持断点续传，并用 `unzip -t` 校验。
 5. 写入 `conf/jatos.conf`，设置 HTTP 端口、数据库连接、临时目录和 API token 有效期。
 6. 启动 JATOS 并轮询 `/ping`，最多等待 180 秒。
-7. 用管理员会话生成 API token，写入 `api_token.env`。已有 token 会先用 `GET /jatos/api/v1/admin/token` 验证，失效后自动重建。
+7. 用管理员账号登录后生成 API token，写入 `api_token.env`。已有 token 会先用 `GET /jatos/api/v1/admin/token` 验证，失效后自动重建。
 8. 输出 `JATOS_BASE_URL`、JATOS PID、日志路径、数据库连接信息、token 文件位置和停止命令。
 
 可覆盖的环境变量：
@@ -84,9 +84,9 @@ API 前缀为 `/jatos/api/v1`。带 token 的请求使用：
 Authorization: Bearer jap_...
 ```
 
-### 用管理员会话生成 token
+### 通过管理员登录生成 token
 
-JATOS 3.11.3 的 token 创建接口允许会话认证。先用管理员会话登录，再创建 token。登录接口没有标记 `nocsrf`，需要发送 `Authorization` 头才能跳过 CSRF 检查；`csrf-bypass` 不含 `Bearer`，不会切换到 token 认证。
+JATOS 3.11.3 的 token 创建接口允许使用管理员登录产生的 cookie 认证。先用管理员账号登录，再创建 token。登录接口没有标记 `nocsrf`，需要发送 `Authorization` 头才能跳过 CSRF 检查；`csrf-bypass` 不含 `Bearer`，不会切换到 token 认证。
 
 ```bash
 BASE_URL=http://127.0.0.1:9000
@@ -164,7 +164,7 @@ set -a
 set +a
 ```
 
-`scripts/jatos_api.py` 只使用 Python 标准库，已在 Python 3.9.6 和 Python 3.12.13 下对真实 JATOS 实例调用成功。客户端从环境变量读取 `JATOS_BASE_URL`、`JATOS_API_TOKEN`、`JATOS_STUDY_CODE`。`JATOS_BASE_URL` 未设置时使用 `http://127.0.0.1:9000`。`JATOS_STUDY_CODE` 在这个客户端中表示 study 的 id 或 uuid，不是参与者链接里的 studyCode。
+`scripts/jatos_api.py` 只使用 Python 标准库，已在 Python 3.9.6 和 Python 3.12.13 下对真实 JATOS 实例调用成功。客户端从环境变量读取 `JATOS_BASE_URL`、`JATOS_API_TOKEN`、`JATOS_STUDY_CODE`。`JATOS_BASE_URL` 未设置时使用 `http://127.0.0.1:9000`。`JATOS_STUDY_CODE` 在这个客户端中表示 study 的 id 或 uuid；参与者链接里的 studyCode 是另一个字段。
 
 token 有效期在 `conf/jatos.conf` 中设置为 86400 秒。数据库 `ApiToken.expires` 和创建响应中的 `expiresAfter` 均为 86400，已实测。脚本输出中也提示本配置中 token 有效期 1 天。
 
@@ -393,7 +393,7 @@ workerType
 
 `jatos.js` 会读取与当前 `studyResultUuid` 匹配的 cookie，并把所有字段复制到 `window.jatos`。PersonalMultiple 的 code 可重复运行，本次同一个 code 连续产生了多个 studyResult，workerId 保持为 6。
 
-组件资产需要运行会话。带 `JATOS_ID_<studyResultId>` cookie 请求组件资产返回 200，不带 cookie 返回 403。
+组件资产需要有效的 JATOS 运行 cookie。带 `JATOS_ID_<studyResultId>` cookie 请求组件资产返回 200，不带 cookie 返回 403。
 
 JATOS 3.11.3 的 jatos.js 地址为 `/assets/javascripts/jatos.js`。实际请求结果：
 
@@ -492,9 +492,25 @@ curl -sS -X PUT \
 Impossible to put result data to component result
 ```
 
-组件中应使用 `jatos.submitResultData(data, onSuccess, onError)`，由 jatos.js 维护会话，不要从浏览器直接调用 publix 的 PUT 路径。
+组件中应使用 `jatos.submitResultData(data, onSuccess, onError)`，由 jatos.js 维护组件运行状态，不要从浏览器直接调用 publix 的 PUT 路径。
 
 `JATOS_API_TOKEN` 只能保存在平台服务端，禁止放进问卷 HTML 或浏览器环境变量。
+
+## 受保护答案的数据流与 JATOS 原始结果边界
+
+受保护题型为 `real_name`、`alipay_phone`、`identity_document`。每份 Room 问卷必须各包含一道，题目始终必填。题目 ID 由问卷 schema 决定，平台在问卷上下文中返回 `protectedQuestionIds`。
+
+提交一次问卷的数据流：
+
+1. 问卷组件在浏览器中收集全部答案。
+2. 组件先调用 `jatos.submitResultData`，提交对象中的 `answers` 包含受保护答案。JATOS component result 因此保存一份原始答案。
+3. 组件随后把相同答案和 `jatosWorkerId`、`jatosStudyResultId`、`jatosComponentResultId` 发送到平台 `POST /api/jatos/questionnaire/complete`。
+4. 平台按 schema 拆分受保护答案，校验三种题型各一道、必填且格式有效，再从写入 `questionnaire_responses.answers_json` 的答案对象中删除受保护题目。
+5. 平台使用 `IDENTITY_ENCRYPTION_KEY` 加密真实姓名、支付宝手机号和证件号码，按 Room 与参与者写入 `participant_identities`。证件类型明文保存。
+6. 草稿在组件侧和平台侧都不包含受保护答案。问卷上下文回显、Room 事件、`export.json`、分析 ZIP 和分析导出的问卷副本也不包含受保护答案。
+7. 支付名单和报销清单在服务端解密身份记录后生成，只返回给管理员并写入审计日志。
+
+JATOS 原始结果边界：平台只控制自身保存的数据和导出。JATOS 数据库、组件结果、study 导出和 JATOS 备份可能保留受保护答案的原文，平台不能删除或改写这些记录。JATOS 管理员权限、数据库访问、备份和离线副本必须按个人信息标准单独保护。`IDENTITY_ENCRYPTION_KEY` 只保护平台侧 `participant_identities`，不能解密或清理 JATOS 原始结果。需要删除 JATOS 原始结果时，按 JATOS 的结果管理功能单独执行。
 
 ## 上传平台问卷组件
 
