@@ -21,6 +21,7 @@ import {
   LoadingBlock,
   Modal,
   PageHeader,
+  Pagination,
   RoomStatusChip,
   fromShanghaiInput,
   useNow,
@@ -49,6 +50,8 @@ const SECTION_OPTIONS: { key: RoomSection; label: string; description: string }[
   { key: "unpaid", label: "未完全支付", description: "已归档且仍有待支付付款的房间。" },
   { key: "archived", label: "已归档", description: "已归档且没有待支付付款的房间。" },
 ];
+
+const PAGE_SIZE = 100;
 
 const EMPTY_COUNTS: Record<RoomSection, number> = {
   draft: 0,
@@ -91,6 +94,7 @@ export function RoomsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [section, setSection] = useState<RoomSection>(() => resolveSection(searchParams));
+  const [offset, setOffset] = useState(0);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [counts, setCounts] = useState<Record<RoomSection, number>>(EMPTY_COUNTS);
   const [loading, setLoading] = useState(true);
@@ -118,15 +122,21 @@ export function RoomsPage() {
     try {
       const params = new URLSearchParams();
       params.set("section", section);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
       const response = await adminApi.get<RoomListResponse>(`/rooms?${params.toString()}`);
       setRooms(response.rooms);
       setCounts({ ...EMPTY_COUNTS, ...response.counts });
+      const total = response.counts[section] ?? 0;
+      if (total > 0 && offset >= total) {
+        setOffset(Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE);
+      }
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [section]);
+  }, [section, offset]);
 
   useEffect(() => {
     void load();
@@ -156,6 +166,7 @@ export function RoomsPage() {
 
   function changeSection(next: RoomSection) {
     setSection(next);
+    setOffset(0);
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete("status");
     nextParams.set("section", next);
@@ -434,7 +445,7 @@ export function RoomsPage() {
           ))}
         </select>
         <span className="admin-hint">
-          {sectionMeta.description} 共 {rooms.length} 个房间
+          {sectionMeta.description} 共 {counts[section]} 个房间
         </span>
       </div>
 
@@ -603,6 +614,15 @@ export function RoomsPage() {
           </table>
         </div>
       )}
+
+      {!loading && rooms.length > 0 ? (
+        <Pagination
+          total={counts[section]}
+          offset={offset}
+          limit={PAGE_SIZE}
+          onChange={setOffset}
+        />
+      ) : null}
 
       {modal?.type === "create" ? (
         <Modal title="创建 Room" onClose={closeModal} wide>

@@ -594,7 +594,7 @@ def _pending_payment_exists():
 
 
 async def list_rooms_by_section(
-    db: AsyncSession, section: str | None, limit: int = 100
+    db: AsyncSession, section: str | None, limit: int = 100, offset: int = 0
 ) -> list[Room]:
     section = validate_room_section(section)
     statement = select(Room)
@@ -610,7 +610,9 @@ async def list_rooms_by_section(
         statement = statement.where(Room.status == ROOM_ARCHIVED, _pending_payment_exists())
     elif section == ROOM_SECTION_ARCHIVED:
         statement = statement.where(Room.status == ROOM_ARCHIVED, ~_pending_payment_exists())
-    rows = await db.execute(statement.order_by(Room.starts_at.desc()).limit(limit))
+    rows = await db.execute(
+        statement.order_by(Room.starts_at.desc(), Room.id).offset(offset).limit(limit)
+    )
     return list(rows.scalars().all())
 
 

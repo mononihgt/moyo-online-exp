@@ -10,6 +10,7 @@ from ..constants import (
     ARCHIVE_REASONS,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
+    BOOKING_CANCELED,
     BOOKING_NO_SHOW,
     PARTICIPANT_COMPLETED,
     PARTICIPANT_DISABLED,
@@ -47,7 +48,7 @@ from ..services.events import add_event
 from ..services.export import build_analysis_zip, build_room_export
 from ..services.jatos import build_questionnaire_url, jatos_config
 from ..services.locking import room_lock
-from ..services.payments import UNSET, apply_override, serialize_payment, upsert_payment
+from ..services.payments import serialize_payment, upsert_payment
 from ..services.questionnaire_flow import complete_questionnaire
 from ..services.rooms import (
     add_config_revision,
@@ -77,8 +78,9 @@ async def list_rooms(
     db: DbSession,
     section: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=300),
+    offset: int = Query(default=0, ge=0),
 ):
-    rooms = await list_rooms_by_section(db, section, limit)
+    rooms = await list_rooms_by_section(db, section, limit, offset)
     return {
         "rooms": [await room_summary(db, room) for room in rooms],
         "counts": await count_room_sections(db),
