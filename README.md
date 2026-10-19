@@ -103,7 +103,7 @@ v5 迁移 `5b8e2f4c9a71` 是破坏性迁移，执行 `uv run alembic upgrade hea
 - 不删除被试白名单、问卷版本、同意书版本和管理员账号。
 - 不提供 v4 数据读取路径；降级迁移只能恢复表结构，不能恢复被删除的数据。
 
-部署前备份 MariaDB 的 `moyo` 数据库、`data/media` 和 JATOS 数据卷。备份必须包含 `IDENTITY_ENCRYPTION_KEY`；该密钥丢失后，已保存的真实姓名、支付宝手机号和证件号码无法解密。
+部署前备份 MariaDB 的 `moyo` 数据库、`data/media` 和 JATOS 数据卷。备份不得包含 `IDENTITY_ENCRYPTION_KEY`；密钥单独保存于凭据管理系统或离线介质，并保留异地副本。该密钥丢失后，已保存的真实姓名、支付宝手机号和证件号码无法解密。
 
 ### 启动
 
