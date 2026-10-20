@@ -368,6 +368,9 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
       page.getByText("正常完成", { exact: true }),
     ).toBeVisible();
     await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
+    await expect(page.locator(".p-card .p-btn")).toHaveCount(0);
+    await expect(page.locator(".p-footer-links")).toBeVisible();
+    await expect(page.locator(".p-footer-links a")).toHaveCount(3);
   }
 
   const payments = (await listPayments(request, baseURL)).filter((payment) =>

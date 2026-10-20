@@ -11,9 +11,7 @@ import { ContinueQuestionnaireButton } from "./ContinueQuestionnaireButton";
 import {
   CONTINUE_QUESTIONNAIRE,
   QUESTIONNAIRE_BUTTON,
-  QUESTIONNAIRE_HOME_NOTE,
   QUESTIONNAIRE_LINK_FAILED,
-  QUESTIONNAIRE_LOCK_NOTE,
   QUESTIONNAIRE_REQUIRED,
   QUESTIONNAIRE_SUBMITTED,
   REBOOK,
@@ -75,10 +73,6 @@ export function QuestionnaireView({
                 问卷状态：{QUESTIONNAIRE_STATUS_LABELS[info.status]}
               </p>
             ) : null}
-            <div className="p-banner p-banner-info" role="status">
-              <p>{QUESTIONNAIRE_LOCK_NOTE}</p>
-              <p>{QUESTIONNAIRE_HOME_NOTE}</p>
-            </div>
             <div className="p-btn-row exp-end-actions">
               <button
                 type="button"

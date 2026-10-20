@@ -316,14 +316,6 @@ export default function CompletePage() {
                     ? COMPLETE_ARCHIVED_SUBMITTED_NOTE
                     : COMPLETE_TRANSFER_NOTE}
                 </p>
-                <div className="p-btn-row">
-                  <Link className="p-btn p-btn-secondary" to="/history">
-                    历史实验
-                  </Link>
-                  <Link className="p-btn p-btn-secondary" to="/contact">
-                    联系主试
-                  </Link>
-                </div>
               </>
             ) : hasShowup ? (
               <>
@@ -369,20 +361,15 @@ export default function CompletePage() {
               </>
             )}
 
-            {!awaitingQuestionnaire ? (
+            {!awaitingQuestionnaire && canRebook ? (
               <div className="p-btn-row">
-                <Link className="p-btn p-btn-secondary" to="/">
-                  返回首页
+                <Link
+                  className="p-btn p-btn-primary"
+                  data-testid="rebook"
+                  to="/"
+                >
+                  {REBOOK}
                 </Link>
-                {canRebook ? (
-                  <Link
-                    className="p-btn p-btn-primary"
-                    data-testid="rebook"
-                    to="/"
-                  >
-                    {REBOOK}
-                  </Link>
-                ) : null}
               </div>
             ) : null}
           </section>

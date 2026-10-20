@@ -69,10 +69,6 @@ export const RECONNECTING_NOTICE = "连接中断，正在重新连接。请保�
 
 export const QUESTIONNAIRE_REQUIRED =
   "请完成实验后测问卷。完成实验并提交问卷后，才会计算实验报酬";
-export const QUESTIONNAIRE_LOCK_NOTE =
-  "未提交后测问卷前，你无法预约新的实验；继续填写问卷是获得报酬的唯一方式。";
-export const QUESTIONNAIRE_HOME_NOTE =
-  "返回首页不会结束实验，你可以稍后继续填写；未提交问卷无法获得报酬。";
 export const QUESTIONNAIRE_SUBMITTED =
   "后测问卷已提交，感谢你的参与。你可以查看报酬信息与历史实验记录。";
 export const QUESTIONNAIRE_BUTTON = "填写后测问卷";
