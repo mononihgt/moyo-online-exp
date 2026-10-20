@@ -24,6 +24,7 @@ def _payment(**overrides) -> dict:
     data = {
         "base_pay_cents": 4500,
         "performance_rate_cents": 1,
+        "performance_floor_cents": 0,
         "performance_cap_cents": 2000,
         "showup_pay_cents": 1000,
     }

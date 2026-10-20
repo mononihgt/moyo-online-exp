@@ -12,6 +12,7 @@ from ..services.payment_lists import (
     mark_payments_paid,
     parse_date_range,
     payment_list_csv,
+    range_bounds,
     reimbursement_list_csv,
 )
 from ..services.payments import UNSET, apply_override, serialize_payment
@@ -31,6 +32,8 @@ async def list_payments(
     admin: AdminDep,
     db: DbSession,
     status_filter: str | None = Query(default=None, alias="status"),
+    date_from: str | None = Query(default=None, alias="from"),
+    date_to: str | None = Query(default=None, alias="to"),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
     statement = (
@@ -45,6 +48,13 @@ async def list_payments(
     )
     if status_filter:
         statement = statement.where(Payment.status == status_filter)
+    if (date_from is None) != (date_to is None):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "开始日期和结束日期必须同时提供"
+        )
+    if date_from is not None and date_to is not None:
+        start, end = range_bounds(*parse_date_range(date_from, date_to))
+        statement = statement.where(Room.starts_at >= start, Room.starts_at < end)
     rows = await db.execute(statement.order_by(Room.starts_at.desc()).limit(limit))
     items = []
     for payment, participant, room, role_row in rows.all():

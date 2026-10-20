@@ -37,7 +37,7 @@ def parse_date_range(from_value: str, to_value: str) -> tuple[date, date]:
     return date_from, date_to
 
 
-def _range_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
+def range_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
     tzinfo = ZoneInfo(TIMEZONE)
     start = datetime.combine(date_from, time.min, tzinfo=tzinfo).astimezone(timezone.utc).replace(tzinfo=None)
     end = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=tzinfo).astimezone(timezone.utc)
@@ -86,7 +86,7 @@ def _room_participant_join():
 
 
 async def payment_list_csv(db: AsyncSession, date_from: date, date_to: date) -> bytes:
-    start, end = _range_bounds(date_from, date_to)
+    start, end = range_bounds(date_from, date_to)
     statement = (
         select(Payment, Participant, Room, ParticipantIdentity)
         .join(Participant, Participant.id == Payment.participant_id)
@@ -112,7 +112,7 @@ async def payment_list_csv(db: AsyncSession, date_from: date, date_to: date) -> 
 
 
 async def reimbursement_list_csv(db: AsyncSession, date_from: date, date_to: date) -> bytes:
-    start, end = _range_bounds(date_from, date_to)
+    start, end = range_bounds(date_from, date_to)
     statement = (
         select(Payment, Participant, Room, ParticipantIdentity)
         .join(Participant, Participant.id == Payment.participant_id)
@@ -174,7 +174,7 @@ def _bulk_record(payment: Payment, participant: Participant, room: Room, role_ro
 
 
 async def bulk_payments(db: AsyncSession, date_from: date, date_to: date) -> list[dict]:
-    start, end = _range_bounds(date_from, date_to)
+    start, end = range_bounds(date_from, date_to)
     rows = await db.execute(
         _bulk_statement()
         .where(Room.starts_at >= start, Room.starts_at < end)

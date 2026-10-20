@@ -20,6 +20,7 @@ interface MapGroupDetail {
   payment: {
     basePayCents: number;
     performanceRateCents: number;
+    performanceFloorCents: number;
     performanceCapCents: number;
     showupPayCents: number;
   };
@@ -29,6 +30,7 @@ interface MapGroupDetail {
     description: string;
     factorLevel: string;
     cells: (string | null)[];
+    colors: (string | null)[];
   }[];
 }
 

@@ -115,9 +115,10 @@ class MapGroupVersion(Base):
     formal_turn_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     rest_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     randomize_formal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    base_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=4500)
+    base_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     performance_rate_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    performance_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
+    performance_floor_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=3500)
+    performance_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=5500)
     showup_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -146,6 +147,7 @@ class Map(Base):
     factor_level: Mapped[str] = mapped_column(String(200), nullable=False)
     player_suffix: Mapped[str] = mapped_column(String(10), nullable=False)
     cells_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    colors_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
 
 class ParticipantIdentity(Base):

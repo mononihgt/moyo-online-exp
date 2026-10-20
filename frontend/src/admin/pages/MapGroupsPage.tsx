@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, MouseEvent } from "react";
 import {
   CheckCircle2,
   Lock,
@@ -44,6 +44,7 @@ import { MAP_GROUP_MODE_LABELS, MAP_SLOT_LABELS } from "../labels";
 
 type Selection = string | "new" | null;
 type SlotCells = Record<MapSlot, (string | null)[]>;
+type SlotColors = Record<MapSlot, (string | null)[]>;
 
 interface MapGroupFormState {
   mode: MapGroupMode;
@@ -54,6 +55,7 @@ interface MapGroupFormState {
   description: string;
   factorLevel: string;
   cells: SlotCells;
+  colors: SlotColors;
   activeSlot: MapSlot;
   spawnA: number;
   spawnB: number;
@@ -67,6 +69,7 @@ interface MapGroupFormState {
   randomizeFormal: boolean;
   basePayYuan: string;
   performanceRateYuan: string;
+  performanceFloorYuan: string;
   performanceCapYuan: string;
   showupPayYuan: string;
 }
@@ -79,9 +82,10 @@ interface ProfileEntry {
 const DEFAULT_ROWS = 7;
 const DEFAULT_COLS = 7;
 const DEFAULT_PAYMENT = {
-  basePayCents: 4500,
+  basePayCents: 1000,
   performanceRateCents: 1,
-  performanceCapCents: 2000,
+  performanceFloorCents: 3500,
+  performanceCapCents: 5500,
   showupPayCents: 1000,
 };
 
@@ -167,6 +171,12 @@ function parsePositiveCents(value: string): number | null {
   return cents;
 }
 
+function parseNonNegativeCents(value: string): number | null {
+  const cents = centsFromYuan(value);
+  if (cents === null || cents < 0) return null;
+  return cents;
+}
+
 function newFormState(profileVersionId: string, formalTrials: number): MapGroupFormState {
   const total = DEFAULT_ROWS * DEFAULT_COLS;
   return {
@@ -178,6 +188,7 @@ function newFormState(profileVersionId: string, formalTrials: number): MapGroupF
     description: "",
     factorLevel: "",
     cells: emptySlotCells(total),
+    colors: emptySlotCells(total),
     activeSlot: "Both",
     spawnA: 0,
     spawnB: total - 1,
@@ -191,6 +202,7 @@ function newFormState(profileVersionId: string, formalTrials: number): MapGroupF
     randomizeFormal: true,
     basePayYuan: yuanFromCents(DEFAULT_PAYMENT.basePayCents),
     performanceRateYuan: yuanFromCents(DEFAULT_PAYMENT.performanceRateCents),
+    performanceFloorYuan: yuanFromCents(DEFAULT_PAYMENT.performanceFloorCents),
     performanceCapYuan: yuanFromCents(DEFAULT_PAYMENT.performanceCapCents),
     showupPayYuan: yuanFromCents(DEFAULT_PAYMENT.showupPayCents),
   };
@@ -199,8 +211,10 @@ function newFormState(profileVersionId: string, formalTrials: number): MapGroupF
 function formFromVersion(version: MapGroupVersion): MapGroupFormState {
   const total = version.rows * version.cols;
   const cells = emptySlotCells(total);
+  const colors = emptySlotCells(total);
   for (const map of version.maps) {
     cells[map.slot] = normalizeCells(map.cells, total);
+    colors[map.slot] = normalizeCells(map.colors, total);
   }
   const firstMap = version.maps[0];
   return {
@@ -212,6 +226,7 @@ function formFromVersion(version: MapGroupVersion): MapGroupFormState {
     description: firstMap?.description ?? "",
     factorLevel: firstMap?.factorLevel ?? "",
     cells,
+    colors,
     activeSlot: version.mode === "both" ? "Both" : "A",
     spawnA: version.spawns.A,
     spawnB: version.spawns.B,
@@ -225,6 +240,7 @@ function formFromVersion(version: MapGroupVersion): MapGroupFormState {
     randomizeFormal: version.randomizeFormal,
     basePayYuan: yuanFromCents(version.payment.basePayCents),
     performanceRateYuan: yuanFromCents(version.payment.performanceRateCents),
+    performanceFloorYuan: yuanFromCents(version.payment.performanceFloorCents),
     performanceCapYuan: yuanFromCents(version.payment.performanceCapCents),
     showupPayYuan: yuanFromCents(version.payment.showupPayCents),
   };
@@ -251,7 +267,8 @@ export function MapGroupsPage() {
   const [profiles, setProfiles] = useState<TroopProfile[]>([]);
   const [selection, setSelection] = useState<Selection>(null);
   const [form, setForm] = useState<MapGroupFormState>(() => newFormState("", 0));
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() => new Set());
+  const [batchColor, setBatchColor] = useState("#FFFFFF");
   const [previewRow, setPreviewRow] = useState(1);
   const [loading, setLoading] = useState(true);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -264,12 +281,13 @@ export function MapGroupsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadTarget, setUploadTarget] = useState<{
     slot: MapSlot;
-    index: number;
+    indices: number[];
     session: number;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const editSessionRef = useRef(0);
   const formRef = useRef(form);
+  const selectionAnchorRef = useRef<number | null>(null);
 
   useEffect(() => {
     formRef.current = form;
@@ -317,7 +335,8 @@ export function MapGroupsPage() {
     editSessionRef.current += 1;
     setSelection(version.id);
     setForm(formFromVersion(version));
-    setSelectedIndex(null);
+    setSelectedIndices(new Set());
+    selectionAnchorRef.current = null;
     setPreviewRow(version.profile.rows.length > 1 ? 1 : 0);
     setValidationErrors([]);
     setSaveError(null);
@@ -376,18 +395,21 @@ export function MapGroupsPage() {
   );
 
   const totalCells = form.gridRows * form.gridCols;
-  const effectiveSelectedIndex =
-    selectedIndex !== null && selectedIndex >= 0 && selectedIndex < totalCells
-      ? selectedIndex
-      : null;
   const activeCells = form.cells[form.activeSlot] ?? emptyCells(totalCells);
+  const activeColors = form.colors[form.activeSlot] ?? emptyCells(totalCells);
+  const effectiveSelectedIndices = [...selectedIndices]
+    .filter((index) => index >= 0 && index < totalCells)
+    .sort((left, right) => left - right);
+  const effectiveSelectedSet = new Set(effectiveSelectedIndices);
+  const singleSelectedIndex =
+    effectiveSelectedIndices.length === 1 ? effectiveSelectedIndices[0] : null;
   const boardVisuals = useMemo(
     () =>
-      activeCells.map((assetId) => ({
-        color: null,
+      activeCells.map((assetId, index) => ({
+        color: activeColors[index] ?? null,
         backgroundAssetId: assetId,
       })),
-    [activeCells],
+    [activeCells, activeColors],
   );
 
   const parsedRows = parseDimension(form.rowsText);
@@ -448,6 +470,50 @@ export function MapGroupsPage() {
     setForm((current) => ({ ...current, ...patch }));
   }
 
+  function clearSelection() {
+    setSelectedIndices(new Set());
+    selectionAnchorRef.current = null;
+  }
+
+  function switchSlot(slot: MapSlot) {
+    if (form.activeSlot === slot) return;
+    patchForm({ activeSlot: slot });
+    clearSelection();
+  }
+
+  function toggleCellSelection(index: number, event: MouseEvent<HTMLButtonElement>) {
+    if (event.shiftKey) {
+      setSelectedIndices((current) => {
+        const anchor = selectionAnchorRef.current ?? index;
+        const start = Math.min(anchor, index);
+        const end = Math.max(anchor, index);
+        const next = new Set(current);
+        for (let cell = start; cell <= end; cell += 1) next.add(cell);
+        return next;
+      });
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) {
+      setSelectedIndices((current) => {
+        const next = new Set(current);
+        if (next.has(index)) next.delete(index);
+        else next.add(index);
+        return next;
+      });
+      selectionAnchorRef.current = index;
+      return;
+    }
+    selectionAnchorRef.current = index;
+    setSelectedIndices(new Set([index]));
+  }
+
+  function selectAllCells() {
+    const next = new Set<number>();
+    for (let index = 0; index < totalCells; index += 1) next.add(index);
+    setSelectedIndices(next);
+    selectionAnchorRef.current = totalCells > 0 ? totalCells - 1 : null;
+  }
+
   function changeMode(mode: MapGroupMode) {
     if (readOnly) return;
     editSessionRef.current += 1;
@@ -461,6 +527,7 @@ export function MapGroupsPage() {
             ? "A"
             : current.activeSlot,
     }));
+    clearSelection();
   }
 
   function changeDimension(field: "rows" | "cols", value: string) {
@@ -490,6 +557,17 @@ export function MapGroupsPage() {
         A: resizeCells(current.cells.A, current.gridRows, current.gridCols, rows, cols),
         B: resizeCells(current.cells.B, current.gridRows, current.gridCols, rows, cols),
       };
+      const colors: SlotColors = {
+        Both: resizeCells(
+          current.colors.Both,
+          current.gridRows,
+          current.gridCols,
+          rows,
+          cols,
+        ),
+        A: resizeCells(current.colors.A, current.gridRows, current.gridCols, rows, cols),
+        B: resizeCells(current.colors.B, current.gridRows, current.gridCols, rows, cols),
+      };
       let spawnA = remapCellIndex(
         current.spawnA,
         current.gridRows,
@@ -513,6 +591,7 @@ export function MapGroupsPage() {
         gridRows: rows,
         gridCols: cols,
         cells,
+        colors,
         spawnA,
         spawnB,
       };
@@ -526,11 +605,25 @@ export function MapGroupsPage() {
       (rows !== form.gridRows || cols !== form.gridCols)
     ) {
       editSessionRef.current += 1;
-      setSelectedIndex((current) =>
-        current === null
+      setSelectedIndices((current) => {
+        const next = new Set<number>();
+        for (const index of current) {
+          const remapped = remapCellIndex(
+            index,
+            form.gridRows,
+            form.gridCols,
+            rows,
+            cols,
+          );
+          if (remapped !== null) next.add(remapped);
+        }
+        return next;
+      });
+      const anchor = selectionAnchorRef.current;
+      selectionAnchorRef.current =
+        anchor === null
           ? null
-          : remapCellIndex(current, form.gridRows, form.gridCols, rows, cols),
-      );
+          : remapCellIndex(anchor, form.gridRows, form.gridCols, rows, cols);
     }
   }
 
@@ -548,11 +641,11 @@ export function MapGroupsPage() {
   }
 
   function setSpawnAtSelected(kind: "A" | "B") {
-    if (readOnly || effectiveSelectedIndex === null) {
+    if (readOnly || singleSelectedIndex === null) {
       notify("请先选择一个格子", "error");
       return;
     }
-    const index = effectiveSelectedIndex;
+    const index = singleSelectedIndex;
     const other = kind === "A" ? form.spawnB : form.spawnA;
     if (index === other) {
       notify("两个出生格不能重合", "error");
@@ -563,31 +656,71 @@ export function MapGroupsPage() {
   }
 
   function beginUpload() {
-    if (readOnly || effectiveSelectedIndex === null) {
-      notify("请先选择一个格子", "error");
+    if (readOnly || effectiveSelectedIndices.length === 0) {
+      notify("请先选择至少一个格子", "error");
       return;
     }
     setUploadTarget({
       slot: form.activeSlot,
-      index: effectiveSelectedIndex,
+      indices: effectiveSelectedIndices,
       session: editSessionRef.current,
     });
     fileInputRef.current?.click();
   }
 
-  function clearSelectedCell() {
-    if (readOnly || effectiveSelectedIndex === null) return;
-    const index = effectiveSelectedIndex;
+  function clearSelectedImages() {
+    if (readOnly || effectiveSelectedIndices.length === 0) return;
     const slot = form.activeSlot;
+    const selected = new Set(effectiveSelectedIndices);
     setForm((current) => ({
       ...current,
       cells: {
         ...current.cells,
         [slot]: current.cells[slot].map((cell, cellIndex) =>
-          cellIndex === index ? null : cell,
+          selected.has(cellIndex) ? null : cell,
         ),
       },
     }));
+    notify(`已清除 ${selected.size} 个格子的图片`);
+  }
+
+  function restoreSelectedWhite() {
+    if (readOnly || effectiveSelectedIndices.length === 0) return;
+    const slot = form.activeSlot;
+    const selected = new Set(effectiveSelectedIndices);
+    setForm((current) => ({
+      ...current,
+      cells: {
+        ...current.cells,
+        [slot]: current.cells[slot].map((cell, cellIndex) =>
+          selected.has(cellIndex) ? null : cell,
+        ),
+      },
+      colors: {
+        ...current.colors,
+        [slot]: current.colors[slot].map((color, cellIndex) =>
+          selected.has(cellIndex) ? null : color,
+        ),
+      },
+    }));
+    notify(`已将 ${selected.size} 个格子恢复为白色`);
+  }
+
+  function applyBackgroundColor() {
+    if (readOnly || effectiveSelectedIndices.length === 0) return;
+    const slot = form.activeSlot;
+    const selected = new Set(effectiveSelectedIndices);
+    const color = batchColor.toUpperCase();
+    setForm((current) => ({
+      ...current,
+      colors: {
+        ...current.colors,
+        [slot]: current.colors[slot].map((value, cellIndex) =>
+          selected.has(cellIndex) ? color : value,
+        ),
+      },
+    }));
+    notify(`已设置 ${selected.size} 个格子的背景颜色`);
   }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -609,28 +742,27 @@ export function MapGroupsPage() {
         imageUploadForm(file, "map-cell"),
       );
       const slotCells = formRef.current.cells[target.slot];
-      if (
-        target.session !== editSessionRef.current ||
-        target.index < 0 ||
-        target.index >= slotCells.length
-      ) {
+      const targets = target.indices.filter(
+        (index) => index >= 0 && index < slotCells.length,
+      );
+      if (target.session !== editSessionRef.current || targets.length === 0) {
         notify("已切换版本，过期上传已丢弃", "error");
         return;
       }
       setForm((current) => {
         const currentCells = current.cells[target.slot];
-        if (target.index >= currentCells.length) return current;
+        const selected = new Set(targets);
         return {
           ...current,
           cells: {
             ...current.cells,
             [target.slot]: currentCells.map((cell, cellIndex) =>
-              cellIndex === target.index ? response.asset.id : cell,
+              selected.has(cellIndex) ? response.asset.id : cell,
             ),
           },
         };
       });
-      notify("格子图片已上传");
+      notify(`已上传图片到 ${targets.length} 个格子`);
     } catch (err) {
       setImageError(errorMessage(err));
       notify(errorMessage(err), "error");
@@ -656,6 +788,9 @@ export function MapGroupsPage() {
     for (const slot of mapSlots) {
       if ((form.cells[slot] ?? []).length !== form.gridRows * form.gridCols) {
         errors.push(`${MAP_SLOT_LABELS[slot]} 地图的格子数量必须为 ${form.gridRows * form.gridCols}`);
+      }
+      if ((form.colors[slot] ?? []).length !== form.gridRows * form.gridCols) {
+        errors.push(`${MAP_SLOT_LABELS[slot]} 地图的格子颜色数量必须为 ${form.gridRows * form.gridCols}`);
       }
     }
     if (
@@ -692,12 +827,21 @@ export function MapGroupsPage() {
     if (restSeconds === null) errors.push("局间休息必须是正整数");
     const basePayCents = parsePositiveCents(form.basePayYuan);
     const performanceRateCents = parsePositiveCents(form.performanceRateYuan);
+    const performanceFloorCents = parseNonNegativeCents(form.performanceFloorYuan);
     const performanceCapCents = parsePositiveCents(form.performanceCapYuan);
     const showupPayCents = parsePositiveCents(form.showupPayYuan);
     if (basePayCents === null) errors.push("基础被试费必须是大于 0 的金额");
     if (performanceRateCents === null) errors.push("绩效单价必须是大于 0 的金额");
+    if (performanceFloorCents === null) errors.push("绩效保底必须是非负金额");
     if (performanceCapCents === null) errors.push("绩效上限必须是大于 0 的金额");
     if (showupPayCents === null) errors.push("到场费必须是大于 0 的金额");
+    if (
+      performanceFloorCents !== null &&
+      performanceCapCents !== null &&
+      performanceFloorCents > performanceCapCents
+    ) {
+      errors.push("绩效保底不能高于绩效上限");
+    }
     if (errors.length > 0) return { payload: null, errors };
     const payload: MapGroupDraftPayload = {
       mode: form.mode,
@@ -716,6 +860,7 @@ export function MapGroupsPage() {
       payment: {
         basePayCents: basePayCents as number,
         performanceRateCents: performanceRateCents as number,
+        performanceFloorCents: performanceFloorCents as number,
         performanceCapCents: performanceCapCents as number,
         showupPayCents: showupPayCents as number,
       },
@@ -724,6 +869,7 @@ export function MapGroupsPage() {
         description: description,
         factorLevel: factorLevel,
         cells: (form.cells[slot] ?? []).slice(0, totalFromInput ?? 0),
+        colors: (form.colors[slot] ?? []).slice(0, totalFromInput ?? 0),
       })),
     };
     return { payload, errors: [] };
@@ -806,7 +952,7 @@ export function MapGroupsPage() {
     const entry = preferredProfileEntry(profiles);
     setSelection("new");
     setForm(newFormState(entry?.version.id ?? "", entry?.version.formalTrials ?? 0));
-    setSelectedIndex(null);
+    clearSelection();
     setPreviewRow(entry && entry.version.rows.length > 1 ? 1 : 0);
     setValidationErrors([]);
     setSaveError(null);
@@ -816,7 +962,7 @@ export function MapGroupsPage() {
   function startNextVersion() {
     editSessionRef.current += 1;
     setSelection("new");
-    setSelectedIndex(null);
+    clearSelection();
     setValidationErrors([]);
     setSaveError(null);
     notify("已基于当前版本载入新草稿，保存后生成下一版本");
@@ -1194,7 +1340,7 @@ export function MapGroupsPage() {
                       className={`admin-btn admin-btn-secondary admin-btn-sm admin-kind-button${
                         form.activeSlot === slot ? " active" : ""
                       }`}
-                      onClick={() => patchForm({ activeSlot: slot })}
+                      onClick={() => switchSlot(slot)}
                       data-testid={`map-group-slot-${slot}`}
                     >
                       {MAP_SLOT_LABELS[slot]} 地图
@@ -1203,7 +1349,8 @@ export function MapGroupsPage() {
                 </div>
               </div>
               <p className="admin-hint">
-                点击格子选中后上传 PNG/JPG 图片，或设置出生格。未上传图片的格子显示为白色。
+                点击格子选中，按住 Ctrl/Command 或 Shift 点击可多选。选中后可统一上传
+                PNG/JPG 图片、设置背景颜色、清除图片或恢复白色。未设置图片和颜色的格子显示为白色。
                 格子编号、选中格与出生格使用覆盖层显示，不改变画布像素。
               </p>
               <div className="admin-map-toolbar">
@@ -1213,6 +1360,23 @@ export function MapGroupsPage() {
                 <span className="admin-hint">
                   {form.rowsText}×{form.colsText} · {totalCells} 格
                 </span>
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-secondary admin-btn-sm"
+                  onClick={selectAllCells}
+                  data-testid="map-group-select-all"
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-secondary admin-btn-sm"
+                  onClick={clearSelection}
+                  disabled={effectiveSelectedIndices.length === 0}
+                  data-testid="map-group-clear-selection"
+                >
+                  清空选择
+                </button>
                 {!readOnly ? (
                   <>
                     <input
@@ -1227,27 +1391,56 @@ export function MapGroupsPage() {
                       type="button"
                       className="admin-btn admin-btn-secondary admin-btn-sm"
                       onClick={beginUpload}
-                      disabled={effectiveSelectedIndex === null || uploading}
+                      disabled={effectiveSelectedIndices.length === 0 || uploading}
                       data-testid="map-group-upload-cell"
                     >
                       <Upload size={14} />
                       {uploading ? "上传中" : "上传图片到选中格"}
                     </button>
+                    <label className="admin-map-color-control">
+                      <span className="admin-hint">背景色</span>
+                      <input
+                        type="color"
+                        className="admin-color-input"
+                        value={batchColor}
+                        onChange={(event) => setBatchColor(event.target.value)}
+                        aria-label="选择背景颜色"
+                        data-testid="map-group-color-input"
+                      />
+                    </label>
                     <button
                       type="button"
                       className="admin-btn admin-btn-secondary admin-btn-sm"
-                      onClick={clearSelectedCell}
-                      disabled={effectiveSelectedIndex === null}
+                      onClick={applyBackgroundColor}
+                      disabled={effectiveSelectedIndices.length === 0}
+                      data-testid="map-group-apply-color"
+                    >
+                      设置背景颜色
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-secondary admin-btn-sm"
+                      onClick={clearSelectedImages}
+                      disabled={effectiveSelectedIndices.length === 0}
                       data-testid="map-group-clear-cell"
                     >
                       <X size={14} />
-                      清除选中格
+                      清除图片
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-secondary admin-btn-sm"
+                      onClick={restoreSelectedWhite}
+                      disabled={effectiveSelectedIndices.length === 0}
+                      data-testid="map-group-restore-white"
+                    >
+                      恢复白色
                     </button>
                     <button
                       type="button"
                       className="admin-btn admin-btn-secondary admin-btn-sm"
                       onClick={() => setSpawnAtSelected("A")}
-                      disabled={effectiveSelectedIndex === null}
+                      disabled={singleSelectedIndex === null}
                       data-testid="map-group-spawn-a"
                     >
                       设为出生格 A
@@ -1256,7 +1449,7 @@ export function MapGroupsPage() {
                       type="button"
                       className="admin-btn admin-btn-secondary admin-btn-sm"
                       onClick={() => setSpawnAtSelected("B")}
-                      disabled={effectiveSelectedIndex === null}
+                      disabled={singleSelectedIndex === null}
                       data-testid="map-group-spawn-b"
                     >
                       设为出生格 B
@@ -1266,21 +1459,30 @@ export function MapGroupsPage() {
               </div>
               {imageError ? <InlineNotice tone="error">{imageError}</InlineNotice> : null}
               <div className="admin-map-selection-line">
-                {effectiveSelectedIndex === null ? (
+                {effectiveSelectedIndices.length === 0 ? (
                   <span className="admin-hint">未选中格子。</span>
+                ) : effectiveSelectedIndices.length === 1 && singleSelectedIndex !== null ? (
+                  <>
+                    <span className="admin-chip">选中格 {singleSelectedIndex}</span>
+                    <span className="admin-hint">
+                      {cellPosition(singleSelectedIndex, form.gridCols)}
+                    </span>
+                    <span className="admin-hint">
+                      {activeCells[singleSelectedIndex] && activeColors[singleSelectedIndex]
+                        ? "已上传图片并设置背景颜色"
+                        : activeCells[singleSelectedIndex]
+                          ? "已上传图片"
+                          : activeColors[singleSelectedIndex]
+                            ? `背景颜色 ${activeColors[singleSelectedIndex]}`
+                            : "未上传图片（白色）"}
+                    </span>
+                  </>
                 ) : (
                   <>
                     <span className="admin-chip">
-                      选中格 {effectiveSelectedIndex}
+                      已选 {effectiveSelectedIndices.length} 格
                     </span>
-                    <span className="admin-hint">
-                      {cellPosition(effectiveSelectedIndex, form.gridCols)}
-                    </span>
-                    <span className="admin-hint">
-                      {activeCells[effectiveSelectedIndex]
-                        ? "已上传图片"
-                        : "未上传图片（白色）"}
-                    </span>
+                    <span className="admin-hint">批量操作只作用于当前地图的选中格。</span>
                   </>
                 )}
                 <span className="admin-chip">出生格 A · {form.spawnA}</span>
@@ -1317,10 +1519,10 @@ export function MapGroupsPage() {
                         type="button"
                         key={index}
                         className={`admin-map-cell${
-                          effectiveSelectedIndex === index ? " selected" : ""
+                          effectiveSelectedSet.has(index) ? " selected" : ""
                         }`}
-                        onClick={() => setSelectedIndex(index)}
-                        aria-pressed={effectiveSelectedIndex === index}
+                        onClick={(event) => toggleCellSelection(index, event)}
+                        aria-pressed={effectiveSelectedSet.has(index)}
                         aria-label={`第 ${Math.floor(index / form.gridCols) + 1} 行第 ${
                           (index % form.gridCols) + 1
                         } 列，编号 ${index}`}
@@ -1469,13 +1671,14 @@ export function MapGroupsPage() {
             <div className="admin-form-section">
               <h3 className="admin-section-title">费用参数</h3>
               <p className="admin-hint">
-                以元为单位输入，平台按分存储。默认参数下完成报酬为 45 到 65 元。
+                以元为单位输入，平台按分存储。默认参数下完成报酬为 45 到 65 元；
+                绩效按士兵数量计算后截断到保底与上限之间。
               </p>
               <div className="admin-condition-meta-grid">
                 <Field
                   label="基础被试费（元）"
                   htmlFor="map-group-base-pay"
-                  hint="默认 45.00"
+                  hint="默认 10.00"
                 >
                   <input
                     id="map-group-base-pay"
@@ -1509,9 +1712,28 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  label="绩效保底（元）"
+                  htmlFor="map-group-performance-floor"
+                  hint="默认 35.00"
+                >
+                  <input
+                    id="map-group-performance-floor"
+                    className="admin-input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.performanceFloorYuan}
+                    onChange={(event) =>
+                      patchForm({ performanceFloorYuan: event.target.value })
+                    }
+                    disabled={readOnly}
+                    data-testid="map-group-performance-floor"
+                  />
+                </Field>
+                <Field
                   label="绩效上限（元）"
                   htmlFor="map-group-performance-cap"
-                  hint="默认 20.00"
+                  hint="默认 55.00"
                 >
                   <input
                     id="map-group-performance-cap"

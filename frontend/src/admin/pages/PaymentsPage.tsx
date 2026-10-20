@@ -72,7 +72,7 @@ export function PaymentsPage() {
   const [payments, setPayments] = useState<PaymentAdmin[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<ExportKind | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -83,12 +83,21 @@ export function PaymentsPage() {
   const [submittingOverride, setSubmittingOverride] = useState(false);
 
   const load = useCallback(async () => {
+    if (!statusFilter || rangeErrorFor(range) !== null) {
+      setPayments([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (statusFilter) params.set("status", statusFilter);
-      params.set("limit", "300");
+      const params = new URLSearchParams({
+        status: statusFilter,
+        from: range.from,
+        to: range.to,
+        limit: "300",
+      });
       const response = await adminApi.get<PaymentsResponse>(`/payments?${params.toString()}`);
       setPayments(response.payments);
     } catch (err) {
@@ -96,7 +105,7 @@ export function PaymentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, range.from, range.to]);
 
   useEffect(() => {
     void load();
@@ -223,6 +232,7 @@ export function PaymentsPage() {
   }
 
   const dateRangeError = rangeErrorFor(range);
+  const listEnabled = statusFilter !== "" && dateRangeError === null;
 
   function updateRange(part: "from" | "to", value: string) {
     setRange((current) => ({ ...current, [part]: value }));
@@ -332,7 +342,9 @@ export function PaymentsPage() {
         </div>
       </div>
 
-      {error ? <ErrorNotice message={error} onRetry={() => void load()} /> : null}
+      {error && listEnabled ? (
+        <ErrorNotice message={error} onRetry={() => void load()} />
+      ) : null}
 
       <div className="admin-toolbar">
         <select
@@ -343,48 +355,51 @@ export function PaymentsPage() {
           style={{ maxWidth: "180px" }}
           data-testid="payment-status-filter"
         >
-          <option value="">全部状态</option>
+          <option value="" disabled>
+            选择状态
+          </option>
           <option value="pending">待支付</option>
           <option value="paid">已支付</option>
         </select>
-        <div className="admin-inline-form" style={{ margin: 0 }}>
-          <Field label="搜索" htmlFor="payment-search">
-            <div className="admin-input-with-icon">
-              <Search size={15} aria-hidden="true" />
-              <input
-                id="payment-search"
-                className="admin-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="姓名、手机号、分析代码或备注"
-                data-testid="payment-search"
-              />
-            </div>
-          </Field>
+        <div className="admin-input-with-icon">
+          <Search size={15} aria-hidden="true" />
+          <input
+            id="payment-search"
+            className="admin-input"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="姓名、手机号、分析代码或备注"
+            aria-label="搜索付款记录"
+            disabled={!listEnabled}
+            data-testid="payment-search"
+          />
         </div>
         <span className="admin-hint">
-          当前列表 {visiblePayments.length} 条，待支付 {pendingSummary.count} 条 ·{" "}
-          {formatMoney(pendingSummary.amount)}
+          {!statusFilter
+            ? "选择状态后显示日期区间内的付款记录。"
+            : dateRangeError
+              ? "请先修正日期范围。"
+              : loading
+                ? "正在加载付款记录…"
+                : `当前列表 ${visiblePayments.length} 条，待支付 ${pendingSummary.count} 条 · ${formatMoney(
+                    pendingSummary.amount,
+                  )}`}
         </span>
       </div>
 
-      {loading ? (
+      {!listEnabled ? null : loading ? (
         <LoadingBlock rows={7} label="正在加载付款记录" />
       ) : payments.length === 0 ? (
         <EmptyState
           icon={Wallet}
           title="暂无付款记录"
-          description={
-            statusFilter
-              ? "当前筛选条件下没有付款记录。"
-              : "房间结束并计算付款后，记录会显示在这里。"
-          }
+          description="当前状态在所选日期区间内没有付款记录。"
         />
       ) : visiblePayments.length === 0 ? (
         <EmptyState
           icon={Search}
           title="没有匹配的付款记录"
-          description="修改搜索关键词或状态筛选后重试。"
+          description="修改搜索关键词后重试。"
         />
       ) : (
         <>

@@ -121,6 +121,7 @@ def payment_from_map_group_snapshot(data: dict | None) -> dict | None:
     return {
         "basePayCents": int(payment.get("basePayCents", 0)),
         "performanceRateCents": int(payment.get("performanceRateCents", 0)),
+        "performanceFloorCents": int(payment.get("performanceFloorCents", 0)),
         "performanceCapCents": int(payment.get("performanceCapCents", 0)),
         "showupPayCents": int(payment.get("showupPayCents", 0)),
     }

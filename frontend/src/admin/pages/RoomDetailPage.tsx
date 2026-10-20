@@ -967,6 +967,10 @@ export function RoomDetailPage() {
                   <dd>{formatMoney(room.mapGroup.payment.performanceRateCents)} / 士兵</dd>
                 </div>
                 <div>
+                  <dt>绩效保底（继承自地图组）</dt>
+                  <dd>{formatMoney(room.mapGroup.payment.performanceFloorCents)}</dd>
+                </div>
+                <div>
                   <dt>绩效上限（继承自地图组）</dt>
                   <dd>{formatMoney(room.mapGroup.payment.performanceCapCents)}</dd>
                 </div>

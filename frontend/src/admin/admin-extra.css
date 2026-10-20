@@ -1190,6 +1190,22 @@
   margin-bottom: 10px;
 }
 
+.admin-map-color-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-color-input {
+  width: 40px;
+  min-height: 32px;
+  padding: 2px;
+  border: 1px solid var(--admin-border);
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
 .admin-map-selection-line {
   display: flex;
   align-items: center;

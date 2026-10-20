@@ -4,14 +4,16 @@ import pytest
 from fastapi import HTTPException
 
 from app.models import GameTrial, Room
-from app.services.payment_lists import _range_bounds, parse_date_range
-from app.services.payments import compute_performance_cents
+from app.schemas import MapPaymentInput
+from app.services.payment_lists import parse_date_range, range_bounds
+from app.services.payments import _payment_from_snapshot, compute_performance_cents
 
 
 def _payment(**overrides) -> dict:
     data = {
         "basePayCents": 4500,
         "performanceRateCents": 1,
+        "performanceFloorCents": 0,
         "performanceCapCents": 2000,
         "showupPayCents": 1000,
     }
@@ -41,6 +43,15 @@ def _trial(
     )
 
 
+def test_default_payment_parameters():
+    payment = MapPaymentInput()
+    assert payment.base_pay_cents == 1000
+    assert payment.performance_rate_cents == 1
+    assert payment.performance_floor_cents == 3500
+    assert payment.performance_cap_cents == 5500
+    assert payment.showup_pay_cents == 1000
+
+
 def test_performance_floors_to_whole_yuan():
     # 平均 1000.5 士兵，单价 1 分，得到 10.005 元，按元向下取整为 10 元
     trials = [_trial(player1=1000), _trial(player1=1001)]
@@ -56,6 +67,35 @@ def test_performance_is_capped():
     trials = [_trial(player1=1000), _trial(player1=1000)]
     payment = _payment(performanceRateCents=10, performanceCapCents=2000)
     assert compute_performance_cents(Room(), trials, 1, payment=payment) == 2000
+
+
+def test_performance_uses_floor_and_cap():
+    low = [_trial(player1=100)]
+    middle = [_trial(player1=4000)]
+    high = [_trial(player1=10000)]
+    payment = _payment(
+        performanceFloorCents=3500,
+        performanceCapCents=5500,
+    )
+    assert compute_performance_cents(Room(), low, 1, payment=payment) == 3500
+    assert compute_performance_cents(Room(), middle, 1, payment=payment) == 4000
+    assert compute_performance_cents(Room(), high, 1, payment=payment) == 5500
+
+
+def test_performance_floor_defaults_to_zero_for_legacy_snapshot():
+    snapshot = {
+        "mapGroup": {
+            "payment": {
+                "basePayCents": 4500,
+                "performanceRateCents": 1,
+                "performanceCapCents": 2000,
+                "showupPayCents": 1000,
+            }
+        }
+    }
+    payment = _payment_from_snapshot(snapshot)
+    assert payment is not None
+    assert payment["performanceFloorCents"] == 0
 
 
 def test_performance_uses_role_specific_totals():
@@ -121,13 +161,13 @@ def test_parse_date_range_rejects_reversed_order():
 
 
 def test_range_bounds_use_beijing_midnight():
-    start, end = _range_bounds(date(2026, 10, 1), date(2026, 10, 2))
+    start, end = range_bounds(date(2026, 10, 1), date(2026, 10, 2))
     assert start == datetime(2026, 9, 30, 16, 0, 0)
     assert end == datetime(2026, 10, 2, 16, 0, 0)
 
 
 def test_range_bounds_cover_single_day_inclusively():
-    start, end = _range_bounds(date(2026, 12, 31), date(2026, 12, 31))
+    start, end = range_bounds(date(2026, 12, 31), date(2026, 12, 31))
     assert start == datetime(2026, 12, 30, 16, 0, 0)
     assert end == datetime(2026, 12, 31, 16, 0, 0)
     assert end - start == timedelta(days=1)

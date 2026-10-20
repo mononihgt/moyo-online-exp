@@ -116,6 +116,7 @@ def _start_completed_room(
     spawns=None,
     base_pay=4500,
     rate=1,
+    performance_floor=0,
     performance_cap=2000,
     identity_a=None,
     identity_b=None,
@@ -132,6 +133,7 @@ def _start_completed_room(
         rest_seconds=1,
         base_pay=base_pay,
         rate=rate,
+        performance_floor=performance_floor,
         performance_cap=performance_cap,
     )
     game = _start_game(server, setup, participant_a, participant_b)
@@ -271,6 +273,27 @@ def test_performance_cap(server):
         assert payment["basePayCents"] == 4500
         assert payment["performancePayCents"] == 2000
         assert payment["totalCents"] == 6500
+
+
+def test_performance_floor(server):
+    context = Context(server)
+    participants = context.participants(REVIEW_PLAYERS)
+    setup, _game, _journey, _identity_a, _identity_b, _detail = _start_completed_room(
+        server,
+        context,
+        participants,
+        troop_rows=PAY_ROWS,
+        base_pay=1000,
+        rate=1,
+        performance_floor=3500,
+        performance_cap=5500,
+    )
+    payments = _payments_for_room(context.admin, setup.room["id"])
+    assert len(payments) == 2
+    for payment in payments:
+        assert payment["basePayCents"] == 1000
+        assert payment["performancePayCents"] == 3500
+        assert payment["totalCents"] == 4500
 
 
 def test_payment_override_note_and_paid_preserved(server):
@@ -826,6 +849,7 @@ def test_map_group_webp_rejected_and_builtin_profile_read_only(server):
         "payment": {
             "basePayCents": 4500,
             "performanceRateCents": 1,
+            "performanceFloorCents": 0,
             "performanceCapCents": 2000,
             "showupPayCents": 1000,
         },
@@ -921,6 +945,7 @@ def test_map_group_draft_can_switch_troop_profile(server):
         "payment": {
             "basePayCents": 4500,
             "performanceRateCents": 1,
+            "performanceFloorCents": 0,
             "performanceCapCents": 2000,
             "showupPayCents": 1000,
         },

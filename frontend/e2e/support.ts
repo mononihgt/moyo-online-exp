@@ -50,6 +50,7 @@ export interface MapGroupConfig {
   randomizeFormal?: boolean;
   basePayCents?: number;
   performanceRateCents?: number;
+  performanceFloorCents?: number;
   performanceCapCents?: number;
   showupPayCents?: number;
 }
@@ -301,6 +302,7 @@ async function createMapGroup(
       payment: {
         basePayCents: config.basePayCents ?? 4500,
         performanceRateCents: config.performanceRateCents ?? 1,
+        performanceFloorCents: config.performanceFloorCents ?? 0,
         performanceCapCents: config.performanceCapCents ?? 2000,
         showupPayCents: config.showupPayCents ?? 1000,
       },
@@ -833,6 +835,12 @@ export async function waitForQuestionnaire(
       pageTwo.getByRole("heading", { name: "请填写后测问卷", exact: true }),
     ).toBeVisible({ timeout: 30000 }),
   ]);
+  await expect(
+    pageOne.getByText("未提交后测问卷前", { exact: false }),
+  ).toHaveCount(0);
+  await expect(
+    pageTwo.getByText("未提交后测问卷前", { exact: false }),
+  ).toHaveCount(0);
 }
 
 export async function expectTurnLabel(

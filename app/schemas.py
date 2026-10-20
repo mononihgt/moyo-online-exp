@@ -54,9 +54,10 @@ class TroopProfileCopy(ApiModel):
 
 
 class MapPaymentInput(ApiModel):
-    base_pay_cents: int = Field(default=4500, ge=0)
+    base_pay_cents: int = Field(default=1000, ge=0)
     performance_rate_cents: int = Field(default=1, ge=0)
-    performance_cap_cents: int = Field(default=2000, ge=0)
+    performance_floor_cents: int = Field(default=3500, ge=0)
+    performance_cap_cents: int = Field(default=5500, ge=0)
     showup_pay_cents: int = Field(default=1000, ge=0)
 
 
@@ -65,6 +66,7 @@ class MapDefinition(ApiModel):
     description: str
     factor_level: str
     cells: list[str | None]
+    colors: list[str | None] | None = None
 
 
 class MapGroupCreate(ApiModel):

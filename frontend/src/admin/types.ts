@@ -117,6 +117,7 @@ export interface MapGroupMapPayload {
   description: string;
   factorLevel: string;
   cells: (string | null)[];
+  colors: (string | null)[];
 }
 
 export interface MapGroupDraftPayload {

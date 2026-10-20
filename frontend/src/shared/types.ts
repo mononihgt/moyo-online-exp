@@ -157,6 +157,7 @@ export interface TroopProfile {
 export interface MapGroupPayment {
   basePayCents: number;
   performanceRateCents: number;
+  performanceFloorCents: number;
   performanceCapCents: number;
   showupPayCents: number;
 }
@@ -178,6 +179,7 @@ export interface MapInfo {
   factorLevel: string;
   playerSuffix: MapSlot;
   cells: (string | null)[];
+  colors: (string | null)[];
 }
 
 export interface MapGroupVersion {

@@ -354,6 +354,7 @@ def create_map_group(
     cols: int = 3,
     formal_trials: int = 2,
     assets: list[str | None] | dict[str, list[str | None]] | None = None,
+    colors: list[str | None] | dict[str, list[str | None]] | None = None,
     spawns: dict[str, int] | None = None,
     description: str = "测试地图",
     factor_level: str = "标准",
@@ -365,6 +366,7 @@ def create_map_group(
     randomize_formal: bool = True,
     base_pay_cents: int = 4500,
     performance_rate_cents: int = 1,
+    performance_floor_cents: int = 0,
     performance_cap_cents: int = 2000,
     showup_pay_cents: int = 1000,
     publish: bool = True,
@@ -377,6 +379,7 @@ def create_map_group(
             "description": description,
             "factorLevel": factor_level,
             "cells": _asset_cells(assets, slot, total),
+            "colors": _asset_cells(colors, slot, total),
         }
         for slot in slots
     ]
@@ -397,6 +400,7 @@ def create_map_group(
         "payment": {
             "basePayCents": base_pay_cents,
             "performanceRateCents": performance_rate_cents,
+            "performanceFloorCents": performance_floor_cents,
             "performanceCapCents": performance_cap_cents,
             "showupPayCents": showup_pay_cents,
         },

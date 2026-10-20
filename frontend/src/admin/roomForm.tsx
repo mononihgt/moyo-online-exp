@@ -307,7 +307,8 @@ export function RoomConfigFields({
           {selectedGroup ? (
             <div className="admin-hint" style={{ lineHeight: 1.7 }}>
               基础费 {formatMoney(selectedGroup.payment.basePayCents)} · 绩效单价{" "}
-              {formatMoney(selectedGroup.payment.performanceRateCents)} / 士兵 · 绩效上限{" "}
+              {formatMoney(selectedGroup.payment.performanceRateCents)} / 士兵 · 绩效保底{" "}
+              {formatMoney(selectedGroup.payment.performanceFloorCents)} · 绩效上限{" "}
               {formatMoney(selectedGroup.payment.performanceCapCents)} · 到场费{" "}
               {formatMoney(selectedGroup.payment.showupPayCents)}
             </div>

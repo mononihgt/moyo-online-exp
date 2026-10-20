@@ -8,6 +8,7 @@ from app.services.map_groups import (
     MapGroupValidationError,
     build_map_name,
     build_role_visuals,
+    map_group_content_hash,
     parse_map_name,
     validate_map_group_payload,
     validate_size_token,
@@ -34,6 +35,7 @@ def _payment_parameters() -> dict:
     return {
         "base_pay_cents": 4500,
         "performance_rate_cents": 1,
+        "performance_floor_cents": 0,
         "performance_cap_cents": 2000,
         "showup_pay_cents": 1000,
     }
@@ -656,13 +658,49 @@ def test_split_protected_answers_requires_complete_types_for_submission():
     assert payload is None
 
 
+def test_map_colors_are_normalized_and_optional():
+    payload = _both_payload()
+    payload["maps"][0]["colors"] = ["#aabbcc", None, None, None]
+    data = validate_map_group_payload(payload, {}, 1)
+    assert data["maps"][0]["colors"] == ["#AABBCC", None, None, None]
+
+    payload["maps"][0].pop("colors")
+    data = validate_map_group_payload(payload, {}, 1)
+    assert data["maps"][0]["colors"] == [None, None, None, None]
+
+
+def test_map_colors_require_valid_length_and_format():
+    payload = _both_payload()
+    payload["maps"][0]["colors"] = ["#AABBCC", None, None]
+    with pytest.raises(MapGroupValidationError, match="地图单元格颜色数量必须为 4"):
+        validate_map_group_payload(payload, {}, 1)
+
+    payload["maps"][0]["colors"] = ["red", None, None, None]
+    with pytest.raises(MapGroupValidationError, match="地图单元格背景颜色必须为 #RRGGBB"):
+        validate_map_group_payload(payload, {}, 1)
+
+
+def test_map_colors_change_content_hash():
+    data = validate_map_group_payload(_both_payload(), {}, 1)
+    data["troop_profile_version_id"] = "profile-version"
+    first = map_group_content_hash(data)
+    data["maps"][0]["colors"] = ["#112233", None, None, None]
+    assert map_group_content_hash(data) != first
+
+
 def test_build_role_visuals_both_mode_uses_shared_map():
     version = SimpleNamespace(
         mode="both",
-        maps=[SimpleNamespace(slot="Both", cells_json=["asset-1", None])],
+        maps=[
+            SimpleNamespace(
+                slot="Both",
+                cells_json=["asset-1", None],
+                colors_json=["#112233", None],
+            )
+        ],
     )
     expected = [
-        {"color": None, "backgroundAssetId": "asset-1"},
+        {"color": "#112233", "backgroundAssetId": "asset-1"},
         {"color": None, "backgroundAssetId": None},
     ]
     assert build_role_visuals(version, 1) == expected

@@ -33,6 +33,7 @@ def _payment_from_snapshot(snapshot: dict | None) -> dict | None:
     return {
         "basePayCents": int(payment.get("basePayCents", 0)),
         "performanceRateCents": int(payment.get("performanceRateCents", 0)),
+        "performanceFloorCents": int(payment.get("performanceFloorCents", 0)),
         "performanceCapCents": int(payment.get("performanceCapCents", 0)),
         "showupPayCents": int(payment.get("showupPayCents", 0)),
     }
@@ -42,6 +43,7 @@ def _payment_from_version(version: MapGroupVersion) -> dict:
     return {
         "basePayCents": version.base_pay_cents,
         "performanceRateCents": version.performance_rate_cents,
+        "performanceFloorCents": version.performance_floor_cents,
         "performanceCapCents": version.performance_cap_cents,
         "showupPayCents": version.showup_pay_cents,
     }
@@ -98,7 +100,10 @@ def compute_performance_cents(
     performance_yuan = (mean * Decimal(payment["performanceRateCents"]) / Decimal(100)).to_integral_value(
         rounding=ROUND_FLOOR
     )
-    return min(payment["performanceCapCents"], int(performance_yuan) * 100)
+    amount = int(performance_yuan) * 100
+    floor = int(payment.get("performanceFloorCents", 0))
+    cap = int(payment["performanceCapCents"])
+    return max(floor, min(cap, amount))
 
 
 def payment_deadline(room: Room, completed_at):

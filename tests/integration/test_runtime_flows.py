@@ -116,6 +116,7 @@ class Context:
         spawns=None,
         mode="both",
         assets=None,
+        colors=None,
         practice_cap=3,
         practice_seconds=3,
         formal_cap=3,
@@ -124,6 +125,7 @@ class Context:
         randomize=True,
         base_pay=4500,
         rate=1,
+        performance_floor=0,
         performance_cap=2000,
         showup=1000,
         min_reading=0,
@@ -146,6 +148,7 @@ class Context:
             cols=cols,
             formal_trials=len(troop_rows) - 1,
             assets=assets,
+            colors=colors,
             spawns=spawn_map,
             description=description,
             practice_turn_cap=practice_cap,
@@ -156,6 +159,7 @@ class Context:
             randomize_formal=randomize,
             base_pay_cents=base_pay,
             performance_rate_cents=rate,
+            performance_floor_cents=performance_floor,
             performance_cap_cents=performance_cap,
             showup_pay_cents=showup,
         )
@@ -1474,11 +1478,13 @@ def test_visuals_both_mode(server):
         spawns=SPAWNS_2X2,
         mode="both",
         assets=assets,
+        colors=["#112233", None, None, None],
     )
     game = _start_game(server, setup, participant_a, participant_b)
     assert game.start_a["visuals"] == game.start_b["visuals"]
     assert len(game.start_a["visuals"]) == 4
     assert game.start_a["visuals"][0]["backgroundAssetId"] == asset["id"]
+    assert game.start_a["visuals"][0]["color"] == "#112233"
     assert game.start_a["visuals"][1]["backgroundAssetId"] is None
     assert game.state_a["game"]["visuals"] == game.start_a["visuals"]
     assert game.state_b["game"]["visuals"] == game.start_a["visuals"]
@@ -1503,13 +1509,19 @@ def test_visuals_ab_mode(server):
         spawns=SPAWNS_2X2,
         mode="ab",
         assets=assets,
+        colors={
+            "A": ["#112233", None, None, None],
+            "B": ["#445566", None, None, None],
+        },
     )
     game = _start_game(server, setup, participant_a, participant_b)
 
     visuals_a = game.start_a["visuals"] if game.role_a == 1 else game.start_b["visuals"]
     visuals_b = game.start_a["visuals"] if game.role_a == 2 else game.start_b["visuals"]
     assert visuals_a[0]["backgroundAssetId"] == asset_a["id"]
+    assert visuals_a[0]["color"] == "#112233"
     assert visuals_b[0]["backgroundAssetId"] == asset_b["id"]
+    assert visuals_b[0]["color"] == "#445566"
     assert visuals_a != visuals_b
 
     state_visuals_a = (

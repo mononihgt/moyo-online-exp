@@ -157,7 +157,15 @@ def _role_visuals(map_group: dict, role: int) -> list[dict]:
     selected = next((item for item in map_group["maps"] if item["slot"] == slot), None)
     if selected is None:
         raise RuntimeError("地图组缺少角色对应的地图")
-    return [{"color": None, "backgroundAssetId": cell} for cell in selected["cells"]]
+    cells = selected["cells"]
+    colors = selected.get("colors") or []
+    return [
+        {
+            "color": colors[index] if index < len(colors) and isinstance(colors[index], str) else None,
+            "backgroundAssetId": cell,
+        }
+        for index, cell in enumerate(cells)
+    ]
 
 
 class RuntimeManager:

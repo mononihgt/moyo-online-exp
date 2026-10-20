@@ -3,10 +3,15 @@ import { expect, test } from "@playwright/test";
 import { adminApi, adminLoginPage, prepareWorld } from "./support";
 
 interface SavedMapGroup {
+  id: string;
   rows: number;
   cols: number;
   spawns: { A: number; B: number };
-  maps: { slot: string; cells: (string | null)[] }[];
+  maps: {
+    slot: string;
+    cells: (string | null)[];
+    colors: (string | null)[];
+  }[];
 }
 
 const PNG_1X1 = Buffer.from(
@@ -94,6 +99,153 @@ test("调整尺寸后出生格与选中格按行列重映射并持久化", async
   expect(saved.mapGroup.rows).toBe(4);
   expect(saved.mapGroup.cols).toBe(8);
   expect(saved.mapGroup.spawns).toEqual({ A: 19, B: 31 });
+});
+
+test("批量选择格子设置颜色、上传图片并恢复白色", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  test.setTimeout(180_000);
+  if (!baseURL) throw new Error("baseURL missing");
+  const world = await prepareWorld(request, baseURL, {
+    entries: [
+      { name: "批量甲", phone: "13100000005" },
+      { name: "批量乙", phone: "13100000006" },
+    ],
+    startsInSeconds: 3600,
+    map: {
+      rows: 3,
+      cols: 3,
+      description: "批量编辑",
+      factorLevel: "标准",
+    },
+  });
+
+  await adminLoginPage(page);
+  await page.goto("/admin/map-groups");
+  await expect(
+    page.getByRole("heading", { name: "地图组", exact: true }),
+  ).toBeVisible({ timeout: 20000 });
+  await page.getByTestId(`map-group-version-${world.mapGroupVersionId}`).click();
+  await page.getByTestId("map-group-new-version").click();
+  await expect(page.getByTestId("map-group-save")).toBeVisible();
+
+  await page.getByTestId("map-group-cell-0").click();
+  await page.getByTestId("map-group-cell-2").click({ modifiers: ["Shift"] });
+  await expect(page.getByText("已选 3 格", { exact: true })).toBeVisible();
+
+  await page.getByTestId("map-group-color-input").evaluate((element) => {
+    const input = element as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(input, "#123456");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.getByTestId("map-group-apply-color").click();
+  await expect(
+    page.getByText("已设置 3 个格子的背景颜色", { exact: true }),
+  ).toBeVisible();
+
+  let mediaUploads = 0;
+  page.on("request", (requestEvent) => {
+    if (
+      requestEvent.method() === "POST" &&
+      requestEvent.url().endsWith("/admin/api/media")
+    ) {
+      mediaUploads += 1;
+    }
+  });
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByTestId("map-group-upload-cell").click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: "batch-cell.png",
+    mimeType: "image/png",
+    buffer: PNG_1X1,
+  });
+  await expect(
+    page.getByText("已上传图片到 3 个格子", { exact: true }),
+  ).toBeVisible({ timeout: 20000 });
+  expect(mediaUploads).toBe(1);
+
+  const createdResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/admin/api/map-groups") &&
+      response.request().method() === "POST",
+  );
+  await page.getByTestId("map-group-save").click();
+  const created = (await (await createdResponse).json()) as {
+    mapGroup: { id: string };
+  };
+  await expect(page.getByText(/地图组草稿已创建/)).toBeVisible();
+
+  const first = await adminApi<{ mapGroup: SavedMapGroup }>(
+    request,
+    baseURL,
+    "GET",
+    `/admin/api/map-groups/${created.mapGroup.id}`,
+  );
+  const firstMap = first.mapGroup.maps.find((map) => map.slot === "Both");
+  expect(firstMap?.colors?.slice(0, 3)).toEqual([
+    "#123456",
+    "#123456",
+    "#123456",
+  ]);
+  expect(firstMap?.cells?.[0]).toBeTruthy();
+  expect(firstMap?.cells?.[1]).toBe(firstMap?.cells?.[0]);
+  expect(firstMap?.cells?.[2]).toBe(firstMap?.cells?.[0]);
+
+  await page.getByTestId("map-group-cell-0").click();
+  await page.getByTestId("map-group-cell-2").click({ modifiers: ["Shift"] });
+  await page.getByTestId("map-group-clear-cell").click();
+  const clearedResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/admin/api/map-groups/${created.mapGroup.id}`) &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByTestId("map-group-save").click();
+  await clearedResponse;
+  await expect(page.getByText("地图组草稿已保存", { exact: true })).toBeVisible();
+
+  const cleared = await adminApi<{ mapGroup: SavedMapGroup }>(
+    request,
+    baseURL,
+    "GET",
+    `/admin/api/map-groups/${created.mapGroup.id}`,
+  );
+  const clearedMap = cleared.mapGroup.maps.find((map) => map.slot === "Both");
+  expect(clearedMap?.cells?.slice(0, 3)).toEqual([null, null, null]);
+  expect(clearedMap?.colors?.slice(0, 3)).toEqual([
+    "#123456",
+    "#123456",
+    "#123456",
+  ]);
+
+  await page.getByTestId("map-group-cell-0").click();
+  await page.getByTestId("map-group-cell-2").click({ modifiers: ["Shift"] });
+  await page.getByTestId("map-group-restore-white").click();
+  const restoredResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/admin/api/map-groups/${created.mapGroup.id}`) &&
+      response.request().method() === "PATCH",
+  );
+  await page.getByTestId("map-group-save").click();
+  await restoredResponse;
+  await expect(page.getByText("地图组草稿已保存", { exact: true })).toBeVisible();
+
+  const restored = await adminApi<{ mapGroup: SavedMapGroup }>(
+    request,
+    baseURL,
+    "GET",
+    `/admin/api/map-groups/${created.mapGroup.id}`,
+  );
+  const restoredMap = restored.mapGroup.maps.find((map) => map.slot === "Both");
+  expect(restoredMap?.colors?.slice(0, 3)).toEqual([null, null, null]);
+  expect(restoredMap?.cells?.slice(0, 3)).toEqual([null, null, null]);
 });
 
 test("上传进行中切换版本会丢弃过期上传结果", async ({

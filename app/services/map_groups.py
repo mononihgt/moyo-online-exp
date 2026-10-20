@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -24,9 +25,11 @@ from ..timeutil import isoformat_utc, utcnow
 
 ALLOWED_MAP_CONTENT_TYPES = ("image/png", "image/jpeg")
 NAME_PARTS_ERROR = "地图名称必须是四段：内容描述-尺寸-因素水平-玩家后缀"
+COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
 PAYMENT_FIELDS = (
     ("base_pay_cents", "basePayCents"),
     ("performance_rate_cents", "performanceRateCents"),
+    ("performance_floor_cents", "performanceFloorCents"),
     ("performance_cap_cents", "performanceCapCents"),
     ("showup_pay_cents", "showupPayCents"),
 )
@@ -134,15 +137,42 @@ def _validate_map_cells(cells: Any, total: int, asset_types: dict[str, str]) -> 
     return normalized
 
 
+def _validate_map_colors(colors: Any, total: int) -> list:
+    if colors is None:
+        return [None] * total
+    if not isinstance(colors, list) or len(colors) != total:
+        raise MapGroupValidationError(f"地图单元格颜色数量必须为 {total}")
+    normalized = []
+    for color in colors:
+        if color is None:
+            normalized.append(None)
+            continue
+        if not isinstance(color, str) or COLOR_PATTERN.fullmatch(color) is None:
+            raise MapGroupValidationError("地图单元格背景颜色必须为 #RRGGBB")
+        normalized.append(color.upper())
+    return normalized
+
+
+def _stored_colors(values: Any, total: int) -> list:
+    source = values if isinstance(values, list) else []
+    normalized = []
+    for index in range(total):
+        color = source[index] if index < len(source) else None
+        normalized.append(color if isinstance(color, str) else None)
+    return normalized
+
+
 def _validate_payment(payment: Any) -> dict:
     if not isinstance(payment, dict):
         raise MapGroupValidationError("费用参数必须是对象")
     normalized = {}
     for field, _camel in PAYMENT_FIELDS:
         value = _require_int(payment.get(field), field)
-        if value <= 0:
+        if value < 0 or (field != "performance_floor_cents" and value == 0):
             raise MapGroupValidationError("回合上限、倒计时、休息和费用必须为正数")
         normalized[field] = value
+    if normalized["performance_floor_cents"] > normalized["performance_cap_cents"]:
+        raise MapGroupValidationError("绩效保底不能高于绩效上限")
     return normalized
 
 
@@ -199,6 +229,7 @@ def validate_map_group_payload(
         factor_level = item.get("factor_level", item.get("factorLevel"))
         built = build_map_name(description, rows, cols, factor_level, slot)
         cells = _validate_map_cells(item.get("cells"), total, asset_types)
+        colors = _validate_map_colors(item.get("colors"), total)
         normalized_maps.append(
             {
                 "slot": slot,
@@ -208,6 +239,7 @@ def validate_map_group_payload(
                 "factorLevel": built["factorLevel"],
                 "playerSuffix": built["playerSuffix"],
                 "cells": cells,
+                "colors": colors,
                 "prefix": built["prefix"],
             }
         )
@@ -274,6 +306,7 @@ def map_group_content_hash(data: dict) -> str:
                 "factorLevel": item["factorLevel"],
                 "playerSuffix": item["playerSuffix"],
                 "cells": item["cells"],
+                "colors": item["colors"],
             }
             for item in data["maps"]
         ],
@@ -286,6 +319,7 @@ def map_group_payment(version: MapGroupVersion) -> dict:
     return {
         "basePayCents": version.base_pay_cents,
         "performanceRateCents": version.performance_rate_cents,
+        "performanceFloorCents": version.performance_floor_cents,
         "performanceCapCents": version.performance_cap_cents,
         "showupPayCents": version.showup_pay_cents,
     }
@@ -297,6 +331,7 @@ def _sorted_maps(version: MapGroupVersion) -> list[Map]:
 
 
 def serialize_map(version: MapGroupVersion) -> list[dict]:
+    total = version.rows * version.cols
     return [
         {
             "slot": item.slot,
@@ -306,6 +341,7 @@ def serialize_map(version: MapGroupVersion) -> list[dict]:
             "factorLevel": item.factor_level,
             "playerSuffix": item.player_suffix,
             "cells": item.cells_json,
+            "colors": _stored_colors(item.colors_json, total),
         }
         for item in _sorted_maps(version)
     ]
@@ -362,7 +398,12 @@ def build_role_visuals(version: MapGroupVersion, role: int) -> list[dict]:
     selected = next((item for item in version.maps if item.slot == slot), None)
     if selected is None:
         raise ValueError("地图组缺少角色对应的地图")
-    return [{"color": None, "backgroundAssetId": cell} for cell in selected.cells_json]
+    cells = selected.cells_json
+    colors = _stored_colors(getattr(selected, "colors_json", None), len(cells))
+    return [
+        {"color": color, "backgroundAssetId": cell}
+        for cell, color in zip(cells, colors)
+    ]
 
 
 async def collect_asset_types(db: AsyncSession, asset_ids: set[str]) -> dict[str, str]:
@@ -420,6 +461,7 @@ def _version_payload(version: MapGroupVersion) -> dict:
         "payment": {
             "base_pay_cents": version.base_pay_cents,
             "performance_rate_cents": version.performance_rate_cents,
+            "performance_floor_cents": version.performance_floor_cents,
             "performance_cap_cents": version.performance_cap_cents,
             "showup_pay_cents": version.showup_pay_cents,
         },
@@ -429,6 +471,7 @@ def _version_payload(version: MapGroupVersion) -> dict:
                 "description": item.description,
                 "factor_level": item.factor_level,
                 "cells": item.cells_json,
+                "colors": _stored_colors(item.colors_json, version.rows * version.cols),
             }
             for item in _sorted_maps(version)
         ],
@@ -452,6 +495,7 @@ def _apply_validated(version: MapGroupVersion, data: dict) -> None:
     version.randomize_formal = data["randomize_formal"]
     version.base_pay_cents = data["payment"]["base_pay_cents"]
     version.performance_rate_cents = data["payment"]["performance_rate_cents"]
+    version.performance_floor_cents = data["payment"]["performance_floor_cents"]
     version.performance_cap_cents = data["payment"]["performance_cap_cents"]
     version.showup_pay_cents = data["payment"]["showup_pay_cents"]
     version.content_hash = map_group_content_hash(data)
@@ -473,6 +517,7 @@ def _replace_maps(version: MapGroupVersion, maps: list[dict]) -> None:
                     factor_level=item["factorLevel"],
                     player_suffix=item["playerSuffix"],
                     cells_json=item["cells"],
+                    colors_json=item["colors"],
                 )
             )
             continue
@@ -482,6 +527,7 @@ def _replace_maps(version: MapGroupVersion, maps: list[dict]) -> None:
         row.factor_level = item["factorLevel"]
         row.player_suffix = item["playerSuffix"]
         row.cells_json = item["cells"]
+        row.colors_json = item["colors"]
     for slot, row in existing.items():
         if slot not in kept_slots:
             version.maps.remove(row)

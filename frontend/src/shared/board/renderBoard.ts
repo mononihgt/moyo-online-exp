@@ -158,6 +158,13 @@ export function drawBoard(context: CanvasRenderingContext2D, options: DrawBoardO
       context.fillStyle = "#ffffff";
       context.fillRect(x, y, cellWidth, cellHeight);
 
+      if (visual.color) {
+        context.fillStyle = visual.color;
+        context.fillRect(x, y, cellWidth, cellHeight);
+        const brightness = hexBrightness(visual.color);
+        dark = brightness === null ? true : brightness < 140;
+      }
+
       if (visual.backgroundAssetId) {
         const entry = getBoardImage(visual.backgroundAssetId);
         if (entry.loaded && !entry.failed) {
@@ -180,17 +187,7 @@ export function drawBoard(context: CanvasRenderingContext2D, options: DrawBoardO
           );
           context.restore();
           dark = entry.dark;
-        } else if (visual.color) {
-          context.fillStyle = visual.color;
-          context.fillRect(x, y, cellWidth, cellHeight);
-          const brightness = hexBrightness(visual.color);
-          dark = brightness === null ? true : brightness < 140;
         }
-      } else if (visual.color) {
-        context.fillStyle = visual.color;
-        context.fillRect(x, y, cellWidth, cellHeight);
-        const brightness = hexBrightness(visual.color);
-        dark = brightness === null ? true : brightness < 140;
       }
 
       if (!drawPieces || board === null) continue;

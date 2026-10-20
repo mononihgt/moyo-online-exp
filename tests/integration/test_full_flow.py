@@ -306,6 +306,7 @@ def test_full_two_participant_flow_and_exports(server):
     assert map_group["payment"] == {
         "basePayCents": 4500,
         "performanceRateCents": 50,
+        "performanceFloorCents": 0,
         "performanceCapCents": 2000,
         "showupPayCents": 1000,
     }
@@ -679,6 +680,24 @@ def test_full_two_participant_flow_and_exports(server):
         assert payment["deadlineAt"] is not None
         assert payment["roomStartsAt"] == starts_at_raw
         assert "****" in payment["phoneMasked"]
+
+    filtered_payments = admin.json(
+        "GET",
+        "/admin/api/payments",
+        params={"status": "pending", "from": local_date, "to": local_date},
+    )["payments"]
+    assert len(filtered_payments) == 2
+    outside_payments = admin.json(
+        "GET",
+        "/admin/api/payments",
+        params={"status": "pending", "from": "2000-01-01", "to": "2000-01-02"},
+    )["payments"]
+    assert outside_payments == []
+    missing_to = admin.request(
+        "GET", "/admin/api/payments", params={"from": local_date}
+    )
+    assert missing_to.status_code == 400
+    assert missing_to.json()["detail"] == "开始日期和结束日期必须同时提供"
 
     payment_list = admin.request(
         "GET",

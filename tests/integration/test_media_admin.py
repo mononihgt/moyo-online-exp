@@ -229,6 +229,61 @@ def test_map_group_rejects_webp_and_missing_assets(server):
 
 
 @pytest.mark.integration
+def test_map_group_colors_round_trip_and_validation(server):
+    admin = ApiClient(server.base_url).login_admin()
+    profile = create_troop_profile(admin)
+    draft = create_map_group(
+        admin,
+        profile["id"],
+        rows=2,
+        cols=2,
+        colors=["#aabbcc", None, None, None],
+        publish=False,
+    )
+    assert draft["maps"][0]["colors"] == ["#AABBCC", None, None, None]
+
+    base_maps = [
+        {
+            "slot": item["slot"],
+            "description": item["description"],
+            "factorLevel": item["factorLevel"],
+            "cells": item["cells"],
+            "colors": item["colors"],
+        }
+        for item in draft["maps"]
+    ]
+    too_short = [dict(item) for item in base_maps]
+    too_short[0]["colors"] = ["#AABBCC", None, None]
+    response = admin.request(
+        "PATCH", f"/admin/api/map-groups/{draft['id']}", json={"maps": too_short}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "地图单元格颜色数量必须为 4"
+
+    invalid = [dict(item) for item in base_maps]
+    invalid[0]["colors"] = ["red", None, None, None]
+    response = admin.request(
+        "PATCH", f"/admin/api/map-groups/{draft['id']}", json={"maps": invalid}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "地图单元格背景颜色必须为 #RRGGBB"
+
+    updated_maps = [dict(item) for item in base_maps]
+    updated_maps[0]["colors"] = ["#112233", None, None, None]
+    response = admin.request(
+        "PATCH",
+        f"/admin/api/map-groups/{draft['id']}",
+        json={"maps": updated_maps},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()["mapGroup"]
+    assert updated["maps"][0]["colors"] == ["#112233", None, None, None]
+    assert updated["contentHash"] != draft["contentHash"]
+
+    admin.close()
+
+
+@pytest.mark.integration
 def test_room_media_export_and_instruction_asset_rendering(server):
     admin = ApiClient(server.base_url).login_admin()
     profile = create_troop_profile(admin)
