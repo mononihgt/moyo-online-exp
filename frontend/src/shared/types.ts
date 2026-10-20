@@ -1,4 +1,4 @@
-export type ParticipantStatus = "eligible" | "completed" | "disabled";
+export type ParticipantStatus = "eligible" | "completed" | "disabled" | "merged";
 export type RoomStatus =
   | "draft"
   | "open"
@@ -20,7 +20,12 @@ export type ArchiveReason =
   | "admin_aborted"
   | "admin_cancelled";
 export type ExitReason = "manual" | "inactivity";
-export type RewardKind = "completion" | "showup" | "none";
+export type RewardKind = "completion" | "showup" | "manual" | "none";
+export type PaymentSource =
+  | "computed"
+  | "manual_showup"
+  | "manual_completion"
+  | "manual_compensation";
 export type BookingStatus = "booked" | "canceled" | "attended" | "no_show";
 export type QuestionnaireStatus = "not_started" | "in_progress" | "completed";
 export type VersionStatus = "draft" | "published" | "archived";
@@ -83,6 +88,8 @@ export interface CurrentRoom {
 export interface Payment {
   id?: string;
   analysisCode: string | null;
+  participantId?: string;
+  name?: string;
   roomId?: string;
   roomStartsAt?: string;
   roomStatus?: RoomStatus;
@@ -92,6 +99,7 @@ export interface Payment {
   showupPayCents: number;
   overrideAmountCents: number | null;
   totalCents: number;
+  source?: PaymentSource;
   status: PaymentStatus;
   computedAt: string | null;
   deadlineAt: string;
@@ -116,6 +124,7 @@ export interface ExperimentRecord {
   canRebook: boolean;
   questionnaireRequired: boolean;
   showupPayCents: number;
+  hasManualPayment: boolean;
   rewardKind: RewardKind;
 }
 
@@ -339,6 +348,8 @@ export interface AdminParticipant {
   name: string;
   phoneMasked: string;
   status: ParticipantStatus;
+  mergedIntoId: string | null;
+  mergedIntoName: string | null;
   consentedAt: string | null;
   notes: string | null;
   createdAt: string;
@@ -354,6 +365,7 @@ export interface AdminBooking {
   createdAt: string;
   canceledAt: string | null;
   attendedAt: string | null;
+  canRestoreAttendance: boolean;
 }
 
 export interface AdminRoomParticipant {
@@ -379,6 +391,7 @@ export interface RoomDetail {
   bookings: AdminBooking[];
   participants: AdminRoomParticipant[];
   payments: Payment[];
+  archiveReasonCorrectionOptions: ArchiveReason[];
   jatosAdminUrl: string | null;
   jatosStudyCode: string | null;
 }
@@ -424,10 +437,12 @@ export interface BulkPaymentRecord {
   analysisCode: string | null;
   name: string;
   phone: string;
+  alipayPhone: string | null;
   roomId: string;
   roomStartsAt: string;
   archiveReason: ArchiveReason | null;
   totalCents: number;
+  source?: PaymentSource;
   status: PaymentStatus;
   paidAt: string | null;
 }
@@ -566,6 +581,7 @@ export interface RoomStateMessage {
     selfAttended: boolean;
     questionnaireRequired: boolean;
     showupPayCents: number;
+    hasManualPayment: boolean;
     rewardKind: RewardKind;
   };
 }
@@ -670,6 +686,7 @@ export type ServerMessage =
       selfCompleted: boolean;
       questionnaireRequired: boolean;
       showupPayCents: number;
+      hasManualPayment: boolean;
       canRebook: boolean;
       rewardKind: RewardKind;
     }

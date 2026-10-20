@@ -7,16 +7,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..constants import (
+    ARCHIVE_ADMIN_CANCELLED,
+    ARCHIVE_REASONS,
     ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
+    BOOKING_CANCELED,
     PAYMENT_PAID,
     PAYMENT_PENDING,
+    PAYMENT_SOURCE_COMPUTED,
+    PAYMENT_SOURCE_MANUAL_COMPENSATION,
+    PAYMENT_SOURCE_MANUAL_COMPLETION,
+    PAYMENT_SOURCE_MANUAL_SHOWUP,
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
 )
-from ..models import Booking, GameTrial, MapGroupVersion, Payment, Room, RoomParticipant
+from ..models import (
+    Booking,
+    GameTrial,
+    MapGroupVersion,
+    Payment,
+    Room,
+    RoomParticipant,
+)
 from ..timeutil import isoformat_utc, utcnow, week_deadline_utc
 from .events import add_event
+from .identities import has_identity, upsert_identity_values
+from .questionnaires import QuestionnaireValidationError, validate_identity_values
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +159,15 @@ async def upsert_payment(
     if room_participant is None:
         return None
 
+    existing_query = await db.execute(
+        select(Payment).where(
+            Payment.room_id == room.id, Payment.participant_id == participant_id
+        )
+    )
+    payment = existing_query.scalars().first()
+    if payment is not None and payment.source != PAYMENT_SOURCE_COMPUTED:
+        return payment
+
     completed = room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
     attended = booking is not None and booking.status == BOOKING_ATTENDED
     technical_abort = room.status == ROOM_ARCHIVED and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
@@ -189,14 +214,11 @@ async def upsert_payment(
         return None
     deadline = payment_deadline(room_participant.completed_at)
 
-    existing_query = await db.execute(
-        select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant_id)
-    )
-    payment = existing_query.scalars().first()
     if payment is None:
         payment = Payment(
             room_id=room.id,
             participant_id=participant_id,
+            source=PAYMENT_SOURCE_COMPUTED,
             status=PAYMENT_PENDING,
         )
         db.add(payment)
@@ -228,6 +250,122 @@ async def upsert_payment(
     return payment
 
 
+MANUAL_PAYMENT_ARCHIVE_REASONS = ARCHIVE_REASONS
+
+
+async def create_manual_payment(
+    db: AsyncSession,
+    room: Room,
+    participant_id: str,
+    *,
+    booking_id: str,
+    kind: str,
+    amount_cents: int,
+    admin_note: str,
+    identity_values: dict | None = None,
+) -> Payment:
+    if room.status != ROOM_ARCHIVED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "只有已归档实验可以创建手工付款")
+    if room.archive_reason not in MANUAL_PAYMENT_ARCHIVE_REASONS:
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前归档原因不允许创建手工付款")
+    if kind not in (
+        PAYMENT_SOURCE_MANUAL_SHOWUP,
+        PAYMENT_SOURCE_MANUAL_COMPLETION,
+        PAYMENT_SOURCE_MANUAL_COMPENSATION,
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "付款类型无效")
+    if amount_cents <= 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "付款金额必须大于 0")
+    note = admin_note.strip()
+    if not note:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须填写付款备注")
+
+    booking = await db.get(Booking, booking_id)
+    if (
+        booking is None
+        or booking.room_id != room.id
+        or booking.participant_id != participant_id
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该预约不存在或不属于该参与者")
+    if kind in (
+        PAYMENT_SOURCE_MANUAL_SHOWUP,
+        PAYMENT_SOURCE_MANUAL_COMPLETION,
+    ) and booking.status != BOOKING_ATTENDED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "只有到场参与者可以创建该类型付款")
+    if kind == PAYMENT_SOURCE_MANUAL_COMPENSATION:
+        if room.archive_reason != ARCHIVE_ADMIN_CANCELLED and booking.status == BOOKING_CANCELED:
+            raise HTTPException(status.HTTP_409_CONFLICT, "已取消预约不能创建补偿付款")
+
+    existing_query = await db.execute(
+        select(Payment).where(
+            Payment.room_id == room.id,
+            Payment.participant_id == participant_id,
+        )
+    )
+    if existing_query.scalars().first() is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "该参与者在本场已有付款记录，请使用金额覆盖调整",
+        )
+
+    if not await has_identity(db, room.id, participant_id):
+        if identity_values is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "该参与者没有身份记录，必须同时录入姓名、支付宝手机号和证件信息",
+            )
+        try:
+            validated_identity = validate_identity_values(
+                identity_values.get("real_name"),
+                identity_values.get("alipay_phone"),
+                identity_values.get("document_type"),
+                identity_values.get("document_number"),
+            )
+        except QuestionnaireValidationError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        await upsert_identity_values(
+            db, room.id, participant_id, validated_identity
+        )
+
+    now = utcnow()
+
+    base = 0
+    performance = 0
+    showup = 0
+    override: int | None = None
+    if kind == PAYMENT_SOURCE_MANUAL_SHOWUP:
+        showup = amount_cents
+    elif kind == PAYMENT_SOURCE_MANUAL_COMPLETION:
+        base = amount_cents
+    else:
+        override = amount_cents
+
+    payment = Payment(
+        room_id=room.id,
+        participant_id=participant_id,
+        base_pay_cents=base,
+        performance_pay_cents=performance,
+        showup_pay_cents=showup,
+        override_amount_cents=override,
+        total_cents=amount_cents,
+        source=kind,
+        status=PAYMENT_PENDING,
+        computed_at=now,
+        deadline_at=payment_deadline(now),
+        admin_note=note,
+    )
+    db.add(payment)
+    await db.flush()
+    add_event(
+        db,
+        room,
+        "manual_payment_created",
+        participant_id,
+        {"kind": kind, "amountCents": amount_cents},
+    )
+    return payment
+
+
 def serialize_payment(payment: Payment, analysis_code: str | None = None) -> dict:
     return {
         "id": payment.id,
@@ -238,6 +376,7 @@ def serialize_payment(payment: Payment, analysis_code: str | None = None) -> dic
         "showupPayCents": payment.showup_pay_cents,
         "overrideAmountCents": payment.override_amount_cents,
         "totalCents": payment.total_cents,
+        "source": payment.source,
         "status": payment.status,
         "computedAt": isoformat_utc(payment.computed_at),
         "deadlineAt": isoformat_utc(payment.deadline_at),
@@ -258,6 +397,15 @@ def apply_override(
 ) -> None:
     setting_override = override_amount_cents is not UNSET
     setting_note = note is not UNSET
+    if (
+        setting_override
+        and override_amount_cents is None
+        and payment.source == PAYMENT_SOURCE_MANUAL_COMPENSATION
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "手工补偿不能清空金额，请填写新金额或撤销付款",
+        )
     if setting_override or setting_note:
         resolved_override = (
             override_amount_cents if setting_override else payment.override_amount_cents

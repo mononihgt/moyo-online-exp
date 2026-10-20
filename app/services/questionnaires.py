@@ -99,6 +99,24 @@ def _validate_identity_document(value: Any, label: str) -> dict:
     return {"documentType": document_type, "number": number}
 
 
+def validate_identity_values(
+    real_name: Any,
+    alipay_phone: Any,
+    document_type: Any,
+    document_number: Any,
+) -> dict:
+    document = _validate_identity_document(
+        {"documentType": document_type, "number": document_number},
+        "身份证明",
+    )
+    return {
+        "real_name": _validate_real_name(real_name, "真实姓名"),
+        "alipay_phone": _validate_alipay_phone(alipay_phone, "支付宝手机号"),
+        "document_type": document["documentType"],
+        "document_number": document["number"],
+    }
+
+
 def protected_question_ids(schema: dict) -> list[str]:
     return [
         question["id"]

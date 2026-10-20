@@ -423,6 +423,7 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         data = serialize_payment(payment, analysis_codes.get(payment.participant_id))
         data.pop("id", None)
         data.pop("roomId", None)
+        data.pop("source", None)
         payments.append(data)
 
     if media_entries is None:

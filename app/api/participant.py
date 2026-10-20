@@ -11,6 +11,7 @@ from ..constants import (
     BOOKING_BOOKED,
     BOOKING_CANCELED,
     PARTICIPANT_ELIGIBLE,
+    PAYMENT_SOURCE_COMPUTED,
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
     ROOM_FULL,
@@ -238,12 +239,20 @@ async def my_room(participant: ParticipantDep, db: DbSession):
             ),
         )
         .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .outerjoin(
+            Payment,
+            and_(
+                Payment.room_id == RoomParticipant.room_id,
+                Payment.participant_id == RoomParticipant.participant_id,
+            ),
+        )
         .where(
             RoomParticipant.participant_id == participant.id,
             RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
             Room.status == ROOM_ARCHIVED,
             Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
             MapGroupVersion.showup_pay_cents > 0,
+            Payment.id.is_(None),
         )
         .order_by(Room.starts_at.desc())
     )
@@ -292,7 +301,6 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
     records = rows.all()
     room_ids = {room.id for _booking, room in records}
     canceled_by_participant: set[str] = set()
-    exited_rooms: set[str] = set()
     if room_ids:
         canceled_rows = await db.execute(
             select(RoomEvent.room_id).where(
@@ -339,6 +347,7 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
             showup_pay_cents = get_room_payment(room)["showupPayCents"]
         questionnaire_required = (
             showup_pay_cents > 0
+            and payment is None
             and (role_row is None or role_row.questionnaire_status != QUESTIONNAIRE_COMPLETED)
         )
         items.append(
@@ -358,6 +367,10 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
                 "canRebook": can_rebook,
                 "questionnaireRequired": questionnaire_required,
                 "showupPayCents": showup_pay_cents,
+                "hasManualPayment": (
+                    payment is not None
+                    and payment.source != PAYMENT_SOURCE_COMPUTED
+                ),
                 "rewardKind": participant_reward_kind(payment),
                 "payment": (
                     serialize_payment(payment, role_row.analysis_code if role_row else None)

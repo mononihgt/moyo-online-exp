@@ -10,7 +10,7 @@ export const PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL =
   "本次实验已结束，你已完成正式实验，但后测问卷尚未提交。请继续填写并提交问卷，提交后按完成实验结算报酬；提交后也不能预约新的场次。";
 export const CONTINUE_QUESTIONNAIRE = "继续填写问卷";
 export const BOOKABLE_HIDDEN_NOTE =
-  "可预约场次已隐藏：每位参与者只能参加一次正式实验，你当前不能预约新的实验。";
+  "你目前不能预约新的实验，因为每位参与者只能参加一次正式实验。";
 export const SELF_SUBMITTED_TITLE = "实验已完成";
 export const SELF_SUBMITTED_DETAIL =
   "你已提交后测问卷，本次实验已完成，无法再预约新的场次。双方都提交问卷后，本次实验将结束。你可以查看报酬信息。";
@@ -24,15 +24,15 @@ export const ACCOUNT_PENDING_QUESTIONNAIRE =
 export const ACCOUNT_PAYMENT_LOCKED =
   "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验工作人员。";
 export const ACCOUNT_SHOWUP_QUESTIONNAIRE =
-  "本次实验因网络或系统故障中止，你已到场。请先填写并提交后测问卷，提交后会生成到场费；提交前后都不能预约新的场次。";
-export const SHOWUP_QUESTIONNAIRE_TITLE = "因故障中止：待填写问卷";
+  "本次实验因网络或系统故障提前结束，你已到场。请先填写并提交后测问卷，提交后会生成到场费；本次实验结束后，你不能再预约新的实验。";
+export const SHOWUP_QUESTIONNAIRE_TITLE = "实验提前结束：待填写问卷";
 export const SHOWUP_QUESTIONNAIRE_PENDING_DETAIL =
-  "本次实验因网络或系统故障中止，你已到场。填写并提交后测问卷后会生成到场费；提交前后都不能预约新的场次。";
+  "本次实验因网络或系统故障提前结束，你已到场。填写并提交后测问卷后会生成到场费；本次实验结束后，你不能再预约新的实验。";
 export const SHOWUP_QUESTIONNAIRE_SUBMITTED_DETAIL =
-  "本次实验因网络或系统故障中止，后测问卷已提交。到场费按到场规则结算，本次实验不产生基础费与绩效费。";
+  "本次实验因网络或系统故障提前结束，后测问卷已提交。到场费按到场规则结算，本次实验不产生基础费与绩效费。";
 export const SHOWUP_FEE_PENDING = "到场费待问卷提交后生成。";
 export const BOOKABLE_HIDDEN_SHOWUP_NOTE =
-  "可预约场次已隐藏：本次实验因故障中止，提交问卷前后你都不能预约新的实验。";
+  "你目前不能预约新的实验：本次实验因网络或系统故障提前结束。";
 export const VIEW_REWARD_INFO = "查看报酬信息";
 export const REBOOK = "重新预约";
 export const CONTACT_EXPERIMENTER = "联系实验工作人员";
@@ -126,7 +126,7 @@ export const ARCHIVE_REASON_LABELS: Record<ArchiveReason, string> = {
   abandoned: "实验提前结束",
   technical_abort: "网络或系统故障",
   questionnaire_incomplete: "后测问卷未完成",
-  admin_aborted: "实验工作人员中止",
+  admin_aborted: "实验工作人员提前结束",
   admin_cancelled: "实验开始前取消",
 };
 
@@ -234,7 +234,7 @@ export function archiveCopyFor(
     case "technical_abort": {
       if (state.questionnaireRequired) {
         return {
-          title: "因故障中止",
+          title: "实验提前结束",
           detail: SHOWUP_QUESTIONNAIRE_PENDING_DETAIL,
           showContact: true,
         };
@@ -243,7 +243,7 @@ export function archiveCopyFor(
         ? "因网络或系统故障，本次实验未完成，不产生基础费与绩效费。到场费按到场规则结算，你可以在报酬信息中查看金额、支付状态和支付截止日期。"
         : "因网络或系统故障，本次实验未完成，不产生报酬，也没有到场费。";
       return {
-        title: "因故障中止",
+        title: "实验提前结束",
         detail:
           state.hasShowupPay && !state.canRebook
             ? `${base}${SHOWUP_LOCK_DETAIL}`
@@ -269,7 +269,7 @@ export function archiveCopyFor(
       return {
         title: "实验已结束",
         detail: withRebook(
-          "本次实验由实验工作人员中止，未完成，不产生报酬。",
+          "本次实验由实验工作人员提前结束，未完成，不产生报酬。",
           state.canRebook,
         ),
         showContact: false,

@@ -1,11 +1,15 @@
+import copy
 from dataclasses import dataclass
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from ..constants import (
+    ARCHIVE_ABANDONED,
+    ARCHIVE_ADMIN_ABORTED,
     ARCHIVE_ADMIN_CANCELLED,
     ARCHIVE_COMPLETED,
     ARCHIVE_NO_SHOW,
@@ -19,7 +23,12 @@ from ..constants import (
     BOOKING_NO_SHOW,
     PARTICIPANT_COMPLETED,
     PARTICIPANT_ELIGIBLE,
+    PAYMENT_PAID,
     PAYMENT_PENDING,
+    PAYMENT_SOURCE_COMPUTED,
+    PAYMENT_SOURCE_MANUAL_COMPENSATION,
+    PAYMENT_SOURCE_MANUAL_COMPLETION,
+    PAYMENT_SOURCE_MANUAL_SHOWUP,
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
     ROOM_CAPACITY,
@@ -46,14 +55,18 @@ from ..models import (
     MapGroupVersion,
     Participant,
     Payment,
+    QuestionnaireDraft,
+    QuestionnaireResponse,
     QuestionnaireVersion,
     Room,
     RoomConfigRevision,
+    RoomEvent,
     RoomParticipant,
     RoomTimer,
 )
 from ..timeutil import isoformat_utc, utcnow
 from .events import add_event
+from .payments import upsert_payment
 from .instructions import serialize_instruction
 from .map_groups import map_group_payment, serialize_map, serialize_map_group_snapshot
 from .participants import current_consent_version
@@ -350,12 +363,20 @@ async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> Exp
             ),
         )
         .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .outerjoin(
+            Payment,
+            and_(
+                Payment.room_id == RoomParticipant.room_id,
+                Payment.participant_id == RoomParticipant.participant_id,
+            ),
+        )
         .where(
             RoomParticipant.participant_id == participant_id,
             Room.status == ROOM_ARCHIVED,
             Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
             MapGroupVersion.showup_pay_cents > 0,
             RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
+            Payment.id.is_(None),
         )
         .limit(1)
     )
@@ -387,7 +408,7 @@ def booking_lock_message(lock: ExperimentLock) -> str:
     if lock.reason == "pending_questionnaire":
         return "你已完成本次正式实验，但后测问卷尚未提交。请先提交问卷；提交问卷前后都无法预约新的场次。"
     if lock.reason == "pending_showup_questionnaire":
-        return "本次实验因网络或系统故障中止，你已到场。请先填写并提交后测问卷，提交后生成到场费；提交前后都无法预约新的场次。"
+        return "本次实验因网络或系统故障提前结束，你已到场。请先填写并提交后测问卷，提交后生成到场费；本次实验结束后，你不能再预约新的实验。"
     if lock.reason == "payment":
         return "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验工作人员。"
     return "你已完成全部实验，无法再预约新的场次。"
@@ -396,6 +417,12 @@ def booking_lock_message(lock: ExperimentLock) -> str:
 def participant_reward_kind(payment: Payment | None) -> str:
     if payment is None:
         return "none"
+    if payment.source == PAYMENT_SOURCE_MANUAL_COMPENSATION:
+        return "manual"
+    if payment.source == PAYMENT_SOURCE_MANUAL_SHOWUP:
+        return "showup"
+    if payment.source == PAYMENT_SOURCE_MANUAL_COMPLETION:
+        return "completion"
     if (
         payment.showup_pay_cents > 0
         and payment.base_pay_cents == 0
@@ -403,6 +430,233 @@ def participant_reward_kind(payment: Payment | None) -> str:
     ):
         return "showup"
     return "completion"
+
+
+CORRECTABLE_ARCHIVE_REASONS = (
+    ARCHIVE_ABANDONED,
+    ARCHIVE_TECHNICAL_ABORT,
+    ARCHIVE_ADMIN_ABORTED,
+)
+
+
+def _update_archive_snapshot_reason(room: Room, reason: str) -> None:
+    if not isinstance(room.archive_snapshot_json, dict):
+        return
+    snapshot = copy.deepcopy(room.archive_snapshot_json)
+    room_data = snapshot.get("room")
+    if not isinstance(room_data, dict):
+        return
+    room_data["archiveReason"] = reason
+    room.archive_snapshot_json = snapshot
+    flag_modified(room, "archive_snapshot_json")
+
+
+async def _has_exit_event(db: AsyncSession, room_id: str) -> bool:
+    rows = await db.execute(
+        select(RoomEvent.payload_json).where(
+            RoomEvent.room_id == room_id,
+            RoomEvent.type == "participant_exited",
+        )
+    )
+    for payload in rows.scalars().all():
+        reason = (payload or {}).get("reason")
+        if reason in (None, "manual", "inactivity"):
+            return True
+    return False
+
+
+async def _has_attended_booking(db: AsyncSession, room_id: str) -> bool:
+    rows = await db.execute(
+        select(Booking.id).where(
+            Booking.room_id == room_id,
+            Booking.status == BOOKING_ATTENDED,
+        )
+    )
+    return rows.first() is not None
+
+
+async def _archive_correction_block_reason(
+    db: AsyncSession, room: Room, target_reason: str
+) -> str | None:
+    if room.status != ROOM_ARCHIVED:
+        return "只有已归档实验可以更正结束原因"
+    if room.archive_reason not in CORRECTABLE_ARCHIVE_REASONS:
+        return "当前结束原因不允许更正"
+    if target_reason not in CORRECTABLE_ARCHIVE_REASONS:
+        return "目标结束原因不允许选择"
+    if target_reason == room.archive_reason:
+        return "目标结束原因与当前原因相同"
+    payment_rows = await db.execute(
+        select(Payment.id).where(Payment.room_id == room.id).limit(1)
+    )
+    if payment_rows.first() is not None:
+        return "该实验已有付款记录，不能更正结束原因"
+    response_rows = await db.execute(
+        select(QuestionnaireResponse.id)
+        .where(QuestionnaireResponse.room_id == room.id)
+        .limit(1)
+    )
+    if response_rows.first() is not None:
+        return "该实验已有问卷提交记录，不能更正结束原因"
+    draft_rows = await db.execute(
+        select(QuestionnaireDraft.id)
+        .where(QuestionnaireDraft.room_id == room.id)
+        .limit(1)
+    )
+    if draft_rows.first() is not None:
+        return "该实验已有问卷草稿，不能更正结束原因"
+    if target_reason == ARCHIVE_ABANDONED:
+        if not await _has_exit_event(db, room.id):
+            return "没有参与者退出记录，不能更正为参与者退出"
+    if target_reason == ARCHIVE_TECHNICAL_ABORT:
+        if not await _has_attended_booking(db, room.id):
+            return "没有到场预约，不能更正为故障中止"
+    return None
+
+
+async def allowed_archive_reason_corrections(
+    db: AsyncSession, room: Room
+) -> list[str]:
+    options = []
+    for reason in CORRECTABLE_ARCHIVE_REASONS:
+        if reason == room.archive_reason:
+            continue
+        if await _archive_correction_block_reason(db, room, reason) is None:
+            options.append(reason)
+    return options
+
+
+async def correct_archive_reason(
+    db: AsyncSession,
+    room: Room,
+    target_reason: str,
+    note: str,
+    *,
+    expected_current_reason: str | None = None,
+) -> None:
+    if expected_current_reason is not None and room.archive_reason != expected_current_reason:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "房间结束原因已变化，请刷新页面后重试",
+        )
+    block_reason = await _archive_correction_block_reason(db, room, target_reason)
+    if block_reason is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, block_reason)
+    if not note.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须填写更正说明")
+    previous_reason = room.archive_reason
+    room.archive_reason = target_reason
+    _update_archive_snapshot_reason(room, target_reason)
+    add_event(
+        db,
+        room,
+        "archive_reason_corrected",
+        payload={
+            "previousReason": previous_reason,
+            "reason": target_reason,
+        },
+    )
+    await db.flush()
+
+
+async def restore_attendance(
+    db: AsyncSession,
+    room: Room,
+    booking: Booking,
+    note: str,
+) -> Payment | None:
+    if room.status != ROOM_ARCHIVED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "只有已归档实验可以恢复到场")
+    if not note.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须填写恢复到场说明")
+    if room.archive_reason == ARCHIVE_ADMIN_CANCELLED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "主试取消的实验不能恢复到场")
+    if booking.room_id != room.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不属于本次实验")
+    if booking.status != BOOKING_NO_SHOW:
+        raise HTTPException(status.HTTP_409_CONFLICT, "只有未到场预约可以恢复到场")
+    if booking.attended_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该预约没有到场记录，不能恢复到场")
+    if booking.canceled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "已取消预约不能恢复到场")
+    duplicate = await db.execute(
+        select(Booking.id).where(
+            Booking.room_id == room.id,
+            Booking.participant_id == booking.participant_id,
+            Booking.status == BOOKING_ATTENDED,
+            Booking.id != booking.id,
+        )
+    )
+    if duplicate.first() is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该参与者已有到场预约记录")
+    role_row_query = await db.execute(
+        select(RoomParticipant).where(
+            RoomParticipant.room_id == room.id,
+            RoomParticipant.participant_id == booking.participant_id,
+        )
+    )
+    role_row = role_row_query.scalars().first()
+    if role_row is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该参与者没有房间实验记录")
+    payment_query = await db.execute(
+        select(Payment).where(
+            Payment.room_id == room.id,
+            Payment.participant_id == booking.participant_id,
+        )
+    )
+    payment = payment_query.scalars().first()
+    if payment is not None:
+        if payment.source != PAYMENT_SOURCE_COMPUTED:
+            raise HTTPException(status.HTTP_409_CONFLICT, "已有手工付款，不能自动恢复到场")
+        if payment.status == PAYMENT_PAID:
+            raise HTTPException(status.HTTP_409_CONFLICT, "付款已经支付，不能自动恢复到场")
+        if payment.override_amount_cents is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "付款已覆盖金额，不能自动恢复到场")
+        if payment.status == PAYMENT_PENDING and payment.total_cents > 0:
+            raise HTTPException(status.HTTP_409_CONFLICT, "付款已计算金额，不能自动恢复到场")
+    previous_reason = room.archive_reason
+    booking.status = BOOKING_ATTENDED
+    updated_payment = await upsert_payment(
+        db,
+        room,
+        booking.participant_id,
+        room_participant=role_row,
+    )
+    if payment is not None and updated_payment is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "恢复到场后付款重算失败")
+    if (
+        payment is None
+        and room.archive_reason in (ARCHIVE_COMPLETED, ARCHIVE_QUESTIONNAIRE_INCOMPLETE)
+        and role_row.questionnaire_status == QUESTIONNAIRE_COMPLETED
+        and updated_payment is None
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "恢复到场后付款重算失败")
+    if room.archive_reason == ARCHIVE_NO_SHOW:
+        bookings_rows = await db.execute(
+            select(Booking.status).where(
+                Booking.room_id == room.id,
+                Booking.status != BOOKING_CANCELED,
+            )
+        )
+        statuses = list(bookings_rows.scalars().all())
+        if statuses and all(status_value == BOOKING_ATTENDED for status_value in statuses):
+            room.archive_reason = ARCHIVE_NO_START
+            _update_archive_snapshot_reason(room, ARCHIVE_NO_START)
+    add_event(
+        db,
+        room,
+        "admin_action",
+        booking.participant_id,
+        {
+            "action": "restore_attendance",
+            "bookingId": booking.id,
+            "previousStatus": BOOKING_NO_SHOW,
+            "previousArchiveReason": previous_reason,
+            "archiveReason": room.archive_reason,
+        },
+    )
+    await db.flush()
+    return updated_payment
 
 
 async def can_rebook_for_participant(db: AsyncSession, room: Room, participant_id: str) -> bool:

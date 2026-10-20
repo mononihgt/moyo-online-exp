@@ -206,10 +206,34 @@ export interface AuditResponse {
 export interface RoomActionPayload {
   action: string;
   reason?: string;
+  note?: string;
+  expectedCurrentReason?: string;
   minutes?: number;
   participantId?: string;
+  bookingId?: string;
   jatosWorkerId?: string;
   jatosStudyResultId?: string;
   jatosComponentResultId?: string;
   answers?: Record<string, unknown>;
+}
+
+export interface IdentityRecord {
+  realName: string;
+  alipayPhone: string;
+  documentType: "id_card" | "passport";
+  documentNumber: string;
+}
+
+export interface IdentityResponse {
+  identity: IdentityRecord | null;
+}
+
+export interface ManualPaymentPayload {
+  roomId: string;
+  participantId: string;
+  bookingId: string;
+  kind: "manual_showup" | "manual_completion" | "manual_compensation";
+  amountCents: number;
+  adminNote: string;
+  identity?: IdentityRecord | null;
 }

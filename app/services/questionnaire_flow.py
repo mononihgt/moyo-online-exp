@@ -14,16 +14,15 @@ from ..constants import (
 )
 from ..models import (
     Participant,
-    ParticipantIdentity,
     QuestionnaireDraft,
     QuestionnaireResponse,
     QuestionnaireVersion,
     Room,
     RoomParticipant,
 )
-from ..security import encrypt_identity
 from ..timeutil import isoformat_utc, utcnow
 from .events import add_event
+from .identities import create_identity_if_absent
 from .jatos import build_questionnaire_token, read_questionnaire_token
 from .locking import room_lock
 from .payments import serialize_payment, upsert_payment
@@ -65,36 +64,12 @@ async def _upsert_identity(
     room_participant: RoomParticipant,
     identity: dict,
 ) -> None:
-    row = await db.execute(
-        select(ParticipantIdentity).where(
-            ParticipantIdentity.room_id == room.id,
-            ParticipantIdentity.participant_id == room_participant.participant_id,
-        )
+    await create_identity_if_absent(
+        db,
+        room.id,
+        room_participant.participant_id,
+        identity,
     )
-    existing = row.scalars().first()
-    now = utcnow()
-    real_name_encrypted = encrypt_identity(identity["real_name"])
-    alipay_phone_encrypted = encrypt_identity(identity["alipay_phone"])
-    document_number_encrypted = encrypt_identity(identity["document_number"])
-    if existing is None:
-        db.add(
-            ParticipantIdentity(
-                room_id=room.id,
-                participant_id=room_participant.participant_id,
-                real_name_encrypted=real_name_encrypted,
-                alipay_phone_encrypted=alipay_phone_encrypted,
-                document_type=identity["document_type"],
-                document_number_encrypted=document_number_encrypted,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        return
-    existing.real_name_encrypted = real_name_encrypted
-    existing.alipay_phone_encrypted = alipay_phone_encrypted
-    existing.document_type = identity["document_type"]
-    existing.document_number_encrypted = document_number_encrypted
-    existing.updated_at = now
 
 
 async def load_context(db: AsyncSession, token: str) -> tuple[Room, RoomParticipant, QuestionnaireVersion]:

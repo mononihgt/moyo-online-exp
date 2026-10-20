@@ -5,12 +5,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
     PAYMENT_PAID,
     PAYMENT_PENDING,
+    PAYMENT_SOURCE_COMPUTED,
     QUESTIONNAIRE_COMPLETED,
     TIMEZONE,
 )
@@ -83,10 +84,16 @@ async def payment_list_csv(db: AsyncSession, date_from: date, date_to: date) -> 
         select(Payment, Participant, Room, ParticipantIdentity)
         .join(Participant, Participant.id == Payment.participant_id)
         .join(Room, Room.id == Payment.room_id)
-        .join(RoomParticipant, _room_participant_join())
+        .outerjoin(RoomParticipant, _room_participant_join())
         .outerjoin(ParticipantIdentity, _identity_join())
         .where(
-            RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
+            or_(
+                and_(
+                    Payment.source == PAYMENT_SOURCE_COMPUTED,
+                    RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
+                ),
+                Payment.source != PAYMENT_SOURCE_COMPUTED,
+            ),
             Payment.status == PAYMENT_PENDING,
             Room.starts_at >= start,
             Room.starts_at < end,
@@ -108,10 +115,16 @@ async def reimbursement_list_csv(db: AsyncSession, date_from: date, date_to: dat
         select(Payment, Participant, Room, ParticipantIdentity)
         .join(Participant, Participant.id == Payment.participant_id)
         .join(Room, Room.id == Payment.room_id)
-        .join(RoomParticipant, _room_participant_join())
+        .outerjoin(RoomParticipant, _room_participant_join())
         .outerjoin(ParticipantIdentity, _identity_join())
         .where(
-            RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
+            or_(
+                and_(
+                    Payment.source == PAYMENT_SOURCE_COMPUTED,
+                    RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
+                ),
+                Payment.source != PAYMENT_SOURCE_COMPUTED,
+            ),
             Payment.status == PAYMENT_PAID,
             Room.starts_at >= start,
             Room.starts_at < end,
@@ -148,16 +161,22 @@ def _bulk_statement():
 
 def _bulk_record(payment: Payment, participant: Participant, room: Room, role_row, identity) -> dict:
     name = participant.name if identity is None else decrypt_identity(identity.real_name_encrypted)
+    alipay_phone = (
+        None if identity is None else decrypt_identity(identity.alipay_phone_encrypted)
+    )
+    login_phone = decrypt_phone(participant.phone_encrypted)
     return {
         "paymentId": payment.id,
         "participantId": participant.id,
         "analysisCode": role_row.analysis_code if role_row else None,
         "name": name,
-        "phone": decrypt_phone(participant.phone_encrypted),
+        "phone": login_phone,
+        "alipayPhone": alipay_phone,
         "roomId": room.id,
         "roomStartsAt": isoformat_utc(room.starts_at),
         "archiveReason": room.archive_reason,
         "totalCents": payment.total_cents,
+        "source": payment.source,
         "status": payment.status,
         "paidAt": isoformat_utc(payment.paid_at),
     }

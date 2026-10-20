@@ -126,6 +126,8 @@ export function ArchiveView({
   partnerExitReason,
   questionnaireCompleted,
   questionnaireRequired,
+  hasManualPayment,
+  showupPayCents,
   rewardKind,
 }: {
   roomId: string;
@@ -136,6 +138,8 @@ export function ArchiveView({
   partnerExitReason: ExitReason | null;
   questionnaireCompleted: boolean;
   questionnaireRequired: boolean;
+  hasManualPayment: boolean;
+  showupPayCents: number;
   rewardKind: RewardKind;
 }) {
   const copy = archiveCopyFor(reason, {
@@ -148,8 +152,15 @@ export function ArchiveView({
     canRebook,
   });
   const needsQuestionnaire =
-    (reason === "questionnaire_incomplete" || questionnaireRequired) &&
+    (reason === "questionnaire_incomplete" ||
+      questionnaireRequired ||
+      (hasManualPayment &&
+        reason === "technical_abort" &&
+        rewardKind === "showup" &&
+        showupPayCents > 0)) &&
     !questionnaireCompleted;
+  const manualDetail =
+    "本次实验未完成，实验工作人员已另行登记补偿。具体金额和支付状态请查看报酬信息。";
   const rebookAllowed =
     canRebook &&
     reason !== "completed" &&
@@ -160,7 +171,9 @@ export function ArchiveView({
       <div className="exp-end-card">
         <p className="exp-kicker">本次实验已结束</p>
         <h1 className="exp-rest-title">{copy.title}</h1>
-        <p className="exp-rest-info">{copy.detail}</p>
+        <p className="exp-rest-info">
+          {hasManualPayment ? manualDetail : copy.detail}
+        </p>
         <div className="p-btn-row exp-end-actions">
           {needsQuestionnaire ? (
             <ContinueQuestionnaireButton

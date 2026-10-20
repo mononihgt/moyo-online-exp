@@ -13,6 +13,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .config import Settings, get_settings
 from .models import AdminUser, Participant
+from .services.accounts import resolve_participant_alias
 
 PARTICIPANT_COOKIE = "moyo_participant"
 ADMIN_COOKIE = "moyo_admin"
@@ -168,7 +169,7 @@ async def current_participant(request: Request, db) -> Participant:
     participant = await db.get(Participant, participant_id)
     if participant is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "账号不存在")
-    return participant
+    return await resolve_participant_alias(db, participant)
 
 
 async def current_admin(request: Request, db) -> AdminUser:

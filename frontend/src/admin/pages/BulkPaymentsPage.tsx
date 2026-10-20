@@ -345,6 +345,7 @@ export function BulkPaymentsPage() {
                     />
                   </th>
                   <th>姓名</th>
+                  <th>来源</th>
                   <th>支付宝手机号</th>
                   <th>参与日期</th>
                   <th>金额</th>
@@ -371,7 +372,21 @@ export function BulkPaymentsPage() {
                         />
                       </td>
                       <td>{payment.name}</td>
-                      <td className="admin-mono admin-bulk-phone">{payment.phone}</td>
+                      <td>
+                        {(payment.source ?? "computed") === "computed"
+                          ? "自动"
+                          : payment.source === "manual_showup"
+                            ? "手工到场费"
+                            : payment.source === "manual_completion"
+                              ? "手工完成补偿"
+                              : "手工补偿"}
+                      </td>
+                      <td className="admin-mono admin-bulk-phone">
+                        {payment.alipayPhone ?? payment.phone}
+                        {payment.alipayPhone === null ? (
+                          <div className="admin-hint">未录入支付宝手机号，显示登录手机号</div>
+                        ) : null}
+                      </td>
                       <td>
                         <div>{formatDateTime(payment.roomStartsAt)}</div>
                         <div className="admin-hint">

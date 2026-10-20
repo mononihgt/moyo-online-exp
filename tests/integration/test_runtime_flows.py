@@ -5,7 +5,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 from PIL import Image
 
@@ -1885,6 +1887,197 @@ def test_activity_messages_prevent_inactivity_archive():
         detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
         assert detail["room"]["status"] != "archived"
         assert detail["room"]["archiveReason"] is None
+        game.ws_a.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.integration
+def test_archive_reason_correction_updates_lock_and_audit():
+    reset_database()
+    server = ServerHandle()
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            practice_cap=1,
+            practice_seconds=30,
+        )
+        game = _start_game(server, setup, participant_a, participant_b)
+        game.ws_a.send("exit_room")
+        archived = game.ws_b.recv_until("room_archived", timeout=15)
+        assert archived["reason"] == "abandoned"
+        corrected = context.admin.json(
+            "POST",
+            f"/admin/api/rooms/{setup.room['id']}/actions",
+            json={
+                "action": "correct_archive_reason",
+                "reason": "technical_abort",
+                "note": "核对断线事件后确认为平台故障",
+                "expectedCurrentReason": "abandoned",
+            },
+        )
+        assert corrected["previousReason"] == "abandoned"
+        assert corrected["reason"] == "technical_abort"
+        detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
+        assert detail["room"]["archiveReason"] == "technical_abort"
+        me = _me(participant_a)
+        assert me["canBook"] is False
+        assert me["hasShowupQuestionnaire"] is True
+        pending = participant_a.json("GET", "/api/my-room")["pendingQuestionnaires"]
+        assert any(item["roomId"] == setup.room["id"] for item in pending)
+        again = context.admin.json(
+            "POST",
+            f"/admin/api/rooms/{setup.room['id']}/actions",
+            json={
+                "action": "correct_archive_reason",
+                "reason": "admin_aborted",
+                "note": "复核后确认由主试侧终止",
+                "expectedCurrentReason": "technical_abort",
+            },
+        )
+        assert again["reason"] == "admin_aborted"
+        assert _me(participant_a)["canBook"] is True
+        pending_after = participant_a.json("GET", "/api/my-room")[
+            "pendingQuestionnaires"
+        ]
+        assert all(item["roomId"] != setup.room["id"] for item in pending_after)
+        audit_entries = context.admin.json("GET", "/admin/api/audit?limit=50")[
+            "entries"
+        ]
+        corrections = [
+            entry
+            for entry in audit_entries
+            if entry["action"] == "archive_reason_corrected"
+        ]
+        assert len(corrections) == 2
+        game.ws_a.close()
+        game.ws_b.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.integration
+def test_manual_showup_payment_after_technical_abort():
+    reset_database()
+    server = ServerHandle()
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            practice_cap=1,
+            practice_seconds=30,
+            reconnect_window=1,
+        )
+        game = _start_game(server, setup, participant_a, participant_b)
+        game.ws_b.close()
+        archived = game.ws_a.recv_until("room_archived", timeout=15)
+        assert archived["reason"] == "technical_abort"
+        participant_a_id = _me(participant_a)["id"]
+        detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
+        booking = next(
+            item
+            for item in detail["bookings"]
+            if item["participantId"] == participant_a_id
+        )
+        identity = valid_identity_answers("手工到场", phone="13900003333")
+        created = context.admin.json(
+            "POST",
+            "/admin/api/payments",
+            json={
+                "roomId": setup.room["id"],
+                "participantId": participant_a_id,
+                "bookingId": booking["id"],
+                "kind": "manual_showup",
+                "amountCents": 1000,
+                "adminNote": "参与者无法提交问卷，主试核对到场后补发",
+                "identity": {
+                    "realName": identity["real_name"],
+                    "alipayPhone": identity["alipay_phone"],
+                    "documentType": "id_card",
+                    "documentNumber": identity["id_card"],
+                },
+            },
+        )
+        payment = created["payment"]
+        assert payment["source"] == "manual_showup"
+        assert payment["showupPayCents"] == 1000
+        assert payment["totalCents"] == 1000
+        me = _me(participant_a)
+        assert me["hasPayment"] is True
+        assert me["canBook"] is False
+        my_room = participant_a.json("GET", "/api/my-room")
+        assert my_room["pendingQuestionnaires"] == []
+        experiment = next(
+            item
+            for item in participant_a.json("GET", "/api/my-experiments")["experiments"]
+            if item["roomId"] == setup.room["id"]
+        )
+        assert experiment["questionnaireRequired"] is False
+        assert experiment["hasManualPayment"] is True
+        assert experiment["payment"]["source"] == "manual_showup"
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        csv_response = context.admin.request(
+            "GET",
+            f"/admin/api/payments/export-payment-list.csv?from={today}&to={today}",
+        )
+        assert csv_response.status_code == 200
+        csv_text = csv_response.content.decode("utf-8-sig")
+        assert identity["real_name"] in csv_text
+        assert identity["alipay_phone"] in csv_text
+        assert "10.00" in csv_text
+        blocked = context.admin.request(
+            "POST",
+            f"/admin/api/rooms/{setup.room['id']}/actions",
+            json={
+                "action": "correct_archive_reason",
+                "reason": "abandoned",
+                "note": "尝试更正已有付款的中止原因",
+                "expectedCurrentReason": "technical_abort",
+            },
+        )
+        assert blocked.status_code == 409
+        questionnaire_context = participant_a.json(
+            "GET",
+            f"/api/questionnaire/context?roomId={setup.room['id']}",
+        )
+        assert questionnaire_context["url"]
+        token = parse_qs(urlparse(questionnaire_context["url"]).query)["rt"][0]
+        answer_identity = valid_identity_answers("补交", phone="13900008888")
+        completed = httpx.post(
+            f"{server.base_url}/api/jatos/questionnaire/complete",
+            json={
+                "token": token,
+                "answers": questionnaire_answers(
+                    answer_identity, q1="female", q2="补交"
+                ),
+                "jatos_worker_id": f"worker-{uuid.uuid4().hex[:8]}",
+                "jatos_study_result_id": f"study-{uuid.uuid4()}",
+                "jatos_component_result_id": f"component-{uuid.uuid4()}",
+            },
+            timeout=30,
+        )
+        assert completed.status_code == 200
+        detail_after = context.admin.json(
+            "GET", f"/admin/api/rooms/{setup.room['id']}"
+        )
+        payment_after = detail_after["payments"][0]
+        assert payment_after["source"] == "manual_showup"
+        assert payment_after["totalCents"] == 1000
         game.ws_a.close()
         participant_a.close()
         participant_b.close()

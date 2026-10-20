@@ -39,6 +39,9 @@ import {
 } from "../../shared/format";
 import { adminApi, adminDownload, errorMessage } from "../api";
 import type {
+  IdentityRecord,
+  IdentityResponse,
+  ManualPaymentPayload,
   MapGroupResponse,
   ParticipantListResponse,
   QuestionnaireLink,
@@ -100,6 +103,13 @@ function findParticipantForBooking(
       item.name === booking.name && item.phoneMasked === booking.phoneMasked,
   );
 }
+
+const PAYMENT_SOURCE_LABELS: Record<string, string> = {
+  computed: "自动",
+  manual_showup: "手工到场费",
+  manual_completion: "手工完成补偿",
+  manual_compensation: "手工补偿",
+};
 
 function canMarkAbsent(detail: RoomDetail, booking: AdminBooking): boolean {
   if (!["booked", "attended"].includes(booking.status)) return false;
@@ -194,6 +204,47 @@ export function RoomDetailPage() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState<string | null>(null);
+
+  const [identityModal, setIdentityModal] = useState<{
+    participantId: string;
+    name: string;
+    existing: IdentityRecord | null;
+    realName: string;
+    alipayPhone: string;
+    documentType: "id_card" | "passport";
+    documentNumber: string;
+    reason: string;
+  } | null>(null);
+  const [identityError, setIdentityError] = useState<string | null>(null);
+  const [identitySaving, setIdentitySaving] = useState(false);
+  const [identityBusy, setIdentityBusy] = useState<string | null>(null);
+
+  const [manualPaymentOpen, setManualPaymentOpen] = useState(false);
+  const [manualBookingId, setManualBookingId] = useState("");
+  const [manualKind, setManualKind] = useState<
+    "manual_showup" | "manual_completion" | "manual_compensation"
+  >("manual_compensation");
+  const [manualAmount, setManualAmount] = useState("");
+  const [manualNote, setManualNote] = useState("");
+  const [manualIdentity, setManualIdentity] = useState<IdentityRecord | null>(null);
+  const [manualIdentityLoading, setManualIdentityLoading] = useState(false);
+  const [manualRealName, setManualRealName] = useState("");
+  const [manualAlipayPhone, setManualAlipayPhone] = useState("");
+  const [manualDocumentType, setManualDocumentType] = useState<"id_card" | "passport">("id_card");
+  const [manualDocumentNumber, setManualDocumentNumber] = useState("");
+  const [manualPaymentError, setManualPaymentError] = useState<string | null>(null);
+  const [manualPaymentSaving, setManualPaymentSaving] = useState(false);
+
+  const [archiveCorrectionOpen, setArchiveCorrectionOpen] = useState(false);
+  const [archiveCorrectionReason, setArchiveCorrectionReason] = useState<ArchiveReason | "">("");
+  const [archiveCorrectionNote, setArchiveCorrectionNote] = useState("");
+  const [archiveCorrectionError, setArchiveCorrectionError] = useState<string | null>(null);
+  const [archiveCorrectionSaving, setArchiveCorrectionSaving] = useState(false);
+
+  const [restoreBooking, setRestoreBooking] = useState<AdminBooking | null>(null);
+  const [restoreNote, setRestoreNote] = useState("");
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [restoreSaving, setRestoreSaving] = useState(false);
 
   const loadDetail = useCallback(async () => {
     setLoading(true);
@@ -449,6 +500,7 @@ export function RoomDetailPage() {
     try {
       await adminApi.post(`/rooms/${room.id}/actions`, {
         action: "mark_absent",
+        bookingId: booking.id,
         participantId: booking.participantId,
       });
       notify("预约已改为缺席");
@@ -457,6 +509,222 @@ export function RoomDetailPage() {
       notify(errorMessage(err), "error");
     } finally {
       setBookingBusy(null);
+    }
+  }
+
+  async function openIdentity(booking: AdminBooking) {
+    if (!room) return;
+    setIdentityBusy(booking.id);
+    try {
+      const response = await adminApi.get<IdentityResponse>(
+        `/rooms/${room.id}/participants/${booking.participantId}/identity`,
+      );
+      const identity = response.identity;
+      setIdentityModal({
+        participantId: booking.participantId,
+        name: booking.name,
+        existing: identity,
+        realName: identity?.realName ?? "",
+        alipayPhone: identity?.alipayPhone ?? "",
+        documentType: identity?.documentType ?? "id_card",
+        documentNumber: identity?.documentNumber ?? "",
+        reason: "",
+      });
+      setIdentityError(null);
+    } catch (err) {
+      notify(errorMessage(err), "error");
+    } finally {
+      setIdentityBusy(null);
+    }
+  }
+
+  async function saveIdentity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!room || !identityModal) return;
+    if (!identityModal.reason.trim()) {
+      setIdentityError("必须填写更正原因");
+      return;
+    }
+    setIdentitySaving(true);
+    setIdentityError(null);
+    try {
+      await adminApi.put<IdentityResponse>(
+        `/rooms/${room.id}/participants/${identityModal.participantId}/identity`,
+        {
+          realName: identityModal.realName,
+          alipayPhone: identityModal.alipayPhone,
+          documentType: identityModal.documentType,
+          documentNumber: identityModal.documentNumber,
+          reason: identityModal.reason.trim(),
+        },
+      );
+      notify("身份信息已保存");
+      setIdentityModal(null);
+      refresh();
+    } catch (err) {
+      setIdentityError(errorMessage(err));
+    } finally {
+      setIdentitySaving(false);
+    }
+  }
+
+  async function loadManualIdentity(booking: AdminBooking | undefined) {
+    if (!room || !booking) {
+      setManualIdentity(null);
+      return;
+    }
+    setManualIdentityLoading(true);
+    try {
+      const response = await adminApi.get<IdentityResponse>(
+        `/rooms/${room.id}/participants/${booking.participantId}/identity`,
+      );
+      setManualIdentity(response.identity);
+      if (response.identity === null) {
+        setManualRealName(booking.name);
+      }
+    } catch (err) {
+      setManualPaymentError(errorMessage(err));
+    } finally {
+      setManualIdentityLoading(false);
+    }
+  }
+
+  function openManualPayment() {
+    setManualBookingId("");
+    setManualKind("manual_compensation");
+    setManualAmount("");
+    setManualNote("");
+    setManualIdentity(null);
+    setManualRealName("");
+    setManualAlipayPhone("");
+    setManualDocumentType("id_card");
+    setManualDocumentNumber("");
+    setManualPaymentError(null);
+    setManualPaymentOpen(true);
+  }
+
+  async function submitManualPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!room) return;
+    const booking = detail?.bookings.find((item) => item.id === manualBookingId);
+    if (!booking) {
+      setManualPaymentError("请选择参与者");
+      return;
+    }
+    const cents = centsFromYuan(manualAmount);
+    if (cents === null || cents <= 0) {
+      setManualPaymentError("付款金额必须是大于 0 的金额");
+      return;
+    }
+    if (!manualNote.trim()) {
+      setManualPaymentError("必须填写付款备注");
+      return;
+    }
+    if (!manualIdentity) {
+      if (!manualRealName.trim() || !manualAlipayPhone.trim() || !manualDocumentNumber.trim()) {
+        setManualPaymentError("没有身份记录时必须填写姓名、支付宝手机号和证件信息");
+        return;
+      }
+    }
+    const ok = await confirm({
+      title: "手工创建付款",
+      message: `确认给 ${booking.name} 创建 ${formatMoney(cents)} 的手工付款？备注：${manualNote.trim()}`,
+      confirmLabel: "创建付款",
+      danger: true,
+    });
+    if (!ok) return;
+    setManualPaymentSaving(true);
+    setManualPaymentError(null);
+    const payload: ManualPaymentPayload = {
+      roomId: room.id,
+      participantId: booking.participantId,
+      bookingId: booking.id,
+      kind: manualKind,
+      amountCents: cents,
+      adminNote: manualNote.trim(),
+    };
+    if (!manualIdentity) {
+      payload.identity = {
+        realName: manualRealName.trim(),
+        alipayPhone: manualAlipayPhone.trim(),
+        documentType: manualDocumentType,
+        documentNumber: manualDocumentNumber.trim(),
+      };
+    }
+    try {
+      await adminApi.post("/payments", payload);
+      notify("手工付款已创建");
+      setManualPaymentOpen(false);
+      refresh();
+    } catch (err) {
+      setManualPaymentError(errorMessage(err));
+    } finally {
+      setManualPaymentSaving(false);
+    }
+  }
+
+  function openArchiveCorrection() {
+    if (!detail || detail.archiveReasonCorrectionOptions.length === 0) return;
+    setArchiveCorrectionReason(detail.archiveReasonCorrectionOptions[0]);
+    setArchiveCorrectionNote("");
+    setArchiveCorrectionError(null);
+    setArchiveCorrectionOpen(true);
+  }
+
+  async function submitArchiveCorrection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!room || !detail || !archiveCorrectionReason) return;
+    if (!archiveCorrectionNote.trim()) {
+      setArchiveCorrectionError("必须填写更正说明");
+      return;
+    }
+    setArchiveCorrectionSaving(true);
+    setArchiveCorrectionError(null);
+    try {
+      await adminApi.post(`/rooms/${room.id}/actions`, {
+        action: "correct_archive_reason",
+        reason: archiveCorrectionReason,
+        note: archiveCorrectionNote.trim(),
+        expectedCurrentReason: detail.room.archiveReason,
+      });
+      notify("结束原因已更正");
+      setArchiveCorrectionOpen(false);
+      refresh();
+    } catch (err) {
+      setArchiveCorrectionError(errorMessage(err));
+    } finally {
+      setArchiveCorrectionSaving(false);
+    }
+  }
+
+  function openRestore(booking: AdminBooking) {
+    setRestoreBooking(booking);
+    setRestoreNote("");
+    setRestoreError(null);
+  }
+
+  async function submitRestore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!room || !restoreBooking) return;
+    if (!restoreNote.trim()) {
+      setRestoreError("必须填写恢复说明");
+      return;
+    }
+    setRestoreSaving(true);
+    setRestoreError(null);
+    try {
+      await adminApi.post(`/rooms/${room.id}/actions`, {
+        action: "restore_attendance",
+        bookingId: restoreBooking.id,
+        note: restoreNote.trim(),
+      });
+      notify("到场记录已恢复");
+      setRestoreBooking(null);
+      refresh();
+    } catch (err) {
+      setRestoreError(errorMessage(err));
+    } finally {
+      setRestoreSaving(false);
     }
   }
 
@@ -690,6 +958,27 @@ export function RoomDetailPage() {
         adminNote: payment.note,
       });
       notify("已标记为已支付");
+      refresh();
+    } catch (err) {
+      notify(errorMessage(err), "error");
+    } finally {
+      setPaymentBusy(null);
+    }
+  }
+
+  async function voidPayment(payment: Payment) {
+    if (!payment.id) return;
+    const ok = await confirm({
+      title: "撤销付款",
+      message: `确认撤销这笔 ${formatMoney(payment.totalCents)} 的手工付款？撤销后记录会被删除，仅允许撤销未支付的手工付款。`,
+      confirmLabel: "撤销付款",
+      danger: true,
+    });
+    if (!ok) return;
+    setPaymentBusy(payment.id);
+    try {
+      await adminApi.delete(`/payments/${payment.id}`);
+      notify("手工付款已撤销");
       refresh();
     } catch (err) {
       notify(errorMessage(err), "error");
@@ -1170,6 +1459,26 @@ export function RoomDetailPage() {
                         <td>{formatDateTime(booking.attendedAt)}</td>
                         <td>{formatDateTime(booking.createdAt)}</td>
                         <td className="admin-actions-cell">
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn-ghost admin-btn-sm"
+                            onClick={() => void openIdentity(booking)}
+                            disabled={identityBusy === booking.id}
+                            data-testid={`booking-identity-${booking.id}`}
+                          >
+                            <Eye size={13} />
+                            身份信息
+                          </button>
+                          {booking.canRestoreAttendance ? (
+                            <button
+                              type="button"
+                              className="admin-btn admin-btn-secondary admin-btn-sm"
+                              onClick={() => openRestore(booking)}
+                              data-testid={`booking-restore-${booking.id}`}
+                            >
+                              恢复到场
+                            </button>
+                          ) : null}
                           {["booked", "attended"].includes(booking.status) &&
                           !["instructions", "playing", "questionnaire", "archived"].includes(room.status) ? (
                             <button
@@ -1366,6 +1675,18 @@ export function RoomDetailPage() {
                     </button>
                     {!canForceArchive ? (
                       <p className="admin-hint">房间已归档，不能再次归档。</p>
+                    ) : null}
+                    {detail.archiveReasonCorrectionOptions.length > 0 ? (
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn-secondary"
+                        onClick={openArchiveCorrection}
+                        disabled={actionBusy !== null}
+                        data-testid="room-correct-archive-reason"
+                      >
+                        <Archive size={15} />
+                        更正结束原因
+                      </button>
                     ) : null}
                   </div>
                   <div>
@@ -1754,7 +2075,18 @@ export function RoomDetailPage() {
               <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
                 房间付款
               </h2>
-              <span className="admin-hint">金额为整数分转换后的两位小数</span>
+              <div className="admin-submit-row">
+                <span className="admin-hint">金额为整数分转换后的两位小数</span>
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-secondary"
+                  onClick={openManualPayment}
+                  data-testid="payment-manual-open"
+                >
+                  <Wallet size={15} />
+                  手工创建付款
+                </button>
+              </div>
             </div>
             {detail.payments.length === 0 ? (
               <EmptyState
@@ -1768,6 +2100,8 @@ export function RoomDetailPage() {
                   <thead>
                     <tr>
                       <th>分析编号</th>
+                      <th>参与者</th>
+                      <th>来源</th>
                       <th>基础费</th>
                       <th>绩效费</th>
                       <th>到场费</th>
@@ -1782,6 +2116,12 @@ export function RoomDetailPage() {
                     {detail.payments.map((payment, index) => (
                       <tr key={payment.id ?? index}>
                         <td className="admin-mono">{payment.analysisCode ?? "—"}</td>
+                        <td>{payment.name ?? "—"}</td>
+                        <td>
+                          {PAYMENT_SOURCE_LABELS[payment.source ?? "computed"] ??
+                            payment.source ??
+                            "自动"}
+                        </td>
                         <td>{formatMoney(payment.basePayCents)}</td>
                         <td>{formatMoney(payment.performancePayCents)}</td>
                         <td>{formatMoney(payment.showupPayCents)}</td>
@@ -1819,6 +2159,18 @@ export function RoomDetailPage() {
                               设为待支付
                             </button>
                           )}
+                          {(payment.source ?? "computed") !== "computed" &&
+                          payment.status === "pending" ? (
+                            <button
+                              type="button"
+                              className="admin-btn admin-btn-ghost admin-btn-sm"
+                              onClick={() => void voidPayment(payment)}
+                              disabled={!payment.id || paymentBusy === payment.id}
+                              data-testid={`payment-void-${payment.id ?? ""}`}
+                            >
+                              撤销付款
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -1925,6 +2277,367 @@ export function RoomDetailPage() {
                 data-testid="payment-override-note"
               />
             </Field>
+          </form>
+        </Modal>
+      ) : null}
+
+      {identityModal ? (
+        <Modal
+          title={identityModal.existing ? "更正身份信息" : "录入身份信息"}
+          onClose={() => setIdentityModal(null)}
+          footer={
+            <>
+              <button
+                type="button"
+                className="admin-btn admin-btn-secondary"
+                onClick={() => setIdentityModal(null)}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                form="identity-form"
+                className="admin-btn admin-btn-primary"
+                disabled={identitySaving}
+                data-testid="identity-save"
+              >
+                {identitySaving ? "保存中" : "保存身份信息"}
+              </button>
+            </>
+          }
+        >
+          <form id="identity-form" onSubmit={saveIdentity}>
+            <p className="admin-hint">
+              参与者：{identityModal.name}。更正后会立即影响支付名单和报销清单。
+            </p>
+            <Field label="真实姓名" htmlFor="identity-real-name">
+              <input
+                id="identity-real-name"
+                className="admin-input"
+                value={identityModal.realName}
+                onChange={(event) =>
+                  setIdentityModal({ ...identityModal, realName: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="支付宝手机号" htmlFor="identity-alipay-phone">
+              <input
+                id="identity-alipay-phone"
+                className="admin-input"
+                value={identityModal.alipayPhone}
+                onChange={(event) =>
+                  setIdentityModal({ ...identityModal, alipayPhone: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="证件类型" htmlFor="identity-document-type">
+              <select
+                id="identity-document-type"
+                className="admin-select"
+                value={identityModal.documentType}
+                onChange={(event) =>
+                  setIdentityModal({
+                    ...identityModal,
+                    documentType: event.target.value as "id_card" | "passport",
+                  })
+                }
+              >
+                <option value="id_card">身份证</option>
+                <option value="passport">护照</option>
+              </select>
+            </Field>
+            <Field label="证件号码" htmlFor="identity-document-number">
+              <input
+                id="identity-document-number"
+                className="admin-input"
+                value={identityModal.documentNumber}
+                onChange={(event) =>
+                  setIdentityModal({ ...identityModal, documentNumber: event.target.value })
+                }
+              />
+            </Field>
+            <Field
+              label="更正原因"
+              hint="必填，会写入管理端审计；不要在原因中填写证件号码、支付宝手机号等敏感信息。"
+            >
+              <textarea
+                className="admin-textarea"
+                value={identityModal.reason}
+                onChange={(event) =>
+                  setIdentityModal({ ...identityModal, reason: event.target.value })
+                }
+                style={{ minHeight: "80px" }}
+                data-testid="identity-reason"
+              />
+            </Field>
+            {identityError ? <InlineNotice tone="error">{identityError}</InlineNotice> : null}
+          </form>
+        </Modal>
+      ) : null}
+
+      {manualPaymentOpen ? (
+        <Modal
+          title="手工创建付款"
+          onClose={() => setManualPaymentOpen(false)}
+          footer={
+            <>
+              <button
+                type="button"
+                className="admin-btn admin-btn-secondary"
+                onClick={() => setManualPaymentOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                form="manual-payment-form"
+                className="admin-btn admin-btn-danger"
+                disabled={manualPaymentSaving}
+                data-testid="payment-manual-submit"
+              >
+                {manualPaymentSaving ? "创建中" : "创建付款"}
+              </button>
+            </>
+          }
+        >
+          <form id="manual-payment-form" onSubmit={submitManualPayment}>
+            <Field label="参与者" htmlFor="manual-payment-booking">
+              <select
+                id="manual-payment-booking"
+                className="admin-select"
+                value={manualBookingId}
+                onChange={(event) => {
+                  const booking = detail.bookings.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  setManualBookingId(event.target.value);
+                  setManualIdentity(null);
+                  if (booking && booking.status !== "attended") {
+                    setManualKind("manual_compensation");
+                  }
+                  void loadManualIdentity(booking);
+                }}
+                data-testid="payment-manual-booking"
+              >
+                <option value="">请选择</option>
+                {detail.bookings.map((booking) => (
+                  <option key={booking.id} value={booking.id}>
+                    {booking.name}（{BOOKING_STATUS_LABELS[booking.status]}）
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="付款类型" htmlFor="manual-payment-kind">
+              <select
+                id="manual-payment-kind"
+                className="admin-select"
+                value={manualKind}
+                onChange={(event) =>
+                  setManualKind(
+                    event.target.value as
+                      | "manual_showup"
+                      | "manual_completion"
+                      | "manual_compensation",
+                  )
+                }
+              >
+                <option value="manual_showup">到场费</option>
+                <option value="manual_completion">完成报酬补偿</option>
+                <option value="manual_compensation">其他补偿</option>
+              </select>
+            </Field>
+            <Field label="金额（元）" htmlFor="manual-payment-amount">
+              <input
+                id="manual-payment-amount"
+                className="admin-input"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={manualAmount}
+                onChange={(event) => setManualAmount(event.target.value)}
+                data-testid="payment-manual-amount"
+              />
+            </Field>
+            <Field
+              label="备注"
+              hint="必填。备注会进入付款记录和分析导出，不要填写姓名、手机号或证件号。"
+            >
+              <textarea
+                className="admin-textarea"
+                value={manualNote}
+                onChange={(event) => setManualNote(event.target.value)}
+                style={{ minHeight: "80px" }}
+                data-testid="payment-manual-note"
+              />
+            </Field>
+            <p className="admin-hint">
+              支付截止日期按问卷提交时间计算；没有问卷提交记录时按创建时间计算。
+            </p>
+            {manualIdentityLoading ? (
+              <p className="admin-hint">正在读取身份信息…</p>
+            ) : manualIdentity ? (
+              <InlineNotice tone="info">
+                已有身份记录：{manualIdentity.realName}，支付宝手机号{" "}
+                {manualIdentity.alipayPhone}。需要修改请先使用预约表中的“身份信息”。
+              </InlineNotice>
+            ) : (
+              <>
+                <p className="admin-hint">
+                  该参与者还没有身份记录，必须同时录入姓名、支付宝手机号和证件信息。
+                </p>
+                <Field label="真实姓名">
+                  <input
+                    className="admin-input"
+                    value={manualRealName}
+                    onChange={(event) => setManualRealName(event.target.value)}
+                  />
+                </Field>
+                <Field label="支付宝手机号">
+                  <input
+                    className="admin-input"
+                    value={manualAlipayPhone}
+                    onChange={(event) => setManualAlipayPhone(event.target.value)}
+                  />
+                </Field>
+                <Field label="证件类型">
+                  <select
+                    className="admin-select"
+                    value={manualDocumentType}
+                    onChange={(event) =>
+                      setManualDocumentType(
+                        event.target.value as "id_card" | "passport",
+                      )
+                    }
+                  >
+                    <option value="id_card">身份证</option>
+                    <option value="passport">护照</option>
+                  </select>
+                </Field>
+                <Field label="证件号码">
+                  <input
+                    className="admin-input"
+                    value={manualDocumentNumber}
+                    onChange={(event) => setManualDocumentNumber(event.target.value)}
+                  />
+                </Field>
+              </>
+            )}
+            {manualPaymentError ? (
+              <InlineNotice tone="error">{manualPaymentError}</InlineNotice>
+            ) : null}
+          </form>
+        </Modal>
+      ) : null}
+
+      {archiveCorrectionOpen && detail ? (
+        <Modal
+          title="更正结束原因"
+          onClose={() => setArchiveCorrectionOpen(false)}
+          footer={
+            <>
+              <button
+                type="button"
+                className="admin-btn admin-btn-secondary"
+                onClick={() => setArchiveCorrectionOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                form="archive-correction-form"
+                className="admin-btn admin-btn-danger"
+                disabled={archiveCorrectionSaving}
+                data-testid="archive-correction-submit"
+              >
+                {archiveCorrectionSaving ? "保存中" : "确认更正"}
+              </button>
+            </>
+          }
+        >
+          <form id="archive-correction-form" onSubmit={submitArchiveCorrection}>
+            <p className="admin-hint">
+              当前结束原因：
+              {detail.room.archiveReason
+                ? ARCHIVE_REASON_LABELS[detail.room.archiveReason]
+                : "—"}
+              。更正只修改结束原因和归档快照，不修改预约状态、到场时间或付款。
+            </p>
+            <Field label="目标结束原因" htmlFor="archive-correction-reason">
+              <select
+                id="archive-correction-reason"
+                className="admin-select"
+                value={archiveCorrectionReason}
+                onChange={(event) =>
+                  setArchiveCorrectionReason(event.target.value as ArchiveReason)
+                }
+              >
+                {detail.archiveReasonCorrectionOptions.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {ARCHIVE_REASON_LABELS[reason]}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field
+              label="更正说明"
+              hint="必填。说明更正依据，会写入房间事件和管理端审计。"
+            >
+              <textarea
+                className="admin-textarea"
+                value={archiveCorrectionNote}
+                onChange={(event) => setArchiveCorrectionNote(event.target.value)}
+                style={{ minHeight: "80px" }}
+                data-testid="archive-correction-note"
+              />
+            </Field>
+            {archiveCorrectionError ? (
+              <InlineNotice tone="error">{archiveCorrectionError}</InlineNotice>
+            ) : null}
+          </form>
+        </Modal>
+      ) : null}
+
+      {restoreBooking ? (
+        <Modal
+          title="恢复到场"
+          onClose={() => setRestoreBooking(null)}
+          footer={
+            <>
+              <button
+                type="button"
+                className="admin-btn admin-btn-secondary"
+                onClick={() => setRestoreBooking(null)}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                form="restore-attendance-form"
+                className="admin-btn admin-btn-danger"
+                disabled={restoreSaving}
+                data-testid="restore-attendance-submit"
+              >
+                {restoreSaving ? "保存中" : "确认恢复"}
+              </button>
+            </>
+          }
+        >
+          <form id="restore-attendance-form" onSubmit={submitRestore}>
+            <p className="admin-hint">
+              参与者：{restoreBooking.name}。原到场时间：
+              {formatDateTime(restoreBooking.attendedAt)}。恢复后可能重新计算付款，
+              并影响参与者的预约资格。
+            </p>
+            <Field label="恢复说明" hint="必填，会写入房间事件和管理端审计。">
+              <textarea
+                className="admin-textarea"
+                value={restoreNote}
+                onChange={(event) => setRestoreNote(event.target.value)}
+                style={{ minHeight: "80px" }}
+                data-testid="restore-attendance-note"
+              />
+            </Field>
+            {restoreError ? <InlineNotice tone="error">{restoreError}</InlineNotice> : null}
           </form>
         </Modal>
       ) : null}

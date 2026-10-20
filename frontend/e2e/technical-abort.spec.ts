@@ -71,10 +71,10 @@ test("技术中止到场费待问卷，提交后生成到场费且不能重新�
 
     await pageTwo.close();
     await expect(
-      pageOne.getByRole("heading", { name: "因故障中止", exact: true }),
+      pageOne.getByRole("heading", { name: "实验提前结束", exact: true }),
     ).toBeVisible({ timeout: 30000 });
     await expect(
-      pageOne.getByText("提交前后都不能预约新的场次", {
+      pageOne.getByText("本次实验结束后，你不能再预约新的实验", {
         exact: false,
       }),
     ).toBeVisible();
@@ -85,13 +85,13 @@ test("技术中止到场费待问卷，提交后生成到场费且不能重新�
     await abortedHome.goto("/");
     const pendingCard = abortedHome.getByTestId("pending-questionnaire-card");
     await expect(pendingCard).toBeVisible({ timeout: 20000 });
-    await expect(pendingCard).toContainText("因故障中止：待填写问卷");
+    await expect(pendingCard).toContainText("实验提前结束：待填写问卷");
     await expect(
       pendingCard.getByTestId("continue-questionnaire"),
     ).toBeVisible();
     await expect(abortedHome.getByTestId("bookable-hidden")).toBeVisible();
     await expect(pendingCard).toContainText(
-      "提交前后都不能预约新的场次",
+      "本次实验结束后，你不能再预约新的实验",
     );
 
     await submitQuestionnaire(pageOne, baseURL, world.roomId, "tech-abort-a");
@@ -119,7 +119,7 @@ test("技术中止到场费待问卷，提交后生成到场费且不能重新�
 
     await pageOne.goto("/history");
     const historyItem = pageOne.locator(".history-item", {
-      hasText: "故障中止",
+      hasText: "提前结束",
     });
     await expect(historyItem).toContainText("未完成");
     await expect(historyItem).toContainText("到场费：¥10.00");

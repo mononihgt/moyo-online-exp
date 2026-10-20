@@ -41,7 +41,7 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
     (technicalAbort && (item.payment?.showupPayCents ?? 0) > 0);
   if (technicalAbort) {
     return {
-      label: "故障中止",
+      label: "提前结束",
       tone: "warning",
       formal: "未完成",
       awaitingQuestionnaire: false,
@@ -116,7 +116,7 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
       break;
   }
   if (item.roomStatus === "archived") {
-    return { ...base, label: "已中止", tone: "error" };
+    return { ...base, label: "已结束", tone: "error" };
   }
   return {
     ...base,
@@ -199,7 +199,17 @@ export default function HistoryPage() {
               const state = entryState(item);
               const archivedQuestionnaire =
                 item.archiveReason === "questionnaire_incomplete";
-              const showReward = state.completion || state.techShowup;
+              const hasManual =
+                item.payment !== null &&
+                (item.payment.source ?? "computed") !== "computed";
+              const manualLabel =
+                item.payment?.source === "manual_showup"
+                  ? "到场费"
+                  : item.payment?.source === "manual_completion"
+                    ? "完成报酬补偿"
+                    : "补偿";
+              const showReward =
+                state.completion || state.techShowup || hasManual;
               const rebookAllowed =
                 item.canRebook &&
                 item.archiveReason !== "completed" &&
@@ -233,16 +243,18 @@ export default function HistoryPage() {
                     <div className="p-detail-row">
                       <dt>报酬</dt>
                       <dd className="p-mono">
-                        {state.completion
-                          ? formatMoney(item.payment?.totalCents)
-                          : state.techShowup
-                            ? `到场费：${formatMoney(item.payment?.showupPayCents)}`
-                            : item.questionnaireRequired
-                              ? SHOWUP_FEE_PENDING
-                              : item.archiveReason === "technical_abort" &&
-                                  item.questionnaireStatus === "completed"
-                                ? "报酬记录尚未同步，请联系实验工作人员。"
-                                : NO_REWARD}
+                        {hasManual
+                          ? `${manualLabel}：${formatMoney(item.payment?.totalCents)}`
+                          : state.completion
+                            ? formatMoney(item.payment?.totalCents)
+                            : state.techShowup
+                              ? `到场费：${formatMoney(item.payment?.showupPayCents)}`
+                              : item.questionnaireRequired
+                                ? SHOWUP_FEE_PENDING
+                                : item.archiveReason === "technical_abort" &&
+                                    item.questionnaireStatus === "completed"
+                                  ? "报酬记录尚未同步，请联系实验工作人员。"
+                                  : NO_REWARD}
                       </dd>
                     </div>
                     {showReward && item.payment !== null ? (

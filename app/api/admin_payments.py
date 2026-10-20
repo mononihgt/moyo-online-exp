@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import Field
 from sqlalchemy import select
 
-from ..constants import PAYMENT_PAID
+from ..constants import PAYMENT_PAID, PAYMENT_SOURCE_COMPUTED
 from ..models import Participant, Payment, Room, RoomParticipant
-from ..schemas import ApiModel, PaymentPatch
+from ..schemas import ApiModel, ManualPaymentCreate, PaymentPatch
 from ..security import decrypt_phone, mask_phone
 from ..services.events import add_event
+from ..services.locking import room_lock
 from ..services.payment_lists import (
     bulk_payments,
     mark_payments_paid,
@@ -15,7 +16,13 @@ from ..services.payment_lists import (
     range_bounds,
     reimbursement_list_csv,
 )
-from ..services.payments import UNSET, apply_override, serialize_payment
+from ..services.payments import (
+    UNSET,
+    apply_override,
+    create_manual_payment,
+    serialize_payment,
+)
+from ..services.runtime import runtime_manager
 from ..timeutil import isoformat_utc
 from .admin_common import audit
 from .deps import AdminDep, DbSession, require_csrf
@@ -71,11 +78,103 @@ async def list_payments(
     return {"payments": items}
 
 
+@router.post("/payments", dependencies=[Depends(require_csrf)])
+async def create_payment(payload: ManualPaymentCreate, admin: AdminDep, db: DbSession):
+    async with room_lock(payload.room_id):
+        await db.commit()
+        room = await db.get(Room, payload.room_id)
+        if room is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "实验不存在")
+        participant = await db.get(Participant, payload.participant_id)
+        if participant is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
+        identity_values = (
+            payload.identity.model_dump() if payload.identity is not None else None
+        )
+        payment = await create_manual_payment(
+            db,
+            room,
+            participant.id,
+            booking_id=payload.booking_id,
+            kind=payload.kind,
+            amount_cents=payload.amount_cents,
+            admin_note=payload.admin_note,
+            identity_values=identity_values,
+        )
+        audit(
+            db,
+            admin,
+            "payment_created",
+            "payment",
+            payment.id,
+            {
+                "roomId": room.id,
+                "participantId": participant.id,
+                "kind": payload.kind,
+                "amountCents": payload.amount_cents,
+            },
+        )
+        await db.commit()
+        result = serialize_payment(payment)
+        result.update(
+            {
+                "participantId": participant.id,
+                "name": participant.name,
+                "source": payment.source,
+            }
+        )
+    await runtime_manager.notify_room(payload.room_id)
+    return {"payment": result}
+
+
+@router.delete("/payments/{payment_id}", dependencies=[Depends(require_csrf)])
+async def void_payment(payment_id: str, admin: AdminDep, db: DbSession):
+    existing = await db.get(Payment, payment_id)
+    if existing is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "付款记录不存在")
+    room_id = existing.room_id
+    async with room_lock(room_id):
+        await db.commit()
+        payment = await db.get(Payment, payment_id)
+        if payment is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "付款记录不存在")
+        if payment.source == PAYMENT_SOURCE_COMPUTED:
+            raise HTTPException(status.HTTP_409_CONFLICT, "自动付款不能撤销")
+        if payment.status == PAYMENT_PAID or payment.paid_at is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "已支付付款不能撤销")
+        room = await db.get(Room, room_id)
+        add_event(
+            db,
+            room,
+            "manual_payment_voided",
+            payment.participant_id,
+            {"kind": payment.source, "amountCents": payment.total_cents},
+        )
+        audit(
+            db,
+            admin,
+            "payment_voided",
+            "payment",
+            payment.id,
+            {
+                "roomId": room_id,
+                "participantId": payment.participant_id,
+                "kind": payment.source,
+                "amountCents": payment.total_cents,
+            },
+        )
+        await db.delete(payment)
+        await db.commit()
+    await runtime_manager.notify_room(room_id)
+    return {"ok": True}
+
+
 @router.patch("/payments/{payment_id}", dependencies=[Depends(require_csrf)])
 async def patch_payment(payment_id: str, payload: PaymentPatch, admin: AdminDep, db: DbSession):
     payment = await db.get(Payment, payment_id)
     if payment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "付款记录不存在")
+    room_id = payment.room_id
     previous_status = payment.status
     fields = payload.model_dump(exclude_unset=True)
     apply_override(
@@ -85,10 +184,22 @@ async def patch_payment(payment_id: str, payload: PaymentPatch, admin: AdminDep,
         new_status=payload.status,
     )
     if payload.status == PAYMENT_PAID and previous_status != PAYMENT_PAID:
-        room = await db.get(Room, payment.room_id)
+        room = await db.get(Room, room_id)
         add_event(db, room, "payment_paid", payment.participant_id, {"totalCents": payment.total_cents})
-    audit(db, admin, "payment_updated", "payment", payment.id, fields)
+    audit(
+        db,
+        admin,
+        "payment_updated",
+        "payment",
+        payment.id,
+        {
+            "status": payload.status,
+            "overrideChanged": "override_amount_cents" in fields,
+            "noteChanged": "admin_note" in fields,
+        },
+    )
     await db.commit()
+    await runtime_manager.notify_room(room_id)
     return {"payment": serialize_payment(payment)}
 
 

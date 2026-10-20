@@ -5,6 +5,7 @@ from ..config import get_settings
 from ..constants import (
     ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
+    PARTICIPANT_MERGED,
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
     ROOM_FULL,
@@ -32,11 +33,19 @@ from ..models import (
 from ..schemas import (
     ConsentVersionCreate,
     ConsentVersionPatch,
+    ParticipantMerge,
     ParticipantPatch,
     SettingsPatch,
 )
-from ..security import decrypt_phone, mask_phone
+from ..security import (
+    decrypt_phone,
+    encrypt_phone,
+    mask_phone,
+    normalize_phone,
+    phone_hash,
+)
 from ..services.media import save_image, serialize_media
+from ..services.participant_merge import merge_participants
 from ..services.participants import import_completed
 from ..services.rooms import room_summary
 from ..timeutil import isoformat_utc, utcnow
@@ -65,6 +74,7 @@ async def dashboard(admin: AdminDep, db: DbSession):
         RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
         Booking.status == BOOKING_ATTENDED,
         MapGroupVersion.showup_pay_cents > 0,
+        Payment.id.is_(None),
     )
     pending_showup = await db.execute(
         select(func.count(func.distinct(Room.id)))
@@ -77,6 +87,13 @@ async def dashboard(admin: AdminDep, db: DbSession):
             ),
         )
         .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .outerjoin(
+            Payment,
+            and_(
+                Payment.room_id == RoomParticipant.room_id,
+                Payment.participant_id == RoomParticipant.participant_id,
+            ),
+        )
         .where(*showup_filter)
     )
     pending_showup_rooms = await db.execute(
@@ -90,6 +107,13 @@ async def dashboard(admin: AdminDep, db: DbSession):
             ),
         )
         .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .outerjoin(
+            Payment,
+            and_(
+                Payment.room_id == RoomParticipant.room_id,
+                Payment.participant_id == RoomParticipant.participant_id,
+            ),
+        )
         .where(*showup_filter)
         .distinct()
         .order_by(Room.starts_at)
@@ -144,22 +168,51 @@ async def list_participants(
     statement = select(Participant)
     count_statement = select(func.count(Participant.id))
     if query:
-        like = f"%{query.strip()}%"
-        statement = statement.where(or_(Participant.name.like(like), Participant.notes.like(like)))
-        count_statement = count_statement.where(or_(Participant.name.like(like), Participant.notes.like(like)))
+        phone_digest: str | None = None
+        try:
+            phone_digest = phone_hash(normalize_phone(query))
+        except ValueError:
+            phone_digest = None
+        if phone_digest is not None:
+            condition = Participant.phone_hash == phone_digest
+        else:
+            like = f"%{query.strip()}%"
+            condition = or_(Participant.name.like(like), Participant.notes.like(like))
+        statement = statement.where(condition)
+        count_statement = count_statement.where(condition)
     if status_filter:
         statement = statement.where(Participant.status == status_filter)
         count_statement = count_statement.where(Participant.status == status_filter)
     total = (await db.execute(count_statement)).scalar_one()
     rows = await db.execute(statement.order_by(Participant.created_at.desc()).limit(limit).offset(offset))
+    participants = list(rows.scalars().all())
+    merged_ids = {
+        participant.merged_into_id
+        for participant in participants
+        if participant.merged_into_id is not None
+    }
+    merged_names: dict[str, str] = {}
+    if merged_ids:
+        merged_rows = await db.execute(
+            select(Participant.id, Participant.name).where(
+                Participant.id.in_(merged_ids)
+            )
+        )
+        merged_names = {
+            participant_id: name for participant_id, name in merged_rows.all()
+        }
     items = []
-    for participant in rows.scalars().all():
+    for participant in participants:
         items.append(
             {
                 "id": participant.id,
                 "name": participant.name,
                 "phoneMasked": mask_phone(decrypt_phone(participant.phone_encrypted)),
                 "status": participant.status,
+                "mergedIntoId": participant.merged_into_id,
+                "mergedIntoName": merged_names.get(participant.merged_into_id)
+                if participant.merged_into_id
+                else None,
                 "consentedAt": isoformat_utc(participant.consented_at),
                 "notes": participant.notes,
                 "createdAt": isoformat_utc(participant.created_at),
@@ -193,15 +246,88 @@ async def patch_participant(
     participant = await db.get(Participant, participant_id)
     if participant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
+    if participant.status == PARTICIPANT_MERGED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "已合并账号不能修改")
     if payload.name is not None:
         participant.name = payload.name.strip()
     if payload.status is not None:
         participant.status = payload.status
     if payload.notes is not None:
         participant.notes = payload.notes
-    audit(db, admin, "participant_updated", "participant", participant.id, payload.model_dump(exclude_none=True))
+    change_payload = payload.model_dump(exclude_none=True, exclude={"phone"})
+    if change_payload:
+        audit(
+            db,
+            admin,
+            "participant_updated",
+            "participant",
+            participant.id,
+            change_payload,
+        )
+    if payload.phone is not None:
+        try:
+            normalized = normalize_phone(payload.phone)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "手机号格式不正确") from exc
+        digest = phone_hash(normalized)
+        existing = await db.execute(
+            select(Participant).where(
+                Participant.phone_hash == digest,
+                Participant.id != participant.id,
+            )
+        )
+        if existing.scalars().first() is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "该手机号已被其他账号使用")
+        old_masked = mask_phone(decrypt_phone(participant.phone_encrypted))
+        participant.phone_hash = digest
+        participant.phone_encrypted = encrypt_phone(normalized)
+        audit(
+            db,
+            admin,
+            "participant_phone_updated",
+            "participant",
+            participant.id,
+            {
+                "oldPhoneMasked": old_masked,
+                "newPhoneMasked": mask_phone(normalized),
+            },
+        )
     await db.commit()
     return {"updated": True}
+
+
+@router.post("/participants/merge", dependencies=[Depends(require_csrf)])
+async def merge_participant_accounts(
+    payload: ParticipantMerge, admin: AdminDep, db: DbSession
+):
+    source = await db.get(Participant, payload.source_id)
+    target = await db.get(Participant, payload.target_id)
+    if source is None or target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")
+    result = await merge_participants(
+        db,
+        source,
+        target,
+        keep_phone_from=payload.keep_phone_from,
+        final_name=payload.final_name,
+        reason=payload.reason,
+    )
+    audit(
+        db,
+        admin,
+        "participants_merged",
+        "participant",
+        target.id,
+        {
+            "sourceId": source.id,
+            "targetId": target.id,
+            "moved": result["moved"],
+            "keepPhoneFrom": payload.keep_phone_from,
+            "reason": payload.reason,
+        },
+    )
+    await db.commit()
+    return result
 
 
 @router.get("/consent-versions")

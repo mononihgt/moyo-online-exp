@@ -1,10 +1,12 @@
 import csv
 import io
+import json
 import time
 import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -730,6 +732,23 @@ def test_marked_absent_participant_gets_zero_payment_after_questionnaire(server)
         server, setup, room, participant_a, participant_b
     )
     participant_a_id = participant_a.json("GET", "/api/me")["me"]["id"]
+    administrator_identity = valid_identity_answers(
+        "管理员录入", phone="13900006666"
+    )
+    identity_path = (
+        f"/admin/api/rooms/{room['id']}/participants/{participant_a_id}/identity"
+    )
+    setup.admin.json(
+        "PUT",
+        identity_path,
+        json={
+            "realName": administrator_identity["real_name"],
+            "alipayPhone": administrator_identity["alipay_phone"],
+            "documentType": "id_card",
+            "documentNumber": administrator_identity["id_card"],
+            "reason": "参与者无法自行填写，主试核对证件后录入",
+        },
+    )
     setup.admin.json(
         "POST",
         f"/admin/api/rooms/{room['id']}/actions",
@@ -741,6 +760,9 @@ def test_marked_absent_participant_gets_zero_payment_after_questionnaire(server)
         json=_complete_payload(room["id"], IDENTITY_A, q1="female", q2="缺席"),
     )
     assert participant_a.json("GET", "/api/me")["me"]["status"] == "completed"
+    preserved_identity = setup.admin.json("GET", identity_path)["identity"]
+    assert preserved_identity["realName"] == administrator_identity["real_name"]
+    assert preserved_identity["alipayPhone"] == administrator_identity["alipay_phone"]
     detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
     participant = next(
         item for item in detail["participants"] if item["name"] == "缺席甲"
@@ -754,10 +776,303 @@ def test_marked_absent_participant_gets_zero_payment_after_questionnaire(server)
     assert payment["performancePayCents"] == 0
     assert payment["showupPayCents"] == 0
     assert payment["totalCents"] == 0
+    setup.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "force_archive", "reason": "questionnaire_incomplete"},
+    )
+    archived_detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    participant_booking = next(
+        item
+        for item in archived_detail["bookings"]
+        if item["name"] == "缺席甲"
+    )
+    assert participant_booking["status"] == "no_show"
+    assert participant_booking["attendedAt"] is not None
+    assert participant_booking["canRestoreAttendance"] is True
+    restored = setup.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={
+            "action": "restore_attendance",
+            "bookingId": participant_booking["id"],
+            "note": "核对入场记录后恢复到场",
+        },
+    )
+    assert restored["ok"] is True
+    assert restored["payment"]["totalCents"] > 0
+    restored_detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    assert restored_detail["room"]["archiveReason"] == "questionnaire_incomplete"
+    restored_booking = next(
+        item
+        for item in restored_detail["bookings"]
+        if item["name"] == "缺席甲"
+    )
+    assert restored_booking["status"] == "attended"
+    restored_payment = next(
+        item
+        for item in restored_detail["payments"]
+        if item["analysisCode"] == participant["analysisCode"]
+    )
+    assert restored_payment["basePayCents"] > 0
+    assert restored_payment["totalCents"] > 0
     ws_a.close()
     ws_b.close()
     participant_a.close()
     participant_b.close()
+    setup.close()
+
+
+@pytest.mark.integration
+def test_manual_compensation_identity_correction_and_account_merge(server):
+    setup = Setup(server)
+    source, target = _login(
+        server,
+        setup.admin,
+        [("合并来源", "13700001061"), ("合并目标", "13700001062")],
+    )
+    room = setup.room(starts_in_seconds=3, wait_window_seconds=2, label="补偿合并房间")
+    source.json("POST", f"/api/rooms/{room['id']}/book")
+    _wait_my_room_status(source, "waiting")
+    wait_until(
+        lambda: setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"][
+            "status"
+        ]
+        == "archived",
+        timeout=20,
+    )
+    detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    assert detail["room"]["archiveReason"] == "not_full"
+    source_id = source.json("GET", "/api/me")["me"]["id"]
+    source_booking = next(
+        item
+        for item in detail["bookings"]
+        if item["participantId"] == source_id
+    )
+    identity = valid_identity_answers("补偿", phone="13900004444")
+    created = setup.admin.json(
+        "POST",
+        "/admin/api/payments",
+        json={
+            "roomId": room["id"],
+            "participantId": source_id,
+            "bookingId": source_booking["id"],
+            "kind": "manual_compensation",
+            "amountCents": 1500,
+            "adminNote": "等待不足两人的场次补偿",
+            "identity": {
+                "realName": identity["real_name"],
+                "alipayPhone": identity["alipay_phone"],
+                "documentType": "id_card",
+                "documentNumber": identity["id_card"],
+            },
+        },
+    )
+    payment = created["payment"]
+    assert payment["source"] == "manual_compensation"
+    assert payment["overrideAmountCents"] == 1500
+    assert payment["totalCents"] == 1500
+    my_payments = source.json("GET", "/api/my-payments")["payments"]
+    assert any(item["roomId"] == room["id"] for item in my_payments)
+    experiment = next(
+        item
+        for item in source.json("GET", "/api/my-experiments")["experiments"]
+        if item["roomId"] == room["id"]
+    )
+    assert experiment["hasManualPayment"] is True
+    assert experiment["rewardKind"] == "manual"
+    identity_path = (
+        f"/admin/api/rooms/{room['id']}/participants/{source_id}/identity"
+    )
+    current_identity = setup.admin.json("GET", identity_path)["identity"]
+    assert current_identity["realName"] == identity["real_name"]
+    corrected = setup.admin.json(
+        "PUT",
+        identity_path,
+        json={
+            "realName": "测试更正",
+            "alipayPhone": "13900005555",
+            "documentType": "id_card",
+            "documentNumber": identity["id_card"],
+            "reason": "参与者填写错误，主试核对后更正",
+        },
+    )
+    assert corrected["identity"]["realName"] == "测试更正"
+    assert corrected["identity"]["alipayPhone"] == "13900005555"
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    csv_text = setup.admin.request(
+        "GET",
+        f"/admin/api/payments/export-payment-list.csv?from={today}&to={today}",
+    ).content.decode("utf-8-sig")
+    assert "测试更正" in csv_text
+    assert "13900005555" in csv_text
+    audit_entries = setup.admin.json("GET", "/admin/api/audit?limit=100")["entries"]
+    identity_audit = next(
+        entry
+        for entry in audit_entries
+        if entry["action"] == "participant_identity_updated"
+    )
+    audit_text = json.dumps(identity_audit["payload"], ensure_ascii=False)
+    assert "测试更正" not in audit_text
+    assert "13900005555" not in audit_text
+    assert identity["id_card"] not in audit_text
+
+    target_id = target.json("GET", "/api/me")["me"]["id"]
+    merged = setup.admin.json(
+        "POST",
+        "/admin/api/participants/merge",
+        json={
+            "sourceId": source_id,
+            "targetId": target_id,
+            "keepPhoneFrom": "source",
+            "finalName": "合并来源",
+            "reason": "手机号输错产生重复账号",
+        },
+    )
+    assert merged["sourceId"] == source_id
+    assert merged["targetId"] == target_id
+    assert merged["moved"]["payments"] == 1
+    source_me = source.json("GET", "/api/me")["me"]
+    assert source_me["id"] == target_id
+    target_me = target.json("GET", "/api/me")["me"]
+    assert target_me["hasPayment"] is True
+    assert target_me["canBook"] is False
+    target_experiment = next(
+        item
+        for item in target.json("GET", "/api/my-experiments")["experiments"]
+        if item["roomId"] == room["id"]
+    )
+    assert target_experiment["payment"]["totalCents"] == 1500
+    logged_in = ApiClient(server.base_url).login_participant(
+        "合并来源", "13700001061"
+    )
+    assert logged_in.json("GET", "/api/me")["me"]["id"] == target_id
+    logged_in_old_target_phone = ApiClient(server.base_url).login_participant(
+        "合并来源", "13700001062"
+    )
+    assert logged_in_old_target_phone.json("GET", "/api/me")["me"]["id"] == target_id
+    participants = setup.admin.json(
+        "GET", "/admin/api/participants?query=合并来源&limit=20"
+    )["participants"]
+    source_record = next(item for item in participants if item["id"] == source_id)
+    assert source_record["status"] == "merged"
+    assert source_record["mergedIntoId"] == target_id
+    source.close()
+    target.close()
+    logged_in.close()
+    logged_in_old_target_phone.close()
+    setup.close()
+
+
+@pytest.mark.integration
+def test_merge_blocks_same_room_and_active_booking(server):
+    setup = Setup(server)
+    source, target = _login(
+        server,
+        setup.admin,
+        [("冲突来源", "13700001063"), ("冲突目标", "13700001064")],
+    )
+    room = setup.room(starts_in_seconds=3, wait_window_seconds=2, label="同房冲突")
+    source.json("POST", f"/api/rooms/{room['id']}/book")
+    target.json("POST", f"/api/rooms/{room['id']}/book")
+    wait_until(
+        lambda: setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"][
+            "status"
+        ]
+        == "archived",
+        timeout=20,
+    )
+    source_id = source.json("GET", "/api/me")["me"]["id"]
+    target_id = target.json("GET", "/api/me")["me"]["id"]
+    conflict = setup.admin.request(
+        "POST",
+        "/admin/api/participants/merge",
+        json={
+            "sourceId": source_id,
+            "targetId": target_id,
+            "keepPhoneFrom": "target",
+            "reason": "尝试合并同房账号",
+        },
+    )
+    assert conflict.status_code == 409
+    assert "bookings" in conflict.json()["detail"]
+    active_room = setup.room(starts_in_seconds=600, label="活跃预约冲突")
+    source.json("POST", f"/api/rooms/{active_room['id']}/book")
+    active_conflict = setup.admin.request(
+        "POST",
+        "/admin/api/participants/merge",
+        json={
+            "sourceId": source_id,
+            "targetId": target_id,
+            "keepPhoneFrom": "target",
+            "reason": "尝试合并有活跃预约的账号",
+        },
+    )
+    assert active_conflict.status_code == 409
+    assert "未归档" in active_conflict.json()["detail"]
+    source.close()
+    target.close()
+    setup.close()
+
+
+@pytest.mark.integration
+def test_manual_payment_can_be_voided_before_payment(server):
+    setup = Setup(server)
+    participant, _other = _login(
+        server,
+        setup.admin,
+        [("撤销付款", "13700001065"), ("撤销陪伴", "13700001066")],
+    )
+    room = setup.room(starts_in_seconds=3, wait_window_seconds=2, label="撤销付款房间")
+    participant.json("POST", f"/api/rooms/{room['id']}/book")
+    _wait_my_room_status(participant, "waiting")
+    wait_until(
+        lambda: setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"][
+            "status"
+        ]
+        == "archived",
+        timeout=20,
+    )
+    detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    participant_id = participant.json("GET", "/api/me")["me"]["id"]
+    booking = next(
+        item for item in detail["bookings"] if item["participantId"] == participant_id
+    )
+    identity = valid_identity_answers("撤销", phone="13900007777")
+    payload = {
+        "roomId": room["id"],
+        "participantId": participant_id,
+        "bookingId": booking["id"],
+        "kind": "manual_compensation",
+        "amountCents": 1200,
+        "adminNote": "临时补偿，稍后核对",
+        "identity": {
+            "realName": identity["real_name"],
+            "alipayPhone": identity["alipay_phone"],
+            "documentType": "id_card",
+            "documentNumber": identity["id_card"],
+        },
+    }
+    first = setup.admin.json("POST", "/admin/api/payments", json=payload)
+    first_id = first["payment"]["id"]
+    assert participant.json("GET", "/api/my-payments")["payments"]
+    setup.admin.json("DELETE", f"/admin/api/payments/{first_id}")
+    assert participant.json("GET", "/api/my-payments")["payments"] == []
+    second = setup.admin.json(
+        "POST",
+        "/admin/api/payments",
+        json={**payload, "identity": None},
+    )
+    second_id = second["payment"]["id"]
+    setup.admin.json(
+        "PATCH",
+        f"/admin/api/payments/{second_id}",
+        json={"status": "paid"},
+    )
+    blocked = setup.admin.request("DELETE", f"/admin/api/payments/{second_id}")
+    assert blocked.status_code == 409
+    participant.close()
+    _other.close()
     setup.close()
 
 
@@ -1061,8 +1376,8 @@ def test_technical_abort_showup_payment(server):
     blocked = participant_a.request("POST", f"/api/rooms/{new_room['id']}/book")
     assert blocked.status_code == 409
     assert blocked.json()["detail"] == (
-        "本次实验因网络或系统故障中止，你已到场。请先填写并提交后测问卷，"
-        "提交后生成到场费；提交前后都无法预约新的场次。"
+        "本次实验因网络或系统故障提前结束，你已到场。请先填写并提交后测问卷，"
+        "提交后生成到场费；本次实验结束后，你不能再预约新的实验。"
     )
     participant_b_id = participant_b.json("GET", "/api/me")["me"]["id"]
     admin_blocked = setup.admin.request(

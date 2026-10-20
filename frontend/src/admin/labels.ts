@@ -48,6 +48,7 @@ export const PARTICIPANT_STATUS_LABELS: Record<ParticipantStatus, string> = {
   eligible: "可参与",
   completed: "已完成",
   disabled: "已停用",
+  merged: "已合并",
 };
 
 export function participantStatusTone(status: ParticipantStatus): ChipTone {
@@ -58,6 +59,8 @@ export function participantStatusTone(status: ParticipantStatus): ChipTone {
       return "success";
     case "disabled":
       return "error";
+    case "merged":
+      return "neutral";
     default:
       return "neutral";
   }

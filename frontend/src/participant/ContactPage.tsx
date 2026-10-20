@@ -78,14 +78,14 @@ export default function ContactPage() {
           <div className="p-divider" />
           <h3 className="p-label">建议联系实验工作人员的情况</h3>
           <ul className="contact-topics">
-            <li>另一名参与者缺席、断线后无法重新连接，或实验被意外中止。</li>
+            <li>另一名参与者缺席、断线后无法重新连接，或实验被意外提前结束。</li>
             <li>你主动退出后发现状态或报酬记录不正确。</li>
             <li>后测问卷无法打开、提交失败，或提交后仍显示待填写。</li>
             <li>到场费、报酬金额、支付状态或支付截止日期与预期不符。</li>
             <li>无法登录、预约、取消预约，或无法重新预约。</li>
           </ul>
           <p className="p-muted contact-note">
-            因故障中止的到场费支付截止日期为提交后测问卷后的第一个周日
+            因网络或系统故障提前结束的到场费支付截止日期为提交后测问卷后的第一个周日
             24:00（北京时间）；如逾期未收到，请通过以上方式联系实验工作人员。
           </p>
         </section>

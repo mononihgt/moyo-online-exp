@@ -21,7 +21,6 @@ from conftest import (
 
 ROOM_SECTIONS = ["未开放预约", "开放预约", "进行中", "未完全支付", "已归档"]
 DETAIL_TABS = ["概览", "预约", "监控", "数据", "付款"]
-PHONES = {"界面甲": "13400000001", "界面乙": "13400000002"}
 IDENTITIES = {
     "界面甲": valid_identity_answers("界面甲", phone="13900004441"),
     "界面乙": valid_identity_answers("界面乙", phone="13900004442"),
@@ -541,7 +540,7 @@ def test_two_browser_contexts_full_participant_flow_and_admin_smoke(ui_server):
             expect(row).to_contain_text("待支付")
             expect(checkbox).to_be_checked()
             phone = row.locator(".admin-bulk-phone")
-            expect(phone).to_have_text(PHONES[payment["name"]])
+            expect(phone).to_have_text(IDENTITIES[payment["name"]]["alipay_phone"])
             assert len(phone.inner_text()) == 11
 
         admin_page.get_by_test_id("bulk-invert-selection").click()

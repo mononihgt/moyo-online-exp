@@ -308,7 +308,7 @@ export default function HomePage() {
                       : PENDING_QUESTIONNAIRE_TITLE}
                   </h2>
                   <StatusChip tone="warning">
-                    {technicalAbort ? "故障中止" : archived ? "待补交" : "待填写"}
+                    {technicalAbort ? "提前结束" : archived ? "待补交" : "待填写"}
                   </StatusChip>
                 </div>
                 <p className="p-muted">{formatDateTime(item.startsAt)}</p>

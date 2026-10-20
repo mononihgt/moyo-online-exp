@@ -50,6 +50,8 @@ interface ArchiveInfo {
   partnerExitReason: ExitReason | null;
   questionnaireCompleted: boolean;
   questionnaireRequired: boolean;
+  hasManualPayment: boolean;
+  showupPayCents: number;
   rewardKind: RewardKind;
 }
 
@@ -196,6 +198,8 @@ export default function RoomPage() {
             partnerExitReason: null,
             questionnaireCompleted: false,
             questionnaireRequired: false,
+            hasManualPayment: false,
+            showupPayCents: 0,
             rewardKind: "none",
           });
           setTerminal(true);
@@ -286,6 +290,8 @@ export default function RoomPage() {
               questionnaireCompleted,
               questionnaireRequired:
                 message.archive?.questionnaireRequired === true,
+              hasManualPayment: message.archive?.hasManualPayment === true,
+              showupPayCents: message.archive?.showupPayCents ?? 0,
               rewardKind:
                 message.archive?.rewardKind ??
                 (reason === "completed" ? "completion" : "none"),
@@ -413,6 +419,8 @@ export default function RoomPage() {
             questionnaireCompleted:
               message.selfQuestionnaireStatus === "completed",
             questionnaireRequired: message.questionnaireRequired === true,
+            hasManualPayment: message.hasManualPayment === true,
+            showupPayCents: message.showupPayCents,
             rewardKind: message.rewardKind,
           });
           setTerminal(true);
@@ -696,6 +704,8 @@ export default function RoomPage() {
           questionnaireCompleted:
             roomState.self.questionnaireStatus === "completed",
           questionnaireRequired: roomState.archive?.questionnaireRequired === true,
+          hasManualPayment: roomState.archive?.hasManualPayment === true,
+          showupPayCents: roomState.archive?.showupPayCents ?? 0,
           rewardKind:
             roomState.archive?.rewardKind ??
             (roomState.archiveReason === "completed" ? "completion" : "none"),
@@ -828,6 +838,8 @@ export default function RoomPage() {
           partnerExitReason={archiveInfo.partnerExitReason}
           questionnaireCompleted={archiveInfo.questionnaireCompleted}
           questionnaireRequired={archiveInfo.questionnaireRequired}
+          hasManualPayment={archiveInfo.hasManualPayment}
+          showupPayCents={archiveInfo.showupPayCents}
           rewardKind={archiveInfo.rewardKind}
         />
       ) : phaseKind === "missing" ? (

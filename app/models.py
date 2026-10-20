@@ -19,6 +19,7 @@ from .constants import (
     DEFAULT_RECONNECT_WINDOW_SECONDS,
     DEFAULT_WAIT_WINDOW_SECONDS,
     PAYMENT_PENDING,
+    PAYMENT_SOURCE_COMPUTED,
     QUESTIONNAIRE_NOT_STARTED,
 )
 from .db import Base
@@ -37,6 +38,12 @@ class Participant(Base):
     phone_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     phone_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="eligible", index=True)
+    merged_into_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("participants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     consent_version_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("consent_versions.id", ondelete="SET NULL"), nullable=True
     )
@@ -461,6 +468,7 @@ class Payment(Base):
     __table_args__ = (
         UniqueConstraint("room_id", "participant_id", name="uq_payments_room_participant"),
         Index("ix_payments_status", "status"),
+        Index("ix_payments_source", "source"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -473,6 +481,9 @@ class Payment(Base):
     showup_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     override_amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=PAYMENT_SOURCE_COMPUTED
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=PAYMENT_PENDING)
     computed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

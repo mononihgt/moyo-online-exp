@@ -42,11 +42,25 @@ export function ParticipantsPage() {
 
   const [editing, setEditing] = useState<AdminParticipant | null>(null);
   const [editName, setEditName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
   const [editStatus, setEditStatus] = useState<ParticipantStatus>("eligible");
   const [editNotes, setEditNotes] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeSourceQuery, setMergeSourceQuery] = useState("");
+  const [mergeTargetQuery, setMergeTargetQuery] = useState("");
+  const [mergeSourceOptions, setMergeSourceOptions] = useState<AdminParticipant[]>([]);
+  const [mergeTargetOptions, setMergeTargetOptions] = useState<AdminParticipant[]>([]);
+  const [mergeSource, setMergeSource] = useState<AdminParticipant | null>(null);
+  const [mergeTarget, setMergeTarget] = useState<AdminParticipant | null>(null);
+  const [mergeKeepPhone, setMergeKeepPhone] = useState<"target" | "source">("target");
+  const [mergeFinalName, setMergeFinalName] = useState("");
+  const [mergeReason, setMergeReason] = useState("");
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [merging, setMerging] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,6 +98,7 @@ export function ParticipantsPage() {
   function openEdit(participant: AdminParticipant) {
     setEditing(participant);
     setEditName(participant.name);
+    setEditPhone("");
     setEditStatus(participant.status);
     setEditNotes(participant.notes ?? "");
     setEditError(null);
@@ -182,6 +197,7 @@ export function ParticipantsPage() {
     try {
       await adminApi.patch(`/participants/${editing.id}`, {
         name: editName.trim(),
+        phone: editPhone.trim() || undefined,
         status: editStatus,
         notes: editNotes.trim(),
       });
@@ -192,6 +208,87 @@ export function ParticipantsPage() {
       setEditError(errorMessage(err));
     } finally {
       setSavingEdit(false);
+    }
+  }
+
+  async function searchMergeCandidates(
+    query: string,
+    setter: (items: AdminParticipant[]) => void,
+  ) {
+    if (!query.trim()) {
+      setter([]);
+      return;
+    }
+    try {
+      const params = new URLSearchParams({
+        query: query.trim(),
+        limit: "10",
+      });
+      const response = await adminApi.get<ParticipantListResponse>(
+        `/participants?${params.toString()}`,
+      );
+      setter(
+        response.participants.filter(
+          (item) => item.status !== "merged" && item.status !== "disabled",
+        ),
+      );
+    } catch (err) {
+      setMergeError(errorMessage(err));
+    }
+  }
+
+  function openMerge() {
+    setMergeSourceQuery("");
+    setMergeTargetQuery("");
+    setMergeSourceOptions([]);
+    setMergeTargetOptions([]);
+    setMergeSource(null);
+    setMergeTarget(null);
+    setMergeKeepPhone("target");
+    setMergeFinalName("");
+    setMergeReason("");
+    setMergeError(null);
+    setMergeOpen(true);
+  }
+
+  async function submitMerge(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMergeError(null);
+    if (!mergeSource || !mergeTarget) {
+      setMergeError("请选择来源账号和目标账号");
+      return;
+    }
+    if (mergeSource.id === mergeTarget.id) {
+      setMergeError("来源账号和目标账号不能相同");
+      return;
+    }
+    if (!mergeReason.trim()) {
+      setMergeError("必须填写合并原因");
+      return;
+    }
+    const ok = await confirm({
+      title: "合并账号",
+      message: `确认把 ${mergeSource.name}（${mergeSource.phoneMasked}）合并到 ${mergeTarget.name}（${mergeTarget.phoneMasked}）？业务记录会迁移到目标账号，来源账号会保留为已合并记录。`,
+      confirmLabel: "确认合并",
+      danger: true,
+    });
+    if (!ok) return;
+    setMerging(true);
+    try {
+      await adminApi.post("/participants/merge", {
+        sourceId: mergeSource.id,
+        targetId: mergeTarget.id,
+        keepPhoneFrom: mergeKeepPhone,
+        finalName: mergeFinalName.trim() || undefined,
+        reason: mergeReason.trim(),
+      });
+      notify("账号已合并");
+      setMergeOpen(false);
+      refresh();
+    } catch (err) {
+      setMergeError(errorMessage(err));
+    } finally {
+      setMerging(false);
     }
   }
 
@@ -303,7 +400,7 @@ export function ParticipantsPage() {
         <form className="admin-toolbar" onSubmit={handleSearch}>
           <input
             className="admin-input admin-search"
-            placeholder="按姓名或备注搜索"
+            placeholder="按姓名、备注或完整手机号搜索"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             aria-label="搜索参与者"
@@ -312,6 +409,15 @@ export function ParticipantsPage() {
           <button type="submit" className="admin-btn admin-btn-secondary">
             <Search size={15} />
             搜索
+          </button>
+          <button
+            type="button"
+            className="admin-btn admin-btn-secondary"
+            onClick={openMerge}
+            data-testid="participants-merge-open"
+          >
+            <Users size={15} />
+            合并账号
           </button>
           <select
             className="admin-select"
@@ -388,27 +494,38 @@ export function ParticipantsPage() {
                       <td>{formatDateTime(participant.consentedAt)}</td>
                       <td>{formatDateTime(participant.createdAt)}</td>
                       <td className="admin-actions-cell">
-                        <button
-                          type="button"
-                          className="admin-btn admin-btn-ghost admin-btn-sm"
-                          onClick={() => openEdit(participant)}
-                          data-testid={`participant-edit-${participant.id}`}
-                        >
-                          <Pencil size={13} />
-                          编辑
-                        </button>
-                        <button
-                          type="button"
-                          className={`admin-btn admin-btn-sm ${
-                            participant.status === "disabled" ? "admin-btn-secondary" : "admin-btn-ghost"
-                          }`}
-                          onClick={() => void toggleDisabled(participant)}
-                          disabled={busyId === participant.id}
-                          data-testid={`participant-toggle-${participant.id}`}
-                        >
-                          {participant.status === "disabled" ? <UserCheck size={13} /> : <UserX size={13} />}
-                          {participant.status === "disabled" ? "启用" : "停用"}
-                        </button>
+                        {participant.status === "merged" ? (
+                          <span className="admin-hint">
+                            已合并到{" "}
+                            {participant.mergedIntoName ??
+                              participant.mergedIntoId ??
+                              "目标账号"}
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="admin-btn admin-btn-ghost admin-btn-sm"
+                              onClick={() => openEdit(participant)}
+                              data-testid={`participant-edit-${participant.id}`}
+                            >
+                              <Pencil size={13} />
+                              编辑
+                            </button>
+                            <button
+                              type="button"
+                              className={`admin-btn admin-btn-sm ${
+                                participant.status === "disabled" ? "admin-btn-secondary" : "admin-btn-ghost"
+                              }`}
+                              onClick={() => void toggleDisabled(participant)}
+                              disabled={busyId === participant.id}
+                              data-testid={`participant-toggle-${participant.id}`}
+                            >
+                              {participant.status === "disabled" ? <UserCheck size={13} /> : <UserX size={13} />}
+                              {participant.status === "disabled" ? "启用" : "停用"}
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -432,8 +549,19 @@ export function ParticipantsPage() {
                 data-testid="participant-edit-name"
               />
             </Field>
-            <Field label="手机号">
-              <input className="admin-input" value={editing.phoneMasked} readOnly disabled />
+            <Field
+              label="手机号"
+              htmlFor="participant-phone"
+              hint={`当前 ${editing.phoneMasked}。留空表示不修改；输入完整新手机号后保存。`}
+            >
+              <input
+                id="participant-phone"
+                className="admin-input"
+                value={editPhone}
+                onChange={(event) => setEditPhone(event.target.value)}
+                placeholder="输入完整新手机号"
+                data-testid="participant-edit-phone"
+              />
             </Field>
             <Field
               label="状态"
@@ -446,11 +574,13 @@ export function ParticipantsPage() {
                 value={editStatus}
                 onChange={(event) => setEditStatus(event.target.value as ParticipantStatus)}
               >
-                {statusOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
+                {statusOptions
+                  .filter((option) => option.value !== "merged")
+                  .map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
               </select>
             </Field>
             <Field label="备注" htmlFor="participant-notes">
@@ -474,6 +604,166 @@ export function ParticipantsPage() {
                 data-testid="participant-edit-save"
               >
                 {savingEdit ? "保存中" : "保存"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {mergeOpen ? (
+        <Modal title="合并账号" onClose={() => setMergeOpen(false)}>
+          <form onSubmit={submitMerge}>
+            <Field
+              label="来源账号"
+              hint="业务记录会从来源账号迁移到目标账号；来源账号保留为已合并记录。"
+            >
+              <div className="admin-toolbar">
+                <input
+                  className="admin-input admin-search"
+                  value={mergeSourceQuery}
+                  onChange={(event) => setMergeSourceQuery(event.target.value)}
+                  placeholder="姓名或完整手机号"
+                  data-testid="participants-merge-source-query"
+                />
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-secondary"
+                  onClick={() =>
+                    void searchMergeCandidates(
+                      mergeSourceQuery,
+                      setMergeSourceOptions,
+                    )
+                  }
+                >
+                  查找
+                </button>
+              </div>
+              {mergeSource ? (
+                <InlineNotice tone="info">
+                  来源：{mergeSource.name}（{mergeSource.phoneMasked}）
+                </InlineNotice>
+              ) : null}
+              {mergeSourceOptions.length > 0 ? (
+                <div className="admin-submit-row" style={{ flexWrap: "wrap" }}>
+                  {mergeSourceOptions.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="admin-btn admin-btn-ghost admin-btn-sm"
+                      onClick={() => {
+                        setMergeSource(item);
+                        setMergeSourceOptions([]);
+                      }}
+                    >
+                      {item.name} {item.phoneMasked}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </Field>
+
+            <Field
+              label="目标账号"
+              hint="保留这个账号作为登录账号和业务记录归属。"
+            >
+              <div className="admin-toolbar">
+                <input
+                  className="admin-input admin-search"
+                  value={mergeTargetQuery}
+                  onChange={(event) => setMergeTargetQuery(event.target.value)}
+                  placeholder="姓名或完整手机号"
+                  data-testid="participants-merge-target-query"
+                />
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-secondary"
+                  onClick={() =>
+                    void searchMergeCandidates(
+                      mergeTargetQuery,
+                      setMergeTargetOptions,
+                    )
+                  }
+                >
+                  查找
+                </button>
+              </div>
+              {mergeTarget ? (
+                <InlineNotice tone="info">
+                  目标：{mergeTarget.name}（{mergeTarget.phoneMasked}）
+                </InlineNotice>
+              ) : null}
+              {mergeTargetOptions.length > 0 ? (
+                <div className="admin-submit-row" style={{ flexWrap: "wrap" }}>
+                  {mergeTargetOptions.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="admin-btn admin-btn-ghost admin-btn-sm"
+                      onClick={() => {
+                        setMergeTarget(item);
+                        setMergeTargetOptions([]);
+                      }}
+                    >
+                      {item.name} {item.phoneMasked}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </Field>
+
+            <Field label="保留手机号">
+              <select
+                className="admin-select"
+                value={mergeKeepPhone}
+                onChange={(event) =>
+                  setMergeKeepPhone(event.target.value as "target" | "source")
+                }
+              >
+                <option value="target">
+                  保留目标账号手机号
+                  {mergeTarget ? `（${mergeTarget.phoneMasked}）` : ""}
+                </option>
+                <option value="source">
+                  保留来源账号手机号
+                  {mergeSource ? `（${mergeSource.phoneMasked}）` : ""}
+                </option>
+              </select>
+            </Field>
+            <Field
+              label="最终姓名"
+              hint="可选。留空保留目标账号姓名；合并后登录必须使用该姓名。"
+            >
+              <input
+                className="admin-input"
+                value={mergeFinalName}
+                onChange={(event) => setMergeFinalName(event.target.value)}
+              />
+            </Field>
+            <Field label="合并原因" hint="必填，会写入管理端审计。">
+              <textarea
+                className="admin-textarea"
+                value={mergeReason}
+                onChange={(event) => setMergeReason(event.target.value)}
+                style={{ minHeight: "80px" }}
+                data-testid="participants-merge-reason"
+              />
+            </Field>
+            {mergeError ? <InlineNotice tone="error">{mergeError}</InlineNotice> : null}
+            <div className="admin-modal-actions">
+              <button
+                type="button"
+                className="admin-btn admin-btn-secondary"
+                onClick={() => setMergeOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                className="admin-btn admin-btn-danger"
+                disabled={merging}
+                data-testid="participants-merge-submit"
+              >
+                {merging ? "合并中" : "确认合并"}
               </button>
             </div>
           </form>

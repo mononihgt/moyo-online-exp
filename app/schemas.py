@@ -28,8 +28,42 @@ class AdminLoginRequest(ApiModel):
 
 class ParticipantPatch(ApiModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
+    phone: str | None = Field(default=None, min_length=5, max_length=30)
     status: Literal["eligible", "completed", "disabled"] | None = None
     notes: str | None = None
+
+
+class IdentityInput(ApiModel):
+    real_name: str
+    alipay_phone: str
+    document_type: Literal["id_card", "passport"]
+    document_number: str
+
+
+class IdentityUpdate(IdentityInput):
+    reason: str = Field(min_length=1)
+
+
+class ManualPaymentCreate(ApiModel):
+    room_id: str
+    participant_id: str
+    booking_id: str
+    kind: Literal[
+        "manual_showup",
+        "manual_completion",
+        "manual_compensation",
+    ]
+    amount_cents: int = Field(ge=1)
+    admin_note: str = Field(min_length=1)
+    identity: IdentityInput | None = None
+
+
+class ParticipantMerge(ApiModel):
+    source_id: str
+    target_id: str
+    keep_phone_from: Literal["target", "source"]
+    final_name: str | None = Field(default=None, min_length=1, max_length=120)
+    reason: str = Field(min_length=1)
 
 
 class ConsentVersionCreate(ApiModel):
@@ -186,8 +220,11 @@ class BookingCreate(ApiModel):
 class RoomAction(ApiModel):
     action: str = ""
     reason: str | None = None
+    note: str | None = None
+    expected_current_reason: str | None = None
     minutes: int | None = Field(default=None, ge=1, le=1440)
     participant_id: str | None = None
+    booking_id: str | None = None
     jatos_worker_id: str | None = None
     jatos_study_result_id: str | None = None
     jatos_component_result_id: str | None = None

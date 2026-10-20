@@ -28,6 +28,7 @@ from ..constants import (
     PHASE_REST,
     PHASE_TURN,
     PHASE_WAITING,
+    PAYMENT_SOURCE_COMPUTED,
     QUESTIONNAIRE_COMPLETED,
     QUESTIONNAIRE_IN_PROGRESS,
     QUESTIONNAIRE_NOT_STARTED,
@@ -1642,6 +1643,7 @@ class RuntimeManager:
                 "selfCompleted": archive_payload["selfCompleted"],
                 "questionnaireRequired": archive_payload["questionnaireRequired"],
                 "showupPayCents": archive_payload["showupPayCents"],
+                "hasManualPayment": archive_payload["hasManualPayment"],
                 "rewardKind": archive_payload["rewardKind"],
             }
         await self._send_json(room.id, participant_id, payload)
@@ -1977,9 +1979,13 @@ class RuntimeManager:
             ),
             "questionnaireRequired": (
                 showup_pay_cents > 0
+                and payment is None
                 and (role_row is None or role_row.questionnaire_status != QUESTIONNAIRE_COMPLETED)
             ),
             "showupPayCents": showup_pay_cents,
+            "hasManualPayment": (
+                payment is not None and payment.source != PAYMENT_SOURCE_COMPUTED
+            ),
             "canRebook": await can_rebook_for_participant(db, room, participant_id),
             "rewardKind": participant_reward_kind(payment),
         }

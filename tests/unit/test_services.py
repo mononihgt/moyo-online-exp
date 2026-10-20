@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from app.models import Room
 from app.services.instructions import instruction_name, validate_instruction
 from app.services.map_groups import (
     MapGroupValidationError,
@@ -28,6 +29,25 @@ from app.services.troop_profiles import (
 )
 
 VALID_ID_CARD = "11010519491231002X"
+
+
+def test_update_archive_snapshot_reason_preserves_other_fields():
+    from app.services.rooms import _update_archive_snapshot_reason
+
+    room = Room()
+    room.archive_snapshot_json = {
+        "schemaVersion": 5,
+        "createdAt": "2026-10-21T00:00:00Z",
+        "room": {
+            "archiveReason": "abandoned",
+            "internalLabel": "保留字段",
+        },
+    }
+    _update_archive_snapshot_reason(room, "technical_abort")
+    assert room.archive_snapshot_json["schemaVersion"] == 5
+    assert room.archive_snapshot_json["createdAt"] == "2026-10-21T00:00:00Z"
+    assert room.archive_snapshot_json["room"]["archiveReason"] == "technical_abort"
+    assert room.archive_snapshot_json["room"]["internalLabel"] == "保留字段"
 VALID_MODERN_ID_CARD = "110105199003074472"
 
 

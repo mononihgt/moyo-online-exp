@@ -37,6 +37,7 @@ from ..models import (
 )
 from ..schemas import (
     BookingCreate,
+    IdentityUpdate,
     RoomAction,
     RoomBatchCreate,
     RoomCopy,
@@ -46,20 +47,25 @@ from ..schemas import (
 from ..security import decrypt_phone, mask_phone
 from ..services.events import add_event
 from ..services.export import build_analysis_zip, build_room_export
+from ..services.identities import get_identity, upsert_identity_values
 from ..services.jatos import build_questionnaire_url, jatos_config
 from ..services.locking import room_lock
 from ..services.payments import serialize_payment
 from ..services.questionnaire_flow import complete_questionnaire
+from ..services.questionnaires import QuestionnaireValidationError, validate_identity_values
 from ..services.rooms import (
     add_config_revision,
+    allowed_archive_reason_corrections,
     archive_room,
     book_room,
     cancel_room,
     close_booking,
+    correct_archive_reason,
     count_room_sections,
     create_room,
     list_rooms_by_section,
     publish_room,
+    restore_attendance,
     room_config_dict,
     room_summary,
     technical_abort_showup_eligible,
@@ -192,11 +198,19 @@ async def _room_detail(db, room: Room) -> dict:
             "createdAt": isoformat_utc(booking.created_at),
             "canceledAt": isoformat_utc(booking.canceled_at),
             "attendedAt": isoformat_utc(booking.attended_at),
+            "canRestoreAttendance": (
+                room.status == ROOM_ARCHIVED
+                and room.archive_reason != ARCHIVE_ADMIN_CANCELLED
+                and booking.status == BOOKING_NO_SHOW
+                and booking.attended_at is not None
+                and booking.canceled_at is None
+            ),
         }
         for booking, participant in booking_rows.all()
     ]
     payments_rows = await db.execute(
-        select(Payment, RoomParticipant)
+        select(Payment, RoomParticipant, Participant)
+        .join(Participant, Participant.id == Payment.participant_id)
         .outerjoin(
             RoomParticipant,
             (RoomParticipant.room_id == Payment.room_id)
@@ -204,10 +218,14 @@ async def _room_detail(db, room: Room) -> dict:
         )
         .where(Payment.room_id == room.id)
     )
-    payments = [
-        serialize_payment(payment, role_row.analysis_code if role_row else None)
-        for payment, role_row in payments_rows.all()
-    ]
+    payments = []
+    for payment, role_row, participant in payments_rows.all():
+        item = serialize_payment(
+            payment, role_row.analysis_code if role_row else None
+        )
+        item.update({"participantId": participant.id, "name": participant.name})
+        payments.append(item)
+    allowed_corrections = await allowed_archive_reason_corrections(db, room)
     jatos_base_url, jatos_study_code = await jatos_config(db)
     return {
         "room": summary,
@@ -220,8 +238,115 @@ async def _room_detail(db, room: Room) -> dict:
         "bookings": bookings,
         "participants": participants,
         "payments": payments,
+        "archiveReasonCorrectionOptions": allowed_corrections,
         "jatosAdminUrl": f"{jatos_base_url}/jatos" if jatos_base_url else None,
         "jatosStudyCode": jatos_study_code or None,
+    }
+
+
+def _serialize_identity(identity: dict | None) -> dict | None:
+    if identity is None:
+        return None
+    return {
+        "realName": identity["real_name"],
+        "alipayPhone": identity["alipay_phone"],
+        "documentType": identity["document_type"],
+        "documentNumber": identity["document_number"],
+    }
+
+
+async def _participant_in_room(db, room_id: str, participant_id: str) -> bool:
+    booking = await db.execute(
+        select(Booking.id).where(
+            Booking.room_id == room_id,
+            Booking.participant_id == participant_id,
+        )
+    )
+    if booking.first() is not None:
+        return True
+    room_participant = await db.execute(
+        select(RoomParticipant.id).where(
+            RoomParticipant.room_id == room_id,
+            RoomParticipant.participant_id == participant_id,
+        )
+    )
+    return room_participant.first() is not None
+
+
+@router.get("/rooms/{room_id}/participants/{participant_id}/identity")
+async def read_participant_identity(
+    room_id: str,
+    participant_id: str,
+    admin: AdminDep,
+    db: DbSession,
+    response: Response,
+):
+    room = await _get_room(db, room_id)
+    if not await _participant_in_room(db, room.id, participant_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该参与者不属于本次实验")
+    identity = await get_identity(db, room.id, participant_id)
+    audit(
+        db,
+        admin,
+        "identity_viewed",
+        "participant_identity",
+        f"{room.id}:{participant_id}",
+        {"roomId": room.id, "participantId": participant_id},
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return {"identity": _serialize_identity(identity)}
+
+
+@router.put(
+    "/rooms/{room_id}/participants/{participant_id}/identity",
+    dependencies=[Depends(require_csrf)],
+)
+async def update_participant_identity(
+    room_id: str,
+    participant_id: str,
+    payload: IdentityUpdate,
+    admin: AdminDep,
+    db: DbSession,
+    response: Response,
+):
+    room = await _get_room(db, room_id)
+    if not await _participant_in_room(db, room.id, participant_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该参与者不属于本次实验")
+    try:
+        validated = validate_identity_values(
+            payload.real_name,
+            payload.alipay_phone,
+            payload.document_type,
+            payload.document_number,
+        )
+    except QuestionnaireValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    await upsert_identity_values(db, room.id, participant_id, validated)
+    audit(
+        db,
+        admin,
+        "participant_identity_updated",
+        "participant_identity",
+        f"{room.id}:{participant_id}",
+        {
+            "roomId": room.id,
+            "participantId": participant_id,
+            "reason": payload.reason,
+            "changedFields": [
+                "real_name",
+                "alipay_phone",
+                "document_type",
+                "document_number",
+            ],
+        },
+    )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "identity": _serialize_identity(
+            await get_identity(db, room.id, participant_id)
+        )
     }
 
 
@@ -445,7 +570,88 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
         await db.commit()
         room = await _get_room(db, room_id)
         action = payload.action
-        if action == "force_archive":
+        if action == "correct_archive_reason":
+            if not payload.reason:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供目标结束原因")
+            if payload.note is None or not payload.note.strip():
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须填写更正说明")
+            previous_reason = room.archive_reason
+            await correct_archive_reason(
+                db,
+                room,
+                payload.reason,
+                payload.note,
+                expected_current_reason=payload.expected_current_reason,
+            )
+            audit(
+                db,
+                admin,
+                "archive_reason_corrected",
+                "room",
+                room.id,
+                {
+                    "previousReason": previous_reason,
+                    "reason": room.archive_reason,
+                    "note": payload.note.strip(),
+                },
+            )
+            await db.commit()
+            result = {
+                "ok": True,
+                "previousReason": previous_reason,
+                "reason": room.archive_reason,
+            }
+            notify = True
+        elif action == "restore_attendance":
+            if not payload.booking_id:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供预约")
+            if payload.note is None or not payload.note.strip():
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须填写恢复说明")
+            booking = await db.get(Booking, payload.booking_id)
+            if booking is None or booking.room_id != room.id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
+            payment_before_query = await db.execute(
+                select(Payment).where(
+                    Payment.room_id == room.id,
+                    Payment.participant_id == booking.participant_id,
+                )
+            )
+            payment_before = payment_before_query.scalars().first()
+            previous_amount = payment_before.total_cents if payment_before else None
+            previous_reason = room.archive_reason
+            payment_after = await restore_attendance(db, room, booking, payload.note)
+            audit(
+                db,
+                admin,
+                "booking_attendance_restored",
+                "booking",
+                booking.id,
+                {
+                    "roomId": room.id,
+                    "participantId": booking.participant_id,
+                    "previousStatus": BOOKING_NO_SHOW,
+                    "status": booking.status,
+                    "previousArchiveReason": previous_reason,
+                    "archiveReason": room.archive_reason,
+                    "previousAmountCents": previous_amount,
+                    "amountCents": (
+                        payment_after.total_cents if payment_after is not None else None
+                    ),
+                },
+            )
+            await db.commit()
+            result = {
+                "ok": True,
+                "bookingId": booking.id,
+                "archiveReason": room.archive_reason,
+                "payment": (
+                    serialize_payment(payment_after)
+                    if payment_after is not None
+                    else None
+                ),
+            }
+            notify = True
+        elif action == "force_archive":
             reason = payload.reason or _default_archive_reason(room)
             await _validate_archive_reason(db, room, reason)
             await archive_room(db, room, reason)
@@ -499,17 +705,31 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
             await db.commit()
             result = {"links": links}
         elif action == "mark_absent":
-            if payload.participant_id is None:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
-            booking = (
-                await db.execute(
-                    select(Booking).where(
-                        Booking.room_id == room.id, Booking.participant_id == payload.participant_id
+            booking: Booking | None = None
+            if payload.booking_id is not None:
+                booking = await db.get(Booking, payload.booking_id)
+                if booking is None or booking.room_id != room.id:
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
+                if (
+                    payload.participant_id is not None
+                    and payload.participant_id != booking.participant_id
+                ):
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "预约与参与者不匹配")
+                payload.participant_id = booking.participant_id
+            else:
+                if payload.participant_id is None:
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
+                booking = (
+                    await db.execute(
+                        select(Booking).where(
+                            Booking.room_id == room.id,
+                            Booking.participant_id == payload.participant_id,
+                            Booking.status.in_((BOOKING_BOOKED, BOOKING_ATTENDED)),
+                        )
                     )
-                )
-            ).scalars().first()
-            if booking is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
+                ).scalars().first()
+                if booking is None:
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
             if (
                 room.status == ROOM_ARCHIVED
                 and room.archive_reason == ARCHIVE_TECHNICAL_ABORT

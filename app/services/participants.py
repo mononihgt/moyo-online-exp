@@ -19,6 +19,7 @@ from ..constants import (
 from ..models import ConsentVersion, Participant, Room, RoomParticipant
 from ..security import decrypt_phone, encrypt_phone, mask_phone, normalize_phone, phone_hash
 from ..timeutil import isoformat_utc
+from .accounts import resolve_participant_alias
 
 _NAME_HEADERS = {"name", "姓名"}
 _PHONE_HEADERS = {"phone", "手机号", "手机", "phone number", "phonenumber"}
@@ -123,11 +124,13 @@ async def import_completed(db: AsyncSession, data: bytes, filename: str) -> dict
             result["created"] += 1
             record(row, "created", None)
             continue
-        if participant.name.strip() != name:
+        resolved = await resolve_participant_alias(db, participant)
+        allowed_names = {participant.name.strip(), resolved.name.strip()}
+        if name not in allowed_names:
             result["unmatched"] += 1
             record(row, "unmatched", "姓名与已有记录不一致")
             continue
-        participant.status = PARTICIPANT_COMPLETED
+        resolved.status = PARTICIPANT_COMPLETED
         result["matched"] += 1
         record(row, "matched", None)
     await db.commit()
@@ -157,9 +160,11 @@ async def login_or_register_participant(db: AsyncSession, name: str, phone_raw: 
 
     participant = await find_existing()
     if participant is not None:
-        if participant.name.strip() != cleaned_name:
+        resolved = await resolve_participant_alias(db, participant)
+        allowed_names = {participant.name.strip(), resolved.name.strip()}
+        if cleaned_name not in allowed_names:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确")
-        return participant
+        return resolved
 
     participant = Participant(
         name=cleaned_name,
@@ -173,9 +178,13 @@ async def login_or_register_participant(db: AsyncSession, name: str, phone_raw: 
     except IntegrityError as exc:
         await db.rollback()
         participant = await find_existing()
-        if participant is None or participant.name.strip() != cleaned_name:
+        if participant is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确") from exc
-        return participant
+        resolved = await resolve_participant_alias(db, participant)
+        allowed_names = {participant.name.strip(), resolved.name.strip()}
+        if cleaned_name not in allowed_names:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确") from exc
+        return resolved
     return participant
 
 

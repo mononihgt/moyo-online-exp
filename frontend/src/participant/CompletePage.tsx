@@ -37,7 +37,7 @@ function stateLabel(experiment: ExperimentRecord | null, awaiting: boolean, comp
   if (awaiting) return { label: "待填写问卷", tone: "warning" };
   const reason = experiment?.archiveReason ?? null;
   if (reason === "technical_abort") {
-    return { label: "故障中止", tone: "warning" };
+    return { label: "提前结束", tone: "warning" };
   }
   if (completed) return { label: "已完成", tone: "success" };
   switch (reason) {
@@ -60,7 +60,7 @@ function stateLabel(experiment: ExperimentRecord | null, awaiting: boolean, comp
       break;
   }
   if (experiment?.roomStatus === "archived") {
-    return { label: "已中止", tone: "error" };
+    return { label: "已结束", tone: "error" };
   }
   if (experiment?.roomStatus === "questionnaire") {
     return { label: "待填写问卷", tone: "warning" };
@@ -134,12 +134,15 @@ export default function CompletePage() {
   const hasCompletion = questionnaireCompleted && !technicalAbort;
   const needsTechnicalQuestionnaire =
     technicalAbort &&
-    experiment?.questionnaireRequired === true &&
+    experiment?.selfAttended === true &&
+    (experiment?.showupPayCents ?? 0) > 0 &&
     !questionnaireCompleted;
   const hasShowup =
     technicalAbort &&
     (payment?.showupPayCents ?? 0) > 0;
-  const hasReward = hasCompletion || hasShowup;
+  const hasManual =
+    payment !== null && (payment.source ?? "computed") !== "computed";
+  const hasReward = hasCompletion || hasShowup || hasManual;
   const state = stateLabel(experiment, awaitingQuestionnaire, hasCompletion);
   const archivedQuestionnaire = archiveReason === "questionnaire_incomplete";
   const canRebook = experiment?.canRebook === true;
@@ -265,7 +268,70 @@ export default function CompletePage() {
               ) : null}
             </div>
 
-            {awaitingQuestionnaire ? (
+            {hasManual && payment !== null ? (
+              <>
+                {payment.showupPayCents > 0 ? (
+                  <div className="p-payment-row">
+                    <span>到场费</span>
+                    <span className="p-mono">
+                      {formatMoney(payment.showupPayCents)}
+                    </span>
+                  </div>
+                ) : null}
+                {payment.basePayCents > 0 ? (
+                  <div className="p-payment-row">
+                    <span>完成报酬补偿</span>
+                    <span className="p-mono">
+                      {formatMoney(payment.basePayCents)}
+                    </span>
+                  </div>
+                ) : null}
+                {payment.performancePayCents > 0 ? (
+                  <div className="p-payment-row">
+                    <span>绩效费</span>
+                    <span className="p-mono">
+                      {formatMoney(payment.performancePayCents)}
+                    </span>
+                  </div>
+                ) : null}
+                {payment.showupPayCents === 0 &&
+                payment.basePayCents === 0 &&
+                payment.performancePayCents === 0 ? (
+                  <div className="p-payment-row">
+                    <span>补偿金额</span>
+                    <span className="p-mono">
+                      {formatMoney(payment.totalCents)}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="p-payment-row p-payment-total">
+                  <span>合计</span>
+                  <span className="p-mono" data-testid="complete-total">
+                    {formatMoney(payment.totalCents)}
+                  </span>
+                </div>
+                <dl className="p-detail-list p-payment-details">
+                  <div className="p-detail-row">
+                    <dt>支付截止日期</dt>
+                    <dd>{formatDateTime(payment.deadlineAt)}</dd>
+                  </div>
+                  {payment.status === "paid" && payment.paidAt ? (
+                    <div className="p-detail-row">
+                      <dt>支付时间</dt>
+                      <dd>{formatDateTime(payment.paidAt)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <p className="p-muted">
+                  本场补偿由实验工作人员发放，支付状态和截止日期以上方为准。
+                </p>
+                {awaitingQuestionnaire || needsTechnicalQuestionnaire ? (
+                  <div className="p-btn-row">
+                    <ContinueQuestionnaireButton roomId={roomId} />
+                  </div>
+                ) : null}
+              </>
+            ) : awaitingQuestionnaire ? (
               <>
                 <div className="p-banner p-banner-warning" role="status">
                   {NO_REWARD}

@@ -455,11 +455,11 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
   await expect(paidCheckbox).toBeDisabled();
   await expect(paidCheckbox).not.toBeChecked();
   await expect(pendingCheckbox).toBeChecked();
-  await expect(paidRow.locator(".admin-bulk-phone")).toHaveText(
-    entries[0].phone,
+  await expect(paidRow.locator(".admin-bulk-phone")).toContainText(
+    identityOne.alipay_phone,
   );
-  await expect(pendingRow.locator(".admin-bulk-phone")).toHaveText(
-    entries[1].phone,
+  await expect(pendingRow.locator(".admin-bulk-phone")).toContainText(
+    identityTwo.alipay_phone,
   );
   await expect(paidRow).toContainText(identityOne.real_name);
   await expect(pendingRow).toContainText(identityTwo.real_name);

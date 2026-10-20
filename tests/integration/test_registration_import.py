@@ -41,6 +41,61 @@ def _create_room(admin: ApiClient) -> dict:
 
 
 @pytest.mark.integration
+def test_admin_can_change_participant_phone(server):
+    admin = ApiClient(server.base_url).login_admin()
+    create_consent(admin)
+    participant = ApiClient(server.base_url).login_participant(
+        "手机更正", "13800001010"
+    )
+    participant.consent()
+    participant_id = participant.json("GET", "/api/me")["me"]["id"]
+    admin.json(
+        "PATCH",
+        f"/admin/api/participants/{participant_id}",
+        json={"phone": "13800001011"},
+    )
+    search = admin.json(
+        "GET", "/admin/api/participants?query=13800001011&limit=20"
+    )
+    assert search["total"] == 1
+    assert search["participants"][0]["id"] == participant_id
+    relogged = ApiClient(server.base_url).login_participant(
+        "手机更正", "13800001011"
+    )
+    assert relogged.json("GET", "/api/me")["me"]["id"] == participant_id
+    old_phone_account = ApiClient(server.base_url).login_participant(
+        "手机更正", "13800001010"
+    )
+    assert old_phone_account.json("GET", "/api/me")["me"]["id"] != participant_id
+    other = ApiClient(server.base_url).login_participant(
+        "手机冲突", "13800001012"
+    )
+    other.consent()
+    other_id = other.json("GET", "/api/me")["me"]["id"]
+    conflict = admin.request(
+        "PATCH",
+        f"/admin/api/participants/{other_id}",
+        json={"phone": "13800001011"},
+    )
+    assert conflict.status_code == 409
+    audit_entries = admin.json("GET", "/admin/api/audit?limit=50")["entries"]
+    phone_audit = next(
+        entry
+        for entry in audit_entries
+        if entry["action"] == "participant_phone_updated"
+    )
+    audit_text = json.dumps(phone_audit["payload"], ensure_ascii=False)
+    assert "13800001011" not in audit_text
+    assert "13800001010" not in audit_text
+    assert "138****1011" in audit_text
+    participant.close()
+    relogged.close()
+    old_phone_account.close()
+    other.close()
+    admin.close()
+
+
+@pytest.mark.integration
 def test_login_registers_new_participant(server):
     admin = ApiClient(server.base_url).login_admin()
     create_consent(admin)

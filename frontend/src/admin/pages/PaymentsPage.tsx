@@ -430,6 +430,15 @@ export function PaymentsPage() {
                     <td>
                       <div>{payment.name}</div>
                       <div className="admin-hint">{payment.phoneMasked}</div>
+                      {(payment.source ?? "computed") !== "computed" ? (
+                        <div className="admin-hint">
+                          {payment.source === "manual_showup"
+                            ? "手工到场费"
+                            : payment.source === "manual_completion"
+                              ? "手工完成补偿"
+                              : "手工补偿"}
+                        </div>
+                      ) : null}
                     </td>
                     <td>
                       <div>{payment.roomStartsAt ? formatDateTime(payment.roomStartsAt) : "—"}</div>
