@@ -2,13 +2,6 @@
 
 自托管的在线双人实验平台：被试通过姓名和手机号登录，报名具体 Room，在约定时间进入房间，阅读角色指导语，完成配置数量的双人对局，填写 JATOS 后测问卷，并查看被试费与支付状态。主试通过管理端管理白名单、版本、Room、监控、数据和付款。
 
-权威功能规格位于上层目录 `specs/`：
-
-- `specs/SPEC_EXPERIMENT_PLATFORM.md`
-- `specs/PARTICIPANT_FLOW.md`
-- `specs/UI_DESIGN.md`
-- `specs/DATA_FORMAT_V5.md`
-
 ## 技术组成
 
 - 后端：Python 3.12、FastAPI、SQLAlchemy 2、Alembic、MariaDB 10.11、Uvicorn 单 worker。
