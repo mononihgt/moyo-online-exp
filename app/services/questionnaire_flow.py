@@ -33,7 +33,7 @@ from .questionnaires import (
     serialize_questionnaire,
     split_protected_answers,
 )
-from .rooms import archive_room
+from .rooms import archive_room, technical_abort_showup_eligible
 
 
 @asynccontextmanager
@@ -115,6 +115,33 @@ async def load_context(db: AsyncSession, token: str) -> tuple[Room, RoomParticip
     return room, room_participant, questionnaire
 
 
+async def _technical_abort_questionnaire_allowed(
+    db: AsyncSession, room: Room, room_participant: RoomParticipant
+) -> bool:
+    return await technical_abort_showup_eligible(
+        db,
+        room,
+        room_participant.participant_id,
+        room_participant=room_participant,
+    )
+
+
+async def _questionnaire_archive_allowed(
+    db: AsyncSession, room: Room, room_participant: RoomParticipant
+) -> bool:
+    if room.archive_reason in ("questionnaire_incomplete", "completed"):
+        return True
+    return await _technical_abort_questionnaire_allowed(db, room, room_participant)
+
+
+async def _questionnaire_draft_allowed(
+    db: AsyncSession, room: Room, room_participant: RoomParticipant
+) -> bool:
+    if room.archive_reason == "questionnaire_incomplete":
+        return True
+    return await _technical_abort_questionnaire_allowed(db, room, room_participant)
+
+
 async def questionnaire_context(db: AsyncSession, token: str) -> dict:
     payload = read_questionnaire_token(token)
     async with _room_write_lock(db, payload["roomId"]):
@@ -125,7 +152,9 @@ async def _questionnaire_context_locked(db: AsyncSession, token: str) -> dict:
     room, room_participant, questionnaire = await load_context(db, token)
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间尚未进入问卷阶段")
-    if room.status == ROOM_ARCHIVED and room.archive_reason not in ("questionnaire_incomplete", "completed"):
+    if room.status == ROOM_ARCHIVED and not await _questionnaire_archive_allowed(
+        db, room, room_participant
+    ):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
     existing = await _canonical_response(db, room.id, room_participant.participant_id)
     draft = await db.execute(
@@ -191,7 +220,9 @@ async def _save_draft_locked(db: AsyncSession, token: str, answers: dict) -> dic
     room, room_participant, questionnaire = await load_context(db, token)
     if room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED:
         raise HTTPException(status.HTTP_409_CONFLICT, "问卷已经提交")
-    if room.status == ROOM_ARCHIVED and room.archive_reason != "questionnaire_incomplete":
+    if room.status == ROOM_ARCHIVED and not await _questionnaire_draft_allowed(
+        db, room, room_participant
+    ):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间不在问卷阶段")
@@ -232,8 +263,13 @@ async def complete_questionnaire(
 ) -> dict:
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间尚未进入问卷阶段")
-    if room.status == ROOM_ARCHIVED and room.archive_reason not in ("questionnaire_incomplete", "completed"):
+    if room.status == ROOM_ARCHIVED and not await _questionnaire_archive_allowed(
+        db, room, room_participant
+    ):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
+    technical_abort = (
+        room.status == ROOM_ARCHIVED and room.archive_reason == "technical_abort"
+    )
     existing_attempt_query = await db.execute(
         select(QuestionnaireResponse).where(
             QuestionnaireResponse.room_id == room.id,
@@ -290,19 +326,42 @@ async def complete_questionnaire(
             room_participant.participant_id,
             {"jatosStudyResultId": jatos_study_result_id, "source": source},
         )
-        await upsert_payment(db, room, room_participant.participant_id, room_participant=room_participant)
-        participant = await db.get(Participant, room_participant.participant_id)
-        participant.status = PARTICIPANT_COMPLETED
+        payment = await upsert_payment(
+            db, room, room_participant.participant_id, room_participant=room_participant
+        )
+        if technical_abort:
+            if payment is None:
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "到场费计算失败，请联系实验主试",
+                )
+        else:
+            participant = await db.get(Participant, room_participant.participant_id)
+            participant.status = PARTICIPANT_COMPLETED
 
-        all_completed_query = await db.execute(
-            select(RoomParticipant).where(RoomParticipant.room_id == room.id)
+            all_completed_query = await db.execute(
+                select(RoomParticipant).where(RoomParticipant.room_id == room.id)
+            )
+            all_completed = all(
+                item.questionnaire_status == QUESTIONNAIRE_COMPLETED
+                for item in all_completed_query.scalars().all()
+            )
+            if all_completed and room.status == ROOM_QUESTIONNAIRE:
+                await archive_room(db, room, "completed")
+    elif technical_abort:
+        await _upsert_identity(db, room, room_participant, identity)
+        room_participant.questionnaire_status = QUESTIONNAIRE_COMPLETED
+        room_participant.completed_at = (
+            room_participant.completed_at or canonical.completed_at or utcnow()
         )
-        all_completed = all(
-            item.questionnaire_status == QUESTIONNAIRE_COMPLETED
-            for item in all_completed_query.scalars().all()
+        payment = await upsert_payment(
+            db, room, room_participant.participant_id, room_participant=room_participant
         )
-        if all_completed and room.status == ROOM_QUESTIONNAIRE:
-            await archive_room(db, room, "completed")
+        if payment is None:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "到场费计算失败，请联系实验主试",
+            )
     await db.commit()
     redirect = f"{get_settings().public_base_url.rstrip('/')}/complete?room={room.id}"
     return {"saved": True, "canonical": canonical is None, "redirectUrl": redirect}

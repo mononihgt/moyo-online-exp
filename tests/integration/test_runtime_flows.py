@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from PIL import Image
 
 from app.game.trials import generate_trial_plan
 
 from conftest import (
     ApiClient,
+    ServerHandle,
     WsClient,
     create_consent,
     create_instruction,
@@ -22,7 +24,9 @@ from conftest import (
     fetch_all,
     fetch_one,
     questionnaire_answers,
+    reset_database,
     upload_media,
+    valid_identity_answers,
     wait_until,
 )
 
@@ -1121,9 +1125,12 @@ def test_technical_abort_payment_attended_only(server):
     game.ws_b.close()
     archived = game.ws_a.recv_until("room_archived", timeout=15)
     assert archived["reason"] == "technical_abort"
-    assert archived["rewardKind"] == "showup"
+    assert archived["rewardKind"] == "none"
     assert archived["canRebook"] is False
-    assert _me(participant_a)["hasPayment"] is True
+    assert archived["questionnaireRequired"] is True
+    assert archived["showupPayCents"] == 500
+    assert _me(participant_a)["hasShowupQuestionnaire"] is True
+    assert _me(participant_a)["hasPayment"] is False
     assert _me(participant_a)["canBook"] is False
     assert _me(participant_b)["hasPayment"] is False
     assert _me(participant_b)["canBook"] is True
@@ -1135,6 +1142,46 @@ def test_technical_abort_payment_attended_only(server):
     assert statuses[participant_a_id] == "attended"
     assert statuses[participant_b_id] == "no_show"
 
+    blocked_absent = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{setup.room['id']}/actions",
+        json={"action": "mark_absent", "participantId": participant_a_id},
+    )
+    assert blocked_absent.status_code == 409
+    assert blocked_absent.json()["detail"] == "技术中止后不能把到场参与者标记缺席"
+    blocked_completed = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{setup.room['id']}/actions",
+        json={"action": "mark_completed", "participantId": participant_a_id},
+    )
+    assert blocked_completed.status_code == 409
+    assert blocked_completed.json()["detail"] == "技术中止参与者请通过提交后测问卷生成到场费"
+    resend_a = context.admin.json(
+        "POST",
+        f"/admin/api/rooms/{setup.room['id']}/actions",
+        json={"action": "resend_questionnaire", "participantId": participant_a_id},
+    )
+    assert [link["participantId"] for link in resend_a["links"]] == [participant_a_id]
+    resend_b = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{setup.room['id']}/actions",
+        json={"action": "resend_questionnaire", "participantId": participant_b_id},
+    )
+    assert resend_b.status_code == 404
+
+    assert context.admin.json("GET", "/admin/api/payments")["payments"] == []
+    identity = valid_identity_answers("运行时甲", phone="13900002222")
+    participant_a.json(
+        "POST",
+        "/api/questionnaire/complete",
+        json={
+            "roomId": setup.room["id"],
+            "answers": questionnaire_answers(identity, q1="female", q2="技术中止"),
+            "jatosWorkerId": "runtime-worker",
+            "jatosStudyResultId": "runtime-study",
+            "jatosComponentResultId": "runtime-component",
+        },
+    )
     payments = context.admin.json("GET", "/admin/api/payments")["payments"]
     assert len(payments) == 1
     payment = payments[0]
@@ -1145,6 +1192,16 @@ def test_technical_abort_payment_attended_only(server):
     assert payment["totalCents"] == 500
     assert payment["status"] == "pending"
     assert payment["deadlineAt"] is not None
+    assert _me(participant_a)["hasShowupQuestionnaire"] is False
+    assert _me(participant_a)["hasPayment"] is True
+    assert _me(participant_a)["canBook"] is False
+    assert _me(participant_b)["canBook"] is True
+    resend_after = context.admin.request(
+        "POST",
+        f"/admin/api/rooms/{setup.room['id']}/actions",
+        json={"action": "resend_questionnaire", "participantId": participant_a_id},
+    )
+    assert resend_after.status_code == 404
     assert fetch_one(
         "SELECT COUNT(*) AS count FROM payments WHERE room_id = %s", (setup.room["id"],)
     )["count"] == 1
@@ -1688,3 +1745,149 @@ def test_duplicate_connection_does_not_log_asgi_exception(server):
     participant_a.close()
     participant_b.close()
     context.admin.close()
+
+
+@pytest.mark.integration
+def test_inactivity_archives_abandoned_without_payment():
+    reset_database()
+    server = ServerHandle(
+        env_overrides={
+            "INACTIVITY_TIMEOUT_SECONDS": "6",
+            "INACTIVITY_WARNING_SECONDS": "2",
+        }
+    )
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            practice_cap=1,
+            practice_seconds=30,
+        )
+        game = _start_game(server, setup, participant_a, participant_b)
+        warning = game.ws_a.recv_until("inactivity_warning", timeout=12)
+        assert warning["remainingSeconds"] >= 1
+        archived = game.ws_a.recv_until("room_archived", timeout=12)
+        assert archived["reason"] == "abandoned"
+        assert archived["canRebook"] is True
+        assert archived["rewardKind"] == "none"
+        assert context.admin.json("GET", "/admin/api/payments")["payments"] == []
+        assert _me(participant_a)["canBook"] is True
+        assert _me(participant_b)["canBook"] is True
+        game.ws_a.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.integration
+def test_hidden_page_pauses_inactivity():
+    reset_database()
+    server = ServerHandle(
+        env_overrides={
+            "INACTIVITY_TIMEOUT_SECONDS": "3",
+            "INACTIVITY_WARNING_SECONDS": "1",
+        }
+    )
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            practice_cap=1,
+            practice_seconds=30,
+        )
+        game = _start_game(server, setup, participant_a, participant_b)
+        game.ws_a.send("visibility", roomId=setup.room["id"], visible=False)
+        game.ws_b.send("visibility", roomId=setup.room["id"], visible=False)
+        time.sleep(6)
+        detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
+        assert detail["room"]["status"] != "archived"
+        game.ws_a.send("visibility", roomId=setup.room["id"], visible=True)
+        game.ws_b.send("visibility", roomId=setup.room["id"], visible=True)
+        archived = game.ws_a.recv_until("room_archived", timeout=12)
+        assert archived["reason"] == "abandoned"
+        game.ws_a.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.integration
+def test_disconnect_prefers_technical_abort_over_inactivity():
+    reset_database()
+    server = ServerHandle(
+        env_overrides={
+            "INACTIVITY_TIMEOUT_SECONDS": "4",
+            "INACTIVITY_WARNING_SECONDS": "1",
+        }
+    )
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            practice_cap=1,
+            practice_seconds=30,
+            reconnect_window=1,
+        )
+        game = _start_game(server, setup, participant_a, participant_b)
+        game.ws_a.close()
+        archived = game.ws_b.recv_until("room_archived", timeout=12)
+        assert archived["reason"] == "technical_abort"
+        game.ws_b.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.integration
+def test_activity_messages_prevent_inactivity_archive():
+    reset_database()
+    server = ServerHandle(
+        env_overrides={
+            "INACTIVITY_TIMEOUT_SECONDS": "4",
+            "INACTIVITY_WARNING_SECONDS": "1",
+        }
+    )
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            practice_cap=1,
+            practice_seconds=30,
+        )
+        game = _start_game(server, setup, participant_a, participant_b)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            game.ws_a.send("activity", roomId=setup.room["id"])
+            game.ws_b.send("activity", roomId=setup.room["id"])
+            time.sleep(0.5)
+        detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
+        assert detail["room"]["status"] != "archived"
+        assert detail["room"]["archiveReason"] is None
+        game.ws_a.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()

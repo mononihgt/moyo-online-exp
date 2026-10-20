@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_DIR = Path(__file__).resolve().parent
@@ -30,11 +31,21 @@ class Settings(BaseSettings):
     login_rate_limit_seconds: int = 300
     questionnaire_rate_limit_attempts: int = 240
     questionnaire_rate_limit_seconds: int = 60
+    inactivity_timeout_seconds: int = 600
+    inactivity_warning_seconds: int = 60
     max_upload_bytes: int = 10 * 1024 * 1024
     max_image_pixels: int = 4096 * 4096
     trust_proxy_headers: bool = False
     serve_frontend: bool = True
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_inactivity(self) -> "Settings":
+        if self.inactivity_timeout_seconds <= 0 or self.inactivity_warning_seconds <= 0:
+            raise ValueError("INACTIVITY_TIMEOUT_SECONDS and INACTIVITY_WARNING_SECONDS must be positive")
+        if self.inactivity_warning_seconds >= self.inactivity_timeout_seconds:
+            raise ValueError("INACTIVITY_WARNING_SECONDS must be less than INACTIVITY_TIMEOUT_SECONDS")
+        return self
 
     @property
     def secure_cookies(self) -> bool:

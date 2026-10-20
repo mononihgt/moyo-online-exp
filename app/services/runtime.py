@@ -3,10 +3,13 @@ import copy
 import logging
 import random
 import secrets
+import time
 from datetime import datetime, timedelta
 
 from fastapi import WebSocket
 from sqlalchemy import case, or_, select
+
+from ..config import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketDisconnect
 
@@ -54,6 +57,7 @@ from ..game.trials import generate_trial_plan, seed_from_hex, seed_to_hex, turn_
 from ..models import (
     Booking,
     GameTrial,
+    Payment,
     Room,
     RoomEvent,
     RoomParticipant,
@@ -71,6 +75,7 @@ from .rooms import (
     archive_reason_for_wait_expiry,
     archive_room,
     can_rebook_for_participant,
+    get_room_payment,
     lock_config,
     mark_attended,
     participant_reward_kind,
@@ -171,7 +176,19 @@ def _role_visuals(map_group: dict, role: int) -> list[dict]:
 class RuntimeManager:
     def __init__(self) -> None:
         self.connections: dict[str, dict[str, WebSocket]] = {}
+        self.last_activity: dict[str, dict[str, float]] = {}
+        self.activity_warned: dict[str, set[str]] = {}
+        self.visibility: dict[str, dict[str, bool]] = {}
         self._ticker: asyncio.Task | None = None
+
+    def _touch_activity(self, room_id: str, participant_id: str) -> None:
+        self.last_activity.setdefault(room_id, {})[participant_id] = time.monotonic()
+        self.activity_warned.setdefault(room_id, set()).discard(participant_id)
+
+    def _set_visibility(self, room_id: str, participant_id: str, visible: bool) -> None:
+        self.visibility.setdefault(room_id, {})[participant_id] = visible
+        if visible:
+            self._touch_activity(room_id, participant_id)
 
     async def start(self) -> None:
         await self._recover_rooms()
@@ -234,6 +251,8 @@ class RuntimeManager:
                     return room.id
                 old = self.connections.get(room_id, {}).get(participant.id)
                 self.connections.setdefault(room_id, {})[participant.id] = websocket
+                self._touch_activity(room_id, participant.id)
+                self.visibility.setdefault(room_id, {})[participant.id] = True
                 if old is not None and old is not websocket:
                     await self._safe_close(old, 4000)
                 state = _state(room)
@@ -310,8 +329,21 @@ class RuntimeManager:
             return
         return
 
-    async def handle(self, participant, message: dict) -> None:
+    async def handle(
+        self, participant, message: dict, websocket: WebSocket | None = None
+    ) -> None:
         message_type = message.get("type")
+        if message_type in ("activity", "visibility"):
+            room_id = message.get("roomId")
+            if not room_id:
+                return
+            if self.connections.get(room_id, {}).get(participant.id) is not websocket:
+                return
+            if message_type == "activity":
+                self._touch_activity(room_id, participant.id)
+            else:
+                self._set_visibility(room_id, participant.id, message.get("visible") is True)
+            return
         if message_type == "ping":
             room_id = message.get("roomId")
             websocket = None
@@ -352,6 +384,8 @@ class RuntimeManager:
                 await self._send_error(participant.id, None, "no_active_room", "当前没有可进入的房间")
                 return
             room_id = booking.room_id
+        if websocket is not None and self.connections.get(room_id, {}).get(participant.id) is not websocket:
+            return
         async with room_lock(room_id):
             async with session_scope() as db:
                 room = await db.get(Room, room_id)
@@ -365,6 +399,7 @@ class RuntimeManager:
                 if requested_room is not None and requested_room != room.id:
                     await self._send_error(participant.id, room_id, "room_mismatch", "房间不匹配")
                     return
+                self._touch_activity(room_id, participant.id)
                 if message_type == "enter_room":
                     await self._handle_enter_room(db, room, booking, participant)
                 elif message_type == "start_matching":
@@ -1116,6 +1151,8 @@ class RuntimeManager:
                         await db.commit()
                         await self._notify_archived(db, room)
                         return
+                    if await self._check_inactivity(db, room, state):
+                        return
                     rows = await self._room_participant_rows(db, room.id)
                     saved_at = state["instruction"].get("saved_at")
                     if saved_at is None or (
@@ -1132,6 +1169,8 @@ class RuntimeManager:
                         await archive_room(db, room, ARCHIVE_TECHNICAL_ABORT)
                         await db.commit()
                         await self._notify_archived(db, room)
+                        return
+                    if await self._check_inactivity(db, room, state):
                         return
                     if state["phase"] == PHASE_TURN and len(state["submissions"]) == 2:
                         outcome = await self._resolve_current_round(db, room, state)
@@ -1421,6 +1460,54 @@ class RuntimeManager:
                 return True
         return False
 
+    async def _check_inactivity(
+        self, db: AsyncSession, room: Room, state: dict
+    ) -> bool:
+        if room.status not in (ROOM_INSTRUCTIONS, ROOM_PLAYING):
+            return False
+        if state["disconnected"]:
+            return False
+        connections = self.connections.get(room.id, {})
+        if len(connections) < 2:
+            return False
+        settings = get_settings()
+        timeout = settings.inactivity_timeout_seconds
+        warning_lead = settings.inactivity_warning_seconds
+        now = time.monotonic()
+        expired: list[tuple[float, str]] = []
+        for participant_id in connections:
+            if not self.visibility.get(room.id, {}).get(participant_id, True):
+                continue
+            last = self.last_activity.get(room.id, {}).get(participant_id)
+            if last is None:
+                self._touch_activity(room.id, participant_id)
+                continue
+            elapsed = now - last
+            if elapsed >= timeout:
+                expired.append((elapsed, participant_id))
+                continue
+            if elapsed >= timeout - warning_lead:
+                warned = self.activity_warned.setdefault(room.id, set())
+                if participant_id not in warned:
+                    warned.add(participant_id)
+                    await self._send_json(
+                        room.id,
+                        participant_id,
+                        {
+                            "type": "inactivity_warning",
+                            "roomId": room.id,
+                            "remainingSeconds": max(0, int(timeout - elapsed)),
+                        },
+                    )
+        if not expired:
+            return False
+        _, participant_id = max(expired)
+        add_event(db, room, "participant_exited", participant_id, {"reason": "inactivity"})
+        await archive_room(db, room, ARCHIVE_ABANDONED)
+        await db.commit()
+        await self._notify_archived(db, room)
+        return True
+
     def _ensure_wait_timer(self, db: AsyncSession, room: Room) -> None:
         due = room.starts_at + timedelta(seconds=room.wait_window_seconds)
         self._record_timer(db, room, "wait_window", due)
@@ -1525,8 +1612,11 @@ class RuntimeManager:
                 "reason": archive_payload["reason"],
                 "canRebook": archive_payload["canRebook"],
                 "selfExited": archive_payload["selfExited"],
+                "selfAttended": archive_payload["selfAttended"],
                 "selfQuestionnaireStatus": archive_payload["selfQuestionnaireStatus"],
                 "selfCompleted": archive_payload["selfCompleted"],
+                "questionnaireRequired": archive_payload["questionnaireRequired"],
+                "showupPayCents": archive_payload["showupPayCents"],
                 "rewardKind": archive_payload["rewardKind"],
             }
         await self._send_json(room.id, participant_id, payload)
@@ -1816,18 +1906,41 @@ class RuntimeManager:
         )
         self_exited = exited_query.first() is not None
         booking_query = await db.execute(
-            select(Booking).where(Booking.room_id == room.id, Booking.participant_id == participant_id)
+            select(Booking).where(
+                Booking.room_id == room.id,
+                Booking.participant_id == participant_id,
+                Booking.status == BOOKING_ATTENDED,
+            )
         )
         booking = booking_query.scalars().first()
+        if booking is None:
+            booking_query = await db.execute(
+                select(Booking).where(Booking.room_id == room.id, Booking.participant_id == participant_id)
+            )
+            booking = booking_query.scalars().first()
+        payment_query = await db.execute(
+            select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant_id)
+        )
+        payment = payment_query.scalars().first()
+        self_attended = booking is not None and booking.status == BOOKING_ATTENDED
+        showup_pay_cents = 0
+        if room.archive_reason == ARCHIVE_TECHNICAL_ABORT and self_attended:
+            showup_pay_cents = get_room_payment(room)["showupPayCents"]
         return {
             "reason": room.archive_reason,
             "selfExited": self_exited,
+            "selfAttended": self_attended,
             "selfQuestionnaireStatus": role_row.questionnaire_status if role_row else None,
             "selfCompleted": bool(
                 role_row is not None and role_row.questionnaire_status == QUESTIONNAIRE_COMPLETED
             ),
+            "questionnaireRequired": (
+                showup_pay_cents > 0
+                and (role_row is None or role_row.questionnaire_status != QUESTIONNAIRE_COMPLETED)
+            ),
+            "showupPayCents": showup_pay_cents,
             "canRebook": await can_rebook_for_participant(db, room, participant_id),
-            "rewardKind": participant_reward_kind(room, role_row, booking),
+            "rewardKind": participant_reward_kind(payment),
         }
 
     async def notify_room(self, room_id: str) -> None:

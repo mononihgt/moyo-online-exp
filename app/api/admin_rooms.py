@@ -8,6 +8,7 @@ from ..constants import (
     ARCHIVE_COMPLETED,
     ARCHIVE_QUESTIONNAIRE_INCOMPLETE,
     ARCHIVE_REASONS,
+    ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
     BOOKING_CANCELED,
@@ -61,6 +62,7 @@ from ..services.rooms import (
     publish_room,
     room_config_dict,
     room_summary,
+    technical_abort_showup_eligible,
     update_room,
 )
 from ..services.runtime import runtime_manager
@@ -464,7 +466,11 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
             result = {"ok": True, "waitWindowSeconds": room.wait_window_seconds}
             notify = True
         elif action == "resend_questionnaire":
-            if room.status != ROOM_QUESTIONNAIRE:
+            technical_abort = (
+                room.status == ROOM_ARCHIVED
+                and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
+            )
+            if room.status != ROOM_QUESTIONNAIRE and not technical_abort:
                 raise HTTPException(status.HTTP_409_CONFLICT, "房间不在问卷阶段")
             rows_query = await db.execute(
                 select(RoomParticipant).where(RoomParticipant.room_id == room.id)
@@ -472,6 +478,16 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
             rows = list(rows_query.scalars().all())
             if payload.participant_id:
                 rows = [row for row in rows if row.participant_id == payload.participant_id]
+            if technical_abort:
+                eligible_rows = []
+                for row in rows:
+                    if row.questionnaire_status == QUESTIONNAIRE_COMPLETED:
+                        continue
+                    if await technical_abort_showup_eligible(
+                        db, room, row.participant_id, room_participant=row
+                    ):
+                        eligible_rows.append(row)
+                rows = eligible_rows
             if not rows:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "未找到参与者")
             links = []
@@ -494,6 +510,15 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
             ).scalars().first()
             if booking is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
+            if (
+                room.status == ROOM_ARCHIVED
+                and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
+                and booking.status == BOOKING_ATTENDED
+            ):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "技术中止后不能把到场参与者标记缺席",
+                )
             if booking.status not in (BOOKING_BOOKED, BOOKING_ATTENDED):
                 raise HTTPException(status.HTTP_409_CONFLICT, "预约当前状态不允许标记缺席")
             room_participant_query = await db.execute(
@@ -529,6 +554,14 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
         elif action == "mark_completed":
             if payload.participant_id is None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "必须提供参与者")
+            if (
+                room.status == ROOM_ARCHIVED
+                and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
+            ):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "技术中止参与者请通过提交后测问卷生成到场费",
+                )
             participant = await db.get(Participant, payload.participant_id)
             if participant is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者不存在")

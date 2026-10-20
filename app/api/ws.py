@@ -58,7 +58,7 @@ async def room_socket(websocket: WebSocket):
             if not isinstance(message, dict):
                 await websocket.send_json({"type": "error", "code": "invalid_message", "message": "消息必须是对象"})
                 continue
-            await runtime_manager.handle(participant, message)
+            await runtime_manager.handle(participant, message, websocket)
     except (WebSocketDisconnect, WebSocketDisconnected):
         await runtime_manager.disconnect(participant, websocket)
     except Exception:

@@ -18,6 +18,7 @@ from conftest import (
     create_troop_profile,
     fetch_all,
     fetch_one,
+    questionnaire_answers,
     upload_media,
     valid_identity_answers,
     wait_until,
@@ -205,19 +206,36 @@ def test_week_deadline_and_technical_abort_payments(server):
     game.ws_a.close()
     game.ws_b.close()
 
-    wait_until(
-        lambda: len(_payments_for_room(context.admin, setup.room["id"])) == 2,
-        timeout=20,
-    )
     detail = _wait_archived(context.admin, setup.room["id"], "technical_abort")
     booked = {booking["participantId"]: booking["status"] for booking in detail["bookings"]}
     assert set(booked.values()) == {"attended"}
-    room_row = fetch_one(
-        "SELECT archived_at FROM rooms WHERE id = %s", (setup.room["id"],)
+    assert _payments_for_room(context.admin, setup.room["id"]) == []
+
+    identity_a = valid_identity_answers("截止甲", phone="13900003333")
+    identity_b = valid_identity_answers("截止乙", phone="13900004444")
+    for client, identity, tag in (
+        (participant_a, identity_a, "截止甲"),
+        (participant_b, identity_b, "截止乙"),
+    ):
+        client.json(
+            "POST",
+            "/api/questionnaire/complete",
+            json={
+                "roomId": setup.room["id"],
+                "answers": questionnaire_answers(identity, q1="female", q2=tag),
+                "jatosWorkerId": f"{tag}-worker",
+                "jatosStudyResultId": f"{tag}-study",
+                "jatosComponentResultId": f"{tag}-component",
+            },
+        )
+
+    completed_rows = fetch_all(
+        "SELECT participant_id, completed_at FROM room_participants WHERE room_id = %s",
+        (setup.room["id"],),
     )
-    expected_deadline = isoformat_utc(
-        week_deadline_utc(room_row["archived_at"], TIMEZONE)
-    )
+    completed_by_participant = {
+        row["participant_id"]: row["completed_at"] for row in completed_rows
+    }
     payments = _payments_for_room(context.admin, setup.room["id"])
     assert len(payments) == 2
     for payment in payments:
@@ -226,6 +244,11 @@ def test_week_deadline_and_technical_abort_payments(server):
         assert payment["showupPayCents"] == 500
         assert payment["totalCents"] == 500
         assert payment["status"] == "pending"
+        expected_deadline = isoformat_utc(
+            week_deadline_utc(
+                completed_by_participant[payment["participantId"]], TIMEZONE
+            )
+        )
         assert payment["deadlineAt"] == expected_deadline
 
 
@@ -312,12 +335,25 @@ def test_payment_override_note_and_paid_preserved(server):
     game = _start_game(server, setup, participant_a, participant_b)
     game.ws_a.close()
     game.ws_b.close()
-    wait_until(
-        lambda: len(_payments_for_room(context.admin, setup.room["id"])) == 2,
-        timeout=20,
-    )
     _wait_archived(context.admin, setup.room["id"], "technical_abort")
+    for client, tag, phone in (
+        (participant_a, "覆盖甲", "13900005555"),
+        (participant_b, "覆盖乙", "13900006666"),
+    ):
+        identity = valid_identity_answers(tag, phone=phone)
+        client.json(
+            "POST",
+            "/api/questionnaire/complete",
+            json={
+                "roomId": setup.room["id"],
+                "answers": questionnaire_answers(identity, q1="female", q2=tag),
+                "jatosWorkerId": f"{tag}-worker",
+                "jatosStudyResultId": f"{tag}-study",
+                "jatosComponentResultId": f"{tag}-component",
+            },
+        )
     payments = _payments_for_room(context.admin, setup.room["id"])
+    assert len(payments) == 2
     payment = payments[0]
     participant_id = payment["participantId"]
 
@@ -353,7 +389,7 @@ def test_payment_override_note_and_paid_preserved(server):
         json={"action": "mark_absent", "participantId": participant_id},
     )
     assert blocked_absent.status_code == 409
-    assert _error_detail(blocked_absent) == "参与者已有付款记录，不能改为缺席"
+    assert _error_detail(blocked_absent) == "技术中止后不能把到场参与者标记缺席"
     preserved = next(
         item
         for item in _payments_for_room(context.admin, setup.room["id"])
@@ -539,11 +575,24 @@ def test_payment_lists_filters_and_columns(server):
     abort_game = _start_game(server, abort_setup, extra_a, extra_b)
     abort_game.ws_a.close()
     abort_game.ws_b.close()
-    wait_until(
-        lambda: len(_payments_for_room(context.admin, abort_setup.room["id"])) == 2,
-        timeout=20,
-    )
     _wait_archived(context.admin, abort_setup.room["id"], "technical_abort")
+    identity_abort_a = valid_identity_answers("清单丙", phone="13800005555")
+    identity_abort_b = valid_identity_answers("清单丁", phone="13800006666")
+    for client, identity, tag in (
+        (extra_a, identity_abort_a, "清单丙"),
+        (extra_b, identity_abort_b, "清单丁"),
+    ):
+        client.json(
+            "POST",
+            "/api/questionnaire/complete",
+            json={
+                "roomId": abort_setup.room["id"],
+                "answers": questionnaire_answers(identity, q1="female", q2=tag),
+                "jatosWorkerId": f"{tag}-worker",
+                "jatosStudyResultId": f"{tag}-study",
+                "jatosComponentResultId": f"{tag}-component",
+            },
+        )
 
     identity_a = valid_identity_answers("清单甲", phone="13800001111")
     identity_b = valid_identity_answers("清单乙", phone="13800002222")
@@ -562,22 +611,38 @@ def test_payment_lists_filters_and_columns(server):
     assert sorted(payment["totalCents"] for payment in payments) == [5300, 5400]
 
     start_date = _local_date(_room_detail(context.admin, setup.room["id"])["room"]["startsAt"])
-    params = {"from": start_date, "to": start_date}
+    abort_start_date = _local_date(
+        _room_detail(context.admin, abort_setup.room["id"])["room"]["startsAt"]
+    )
+    params = {
+        "from": min(start_date, abort_start_date),
+        "to": max(start_date, abort_start_date),
+    }
     pending_list = context.admin.request(
         "GET", "/admin/api/payments/export-payment-list.csv", params=params
     )
     assert pending_list.status_code == 200
     rows = _csv_rows(pending_list)
     assert rows[0] == ["序号", "玩家支付宝手机号", "玩家姓名", "金额"]
-    assert len(rows) == 3
+    assert len(rows) == 5
     assert {row[1] for row in rows[1:]} == {
         identity_a["alipay_phone"],
         identity_b["alipay_phone"],
+        identity_abort_a["alipay_phone"],
+        identity_abort_b["alipay_phone"],
     }
-    assert {row[2] for row in rows[1:]} == {identity_a["real_name"], identity_b["real_name"]}
-    assert [row[3] for row in rows[1:]] == ["53.00", "54.00"] or [
-        row[3] for row in rows[1:]
-    ] == ["54.00", "53.00"]
+    assert {row[2] for row in rows[1:]} == {
+        identity_a["real_name"],
+        identity_b["real_name"],
+        identity_abort_a["real_name"],
+        identity_abort_b["real_name"],
+    }
+    assert sorted(row[3] for row in rows[1:]) == [
+        "5.00",
+        "5.00",
+        "53.00",
+        "54.00",
+    ]
 
     empty = context.admin.request(
         "GET",
@@ -609,7 +674,18 @@ def test_payment_lists_filters_and_columns(server):
     after_paid = context.admin.request(
         "GET", "/admin/api/payments/export-payment-list.csv", params=params
     )
-    assert _csv_rows(after_paid) == [["序号", "玩家支付宝手机号", "玩家姓名", "金额"]]
+    after_paid_rows = _csv_rows(after_paid)
+    assert after_paid_rows[0] == ["序号", "玩家支付宝手机号", "玩家姓名", "金额"]
+    assert len(after_paid_rows) == 3
+    assert {row[1] for row in after_paid_rows[1:]} == {
+        identity_abort_a["alipay_phone"],
+        identity_abort_b["alipay_phone"],
+    }
+    assert {row[2] for row in after_paid_rows[1:]} == {
+        identity_abort_a["real_name"],
+        identity_abort_b["real_name"],
+    }
+    assert sorted(row[3] for row in after_paid_rows[1:]) == ["5.00", "5.00"]
 
     reimbursement = context.admin.request(
         "GET", "/admin/api/payments/export-reimbursement-list.csv", params=params

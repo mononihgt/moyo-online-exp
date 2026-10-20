@@ -5,17 +5,18 @@ import zipfile
 
 from fastapi import HTTPException, status
 from openpyxl import load_workbook
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
+    ARCHIVE_TECHNICAL_ABORT,
     PARTICIPANT_COMPLETED,
     PARTICIPANT_DISABLED,
     PARTICIPANT_ELIGIBLE,
     VERSION_PUBLISHED,
 )
-from ..models import ConsentVersion, Participant, RoomParticipant
+from ..models import ConsentVersion, Participant, Room, RoomParticipant
 from ..security import decrypt_phone, encrypt_phone, mask_phone, normalize_phone, phone_hash
 from ..timeutil import isoformat_utc
 
@@ -194,8 +195,12 @@ async def participant_me(db: AsyncSession, participant: Participant) -> dict:
     consent = await current_consent_version(db)
     consent_required = consent is not None and participant.consent_version_id != consent.id
     completed_count_query = await db.execute(
-        select(func.count(RoomParticipant.id)).where(
-            RoomParticipant.participant_id == participant.id, RoomParticipant.completed_at.is_not(None)
+        select(func.count(RoomParticipant.id))
+        .join(Room, Room.id == RoomParticipant.room_id)
+        .where(
+            RoomParticipant.participant_id == participant.id,
+            RoomParticipant.completed_at.is_not(None),
+            or_(Room.archive_reason.is_(None), Room.archive_reason != ARCHIVE_TECHNICAL_ABORT),
         )
     )
     completed_count = completed_count_query.scalar_one()
@@ -207,6 +212,7 @@ async def participant_me(db: AsyncSession, participant: Participant) -> dict:
         "status": participant.status,
         "canBook": participant.status == PARTICIPANT_ELIGIBLE and not consent_required and not lock.locked,
         "hasPendingQuestionnaire": lock.pending_questionnaire,
+        "hasShowupQuestionnaire": lock.pending_showup_questionnaire,
         "hasPayment": lock.has_payment,
         "consentRequired": consent_required,
         "consentVersion": (

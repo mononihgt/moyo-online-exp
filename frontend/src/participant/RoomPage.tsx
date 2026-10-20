@@ -46,6 +46,7 @@ interface ArchiveInfo {
   canRebook: boolean;
   selfExited: boolean;
   questionnaireCompleted: boolean;
+  questionnaireRequired: boolean;
   rewardKind: RewardKind;
 }
 
@@ -167,6 +168,7 @@ export default function RoomPage() {
   const [restSelfReadyLocal, setRestSelfReadyLocal] = useState(false);
   const [exitPending, setExitPending] = useState(false);
   const [terminal, setTerminal] = useState(false);
+  const [inactivityWarning, setInactivityWarning] = useState<number | null>(null);
   const roomWasActiveRef = useRef(false);
 
   const handleMessage = useCallback(
@@ -188,6 +190,7 @@ export default function RoomPage() {
             canRebook: false,
             selfExited: false,
             questionnaireCompleted: false,
+            questionnaireRequired: false,
             rewardKind: "none",
           });
           setTerminal(true);
@@ -274,6 +277,8 @@ export default function RoomPage() {
                 message.archive?.canRebook ?? fallbackRebook(reason),
               selfExited,
               questionnaireCompleted,
+              questionnaireRequired:
+                message.archive?.questionnaireRequired === true,
               rewardKind:
                 message.archive?.rewardKind ??
                 (reason === "completed" ? "completion" : "none"),
@@ -394,9 +399,14 @@ export default function RoomPage() {
             selfExited: message.selfExited,
             questionnaireCompleted:
               message.selfQuestionnaireStatus === "completed",
+            questionnaireRequired: message.questionnaireRequired === true,
             rewardKind: message.rewardKind,
           });
           setTerminal(true);
+          break;
+        }
+        case "inactivity_warning": {
+          setInactivityWarning(message.remainingSeconds);
           break;
         }
         case "rest_complete": {
@@ -415,6 +425,40 @@ export default function RoomPage() {
     roomId !== "" && !terminal,
     handleMessage,
   );
+
+  useEffect(() => {
+    if (roomId === "" || terminal || socketStatus !== "open") return;
+    let lastSent = 0;
+    const report = () => {
+      setInactivityWarning(null);
+      const now = Date.now();
+      if (now - lastSent < 10_000) return;
+      lastSent = now;
+      send({ type: "activity", roomId });
+    };
+    const reportVisibility = () => {
+      const visible = document.visibilityState === "visible";
+      send({ type: "visibility", roomId, visible });
+      if (visible) report();
+    };
+    reportVisibility();
+    window.addEventListener("pointerdown", report, { passive: true });
+    window.addEventListener("keydown", report);
+    window.addEventListener("wheel", report, { passive: true });
+    window.addEventListener("touchstart", report, { passive: true });
+    document.addEventListener("visibilitychange", reportVisibility);
+    return () => {
+      window.removeEventListener("pointerdown", report);
+      window.removeEventListener("keydown", report);
+      window.removeEventListener("wheel", report);
+      window.removeEventListener("touchstart", report);
+      document.removeEventListener("visibilitychange", reportVisibility);
+    };
+  }, [roomId, socketStatus, terminal, send]);
+
+  useEffect(() => {
+    if (terminal) setInactivityWarning(null);
+  }, [terminal]);
 
   const requestFullscreen = useCallback(() => {
     const element = shellRef.current;
@@ -636,6 +680,7 @@ export default function RoomPage() {
           selfExited: roomState.archive?.selfExited === true,
           questionnaireCompleted:
             roomState.self.questionnaireStatus === "completed",
+          questionnaireRequired: roomState.archive?.questionnaireRequired === true,
           rewardKind:
             roomState.archive?.rewardKind ??
             (roomState.archiveReason === "completed" ? "completion" : "none"),
@@ -725,6 +770,24 @@ export default function RoomPage() {
           </div>
         </div>
       ) : null}
+      {inactivityWarning !== null ? (
+        <div className="exp-notice-stack" role="status">
+          <div className="exp-notice exp-notice-status">
+            你已长时间没有操作。若继续无操作，实验将在 {inactivityWarning} 秒后自动结束，本次实验不产生报酬。
+            <button
+              type="button"
+              className="p-linkish"
+              data-testid="inactivity-ack"
+              onClick={() => {
+                setInactivityWarning(null);
+                send({ type: "activity", roomId });
+              }}
+            >
+              我还在
+            </button>
+          </div>
+        </div>
+      ) : null}
       {error !== null || notice !== "" ? (
         <div className="exp-notice-stack">
           {notice !== "" ? (
@@ -747,6 +810,7 @@ export default function RoomPage() {
           canRebook={archiveInfo.canRebook}
           selfExited={archiveInfo.selfExited}
           questionnaireCompleted={archiveInfo.questionnaireCompleted}
+          questionnaireRequired={archiveInfo.questionnaireRequired}
           rewardKind={archiveInfo.rewardKind}
         />
       ) : phaseKind === "missing" ? (

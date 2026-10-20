@@ -36,6 +36,7 @@ export interface ParticipantMe {
   status: ParticipantStatus;
   canBook: boolean;
   hasPendingQuestionnaire: boolean;
+  hasShowupQuestionnaire: boolean;
   hasPayment: boolean;
   consentRequired: boolean;
   consentVersion: { id: string; version: number; publishedAt: string | null } | null;
@@ -111,6 +112,8 @@ export interface ExperimentRecord {
   selfAttended: boolean;
   selfExited: boolean;
   canRebook: boolean;
+  questionnaireRequired: boolean;
+  showupPayCents: number;
   rewardKind: RewardKind;
 }
 
@@ -556,6 +559,9 @@ export interface RoomStateMessage {
     reason: ArchiveReason;
     canRebook: boolean;
     selfExited: boolean;
+    selfAttended: boolean;
+    questionnaireRequired: boolean;
+    showupPayCents: number;
     rewardKind: RewardKind;
   };
 }
@@ -653,10 +659,18 @@ export type ServerMessage =
       roomId: string;
       reason: ArchiveReason | null;
       selfExited: boolean;
+      selfAttended: boolean;
       selfQuestionnaireStatus: QuestionnaireStatus | null;
       selfCompleted: boolean;
+      questionnaireRequired: boolean;
+      showupPayCents: number;
       canRebook: boolean;
       rewardKind: RewardKind;
+    }
+  | {
+      type: "inactivity_warning";
+      roomId: string;
+      remainingSeconds: number;
     }
   | { type: "error"; code: string; message: string }
   | { type: "pong"; serverNow: string };

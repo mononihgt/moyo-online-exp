@@ -13,6 +13,7 @@ import { formatDateTime } from "../shared/format";
 import type { BookableRoom, CurrentRoom } from "../shared/types";
 import type {
   BookableRoomsResponse,
+  MeResponse,
   MyRoomResponse,
   PendingQuestionnaire,
 } from "./apiTypes";
@@ -24,8 +25,10 @@ import {
   ACCOUNT_DISABLED,
   ACCOUNT_PAYMENT_LOCKED,
   ACCOUNT_PENDING_QUESTIONNAIRE,
+  ACCOUNT_SHOWUP_QUESTIONNAIRE,
   AFTER_START_BOOKING_NOTE,
   BOOKABLE_HIDDEN_NOTE,
+  BOOKABLE_HIDDEN_SHOWUP_NOTE,
   BOOKING_SUCCESS,
   CANCEL_SUCCESS,
   PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL,
@@ -33,6 +36,8 @@ import {
   PENDING_QUESTIONNAIRE_TITLE,
   SELF_SUBMITTED_DETAIL,
   SELF_SUBMITTED_TITLE,
+  SHOWUP_QUESTIONNAIRE_PENDING_DETAIL,
+  SHOWUP_QUESTIONNAIRE_TITLE,
   VIEW_REWARD_INFO,
 } from "./flowCopy";
 import { PageFrame, SessionNotice, useSession } from "./session";
@@ -42,6 +47,7 @@ const STARTED_STATUSES = ["waiting", "instructions", "playing", "questionnaire"]
 
 export default function HomePage() {
   const session = useSession();
+  const { request, updateMe } = session;
   const location = useLocation();
   const notice = (location.state as { notice?: string } | null)?.notice ?? "";
   const [room, setRoom] = useState<CurrentRoom | null>(null);
@@ -63,13 +69,16 @@ export default function HomePage() {
     async (alive: { current: boolean }) => {
       setLoadError("");
       try {
-        const myRoom = await session.request<MyRoomResponse>("/api/my-room");
+        const meResponse = await request<MeResponse>("/api/me");
+        if (!alive.current) return;
+        updateMe(meResponse.me);
+        const myRoom = await request<MyRoomResponse>("/api/my-room");
         if (!alive.current) return;
         setRoom(myRoom.room);
         setBookingId(myRoom.bookingId ?? null);
         setPending(myRoom.pendingQuestionnaires ?? []);
-        if (session.me.canBook) {
-          const bookable = await session.request<BookableRoomsResponse>("/api/rooms/bookable");
+        if (meResponse.me.canBook) {
+          const bookable = await request<BookableRoomsResponse>("/api/rooms/bookable");
           if (!alive.current) return;
           setRooms(bookable.rooms);
           setServerNow(bookable.serverNow);
@@ -84,7 +93,7 @@ export default function HomePage() {
         if (alive.current) setLoading(false);
       }
     },
-    [session],
+    [request, updateMe],
   );
 
   useEffect(() => {
@@ -138,6 +147,9 @@ export default function HomePage() {
       questionnaireStatus: room.questionnaireStatus ?? "not_started",
       archiveReason: null,
       canContinue: true,
+      kind: "formal",
+      showupPayCents: 0,
+      questionnaireRequired: true,
     };
   }, [room]);
 
@@ -156,7 +168,8 @@ export default function HomePage() {
   }, [activePending, pending]);
 
   const hasPending = pendingItems.length > 0;
-  const pendingLocked = hasPending || session.me.hasPendingQuestionnaire;
+  const pendingLocked =
+    hasPending || session.me.hasPendingQuestionnaire || session.me.hasShowupQuestionnaire;
   const selfCompletedPartnerPending =
     room !== null &&
     room.status === "questionnaire" &&
@@ -277,6 +290,7 @@ export default function HomePage() {
         <>
           {pendingItems.map((item, index) => {
             const archived = item.archiveReason === "questionnaire_incomplete";
+            const technicalAbort = item.kind === "technical_abort";
             return (
               <section
                 key={item.roomId}
@@ -289,17 +303,21 @@ export default function HomePage() {
                     className="p-section-title"
                     id={`pending-questionnaire-title-${index}`}
                   >
-                    {PENDING_QUESTIONNAIRE_TITLE}
+                    {technicalAbort
+                      ? SHOWUP_QUESTIONNAIRE_TITLE
+                      : PENDING_QUESTIONNAIRE_TITLE}
                   </h2>
                   <StatusChip tone="warning">
-                    {archived ? "已归档" : "待填写"}
+                    {technicalAbort ? "技术中止" : archived ? "已归档" : "待填写"}
                   </StatusChip>
                 </div>
                 <p className="p-muted">{formatDateTime(item.startsAt)}</p>
                 <div className="p-banner p-banner-warning" role="status">
-                  {archived
-                    ? PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL
-                    : PENDING_QUESTIONNAIRE_DETAIL}
+                  {technicalAbort
+                    ? SHOWUP_QUESTIONNAIRE_PENDING_DETAIL
+                    : archived
+                      ? PENDING_QUESTIONNAIRE_ARCHIVED_DETAIL
+                      : PENDING_QUESTIONNAIRE_DETAIL}
                 </div>
                 <div className="p-btn-row">
                   <ContinueQuestionnaireButton
@@ -460,11 +478,13 @@ export default function HomePage() {
                   ? ACCOUNT_COMPLETED
                   : session.me.isDisabled
                     ? ACCOUNT_DISABLED
-                    : pendingLocked
-                      ? ACCOUNT_PENDING_QUESTIONNAIRE
-                      : session.me.hasPayment
-                        ? ACCOUNT_PAYMENT_LOCKED
-                        : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
+                    : session.me.hasShowupQuestionnaire
+                      ? ACCOUNT_SHOWUP_QUESTIONNAIRE
+                      : pendingLocked
+                        ? ACCOUNT_PENDING_QUESTIONNAIRE
+                        : session.me.hasPayment
+                          ? ACCOUNT_PAYMENT_LOCKED
+                          : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
               </p>
             </section>
           ) : null}
@@ -475,7 +495,9 @@ export default function HomePage() {
                 可预约场次
               </h2>
               <div className="p-banner p-banner-info" role="status">
-                {BOOKABLE_HIDDEN_NOTE}
+                {session.me.hasShowupQuestionnaire
+                  ? BOOKABLE_HIDDEN_SHOWUP_NOTE
+                  : BOOKABLE_HIDDEN_NOTE}
               </div>
             </section>
           ) : null}

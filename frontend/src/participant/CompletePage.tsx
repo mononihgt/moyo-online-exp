@@ -18,8 +18,8 @@ import {
   COMPLETE_PENDING_ARCHIVED_DETAIL,
   COMPLETE_PENDING_DETAIL,
   COMPLETE_QUESTIONNAIRE_ARCHIVE_NOTE,
-  COMPLETE_REBOOK_NOTE,
   COMPLETE_TECH_SHOWUP_NOTE,
+  COMPLETE_TECH_SHOWUP_PENDING_NOTE,
   COMPLETE_TECH_ZERO_NOTE,
   COMPLETE_TRANSFER_NOTE,
   NO_REWARD,
@@ -35,11 +35,12 @@ function stateLabel(experiment: ExperimentRecord | null, awaiting: boolean, comp
   tone: ChipTone;
 } {
   if (awaiting) return { label: "待填写问卷", tone: "warning" };
-  if (completed) return { label: "已完成", tone: "success" };
   const reason = experiment?.archiveReason ?? null;
+  if (reason === "technical_abort") {
+    return { label: "技术中止", tone: "warning" };
+  }
+  if (completed) return { label: "已完成", tone: "success" };
   switch (reason) {
-    case "technical_abort":
-      return { label: "技术中止", tone: "warning" };
     case "abandoned":
       return experiment?.selfExited === true
         ? { label: "已退出", tone: "neutral" }
@@ -118,6 +119,8 @@ export default function CompletePage() {
     experiment?.payment ??
     null;
   const startsAt = payment?.roomStartsAt ?? experiment?.startsAt ?? null;
+  const archiveReason = experiment?.archiveReason ?? null;
+  const technicalAbort = archiveReason === "technical_abort";
   const questionnaireCompleted =
     experiment?.questionnaireStatus === "completed";
   const awaitingQuestionnaire =
@@ -125,21 +128,22 @@ export default function CompletePage() {
     !questionnaireCompleted &&
     (experiment.roomStatus === "questionnaire" ||
       experiment.archiveReason === "questionnaire_incomplete");
-  const hasCompletion = questionnaireCompleted;
+  const hasCompletion = questionnaireCompleted && !technicalAbort;
+  const needsTechnicalQuestionnaire =
+    technicalAbort &&
+    experiment?.questionnaireRequired === true &&
+    !questionnaireCompleted;
   const hasShowup =
-    !hasCompletion &&
-    (experiment?.rewardKind === "showup" ||
-      (experiment?.archiveReason === "technical_abort" &&
-        experiment?.selfAttended === true &&
-        (payment?.showupPayCents ?? 0) > 0));
+    technicalAbort &&
+    (payment?.showupPayCents ?? 0) > 0;
   const hasReward = hasCompletion || hasShowup;
   const state = stateLabel(experiment, awaitingQuestionnaire, hasCompletion);
-  const archiveReason = experiment?.archiveReason ?? null;
   const archivedQuestionnaire = archiveReason === "questionnaire_incomplete";
   const canRebook = experiment?.canRebook === true;
   const formalCompleted =
-    hasCompletion || awaitingQuestionnaire ||
-    experiment?.roomStatus === "questionnaire";
+    hasCompletion ||
+    (!technicalAbort &&
+      (awaitingQuestionnaire || experiment?.roomStatus === "questionnaire"));
 
   let noRewardDetail = "";
   if (experiment !== null) {
@@ -149,6 +153,7 @@ export default function CompletePage() {
       noRewardDetail = archiveCopyFor(archiveReason, {
         selfExited: experiment.selfExited,
         questionnaireCompleted,
+        questionnaireRequired: false,
         hasShowupPay: false,
         canRebook,
       }).detail;
@@ -274,6 +279,60 @@ export default function CompletePage() {
                   <ContinueQuestionnaireButton roomId={roomId} />
                 </div>
               </>
+            ) : technicalAbort ? (
+              <>
+                {hasShowup ? (
+                  <>
+                    <div className="p-payment-row">
+                      <span>到场费</span>
+                      <span className="p-mono">
+                        {formatMoney(payment?.showupPayCents ?? 0)}
+                      </span>
+                    </div>
+                    <div className="p-payment-row p-payment-total">
+                      <span>合计</span>
+                      <span className="p-mono" data-testid="complete-total">
+                        {formatMoney(payment?.totalCents ?? 0)}
+                      </span>
+                    </div>
+                    {payment !== null ? (
+                      <dl className="p-detail-list p-payment-details">
+                        <div className="p-detail-row">
+                          <dt>支付截止日期</dt>
+                          <dd>{formatDateTime(payment.deadlineAt)}</dd>
+                        </div>
+                        {payment.status === "paid" && payment.paidAt ? (
+                          <div className="p-detail-row">
+                            <dt>支付时间</dt>
+                            <dd>{formatDateTime(payment.paidAt)}</dd>
+                          </div>
+                        ) : null}
+                      </dl>
+                    ) : null}
+                    <p className="p-muted">{COMPLETE_TECH_SHOWUP_NOTE}</p>
+                  </>
+                ) : needsTechnicalQuestionnaire ? (
+                  <>
+                    <div className="p-banner p-banner-warning" role="status">
+                      {COMPLETE_TECH_SHOWUP_PENDING_NOTE}
+                    </div>
+                    <div className="p-btn-row">
+                      <ContinueQuestionnaireButton roomId={roomId} />
+                    </div>
+                  </>
+                ) : questionnaireCompleted ? (
+                  <div className="p-banner p-banner-warning" role="status">
+                    报酬记录尚未同步。请联系实验主试核对。
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-banner p-banner-warning" role="status">
+                      {NO_REWARD}
+                    </div>
+                    <p className="p-muted">{COMPLETE_TECH_ZERO_NOTE}</p>
+                  </>
+                )}
+              </>
             ) : hasCompletion ? (
               <>
                 {payment !== null ? (
@@ -317,39 +376,6 @@ export default function CompletePage() {
                     ? COMPLETE_ARCHIVED_SUBMITTED_NOTE
                     : COMPLETE_TRANSFER_NOTE}
                 </p>
-              </>
-            ) : hasShowup ? (
-              <>
-                <div className="p-payment-row">
-                  <span>到场费</span>
-                  <span className="p-mono">
-                    {formatMoney(payment?.showupPayCents ?? 0)}
-                  </span>
-                </div>
-                <div className="p-payment-row p-payment-total">
-                  <span>合计</span>
-                  <span className="p-mono" data-testid="complete-total">
-                    {formatMoney(payment?.totalCents ?? 0)}
-                  </span>
-                </div>
-                {payment !== null ? (
-                  <dl className="p-detail-list p-payment-details">
-                    <div className="p-detail-row">
-                      <dt>支付截止日期</dt>
-                      <dd>{formatDateTime(payment.deadlineAt)}</dd>
-                    </div>
-                    {payment.status === "paid" && payment.paidAt ? (
-                      <div className="p-detail-row">
-                        <dt>支付时间</dt>
-                        <dd>{formatDateTime(payment.paidAt)}</dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                ) : null}
-                <p className="p-muted">{COMPLETE_TECH_SHOWUP_NOTE}</p>
-                {canRebook ? (
-                  <p className="p-muted">{COMPLETE_REBOOK_NOTE}</p>
-                ) : null}
               </>
             ) : (
               <>

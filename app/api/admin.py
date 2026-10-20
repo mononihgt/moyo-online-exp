@@ -1,8 +1,12 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from ..config import get_settings
 from ..constants import (
+    ARCHIVE_TECHNICAL_ABORT,
+    BOOKING_ATTENDED,
+    QUESTIONNAIRE_COMPLETED,
+    ROOM_ARCHIVED,
     ROOM_FULL,
     ROOM_INSTRUCTIONS,
     ROOM_OPEN,
@@ -15,11 +19,14 @@ from ..constants import (
 )
 from ..models import (
     AdminAuditLog,
+    Booking,
     ConsentVersion,
+    MapGroupVersion,
     MediaAsset,
     Participant,
     Payment,
     Room,
+    RoomParticipant,
     SystemSetting,
 )
 from ..schemas import (
@@ -52,6 +59,42 @@ async def dashboard(admin: AdminDep, db: DbSession):
     pending_questionnaires = await db.execute(
         select(func.count(Room.id)).where(Room.status == ROOM_QUESTIONNAIRE)
     )
+    showup_filter = (
+        Room.status == ROOM_ARCHIVED,
+        Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
+        RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
+        Booking.status == BOOKING_ATTENDED,
+        MapGroupVersion.showup_pay_cents > 0,
+    )
+    pending_showup = await db.execute(
+        select(func.count(func.distinct(Room.id)))
+        .join(RoomParticipant, RoomParticipant.room_id == Room.id)
+        .join(
+            Booking,
+            and_(
+                Booking.room_id == RoomParticipant.room_id,
+                Booking.participant_id == RoomParticipant.participant_id,
+            ),
+        )
+        .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .where(*showup_filter)
+    )
+    pending_showup_rooms = await db.execute(
+        select(Room)
+        .join(RoomParticipant, RoomParticipant.room_id == Room.id)
+        .join(
+            Booking,
+            and_(
+                Booking.room_id == RoomParticipant.room_id,
+                Booking.participant_id == RoomParticipant.participant_id,
+            ),
+        )
+        .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .where(*showup_filter)
+        .distinct()
+        .order_by(Room.starts_at)
+        .limit(10)
+    )
     upcoming_count = await db.execute(
         select(func.count(Room.id)).where(
             Room.status.in_((ROOM_OPEN, ROOM_FULL)), Room.starts_at > utcnow()
@@ -75,10 +118,13 @@ async def dashboard(admin: AdminDep, db: DbSession):
     )
     upcoming_items = [await room_summary(db, room) for room in upcoming.scalars().all()]
     attention_items = [await room_summary(db, room) for room in attention.scalars().all()]
+    showup_items = [await room_summary(db, room) for room in pending_showup_rooms.scalars().all()]
     return {
         "roomCounts": counts,
         "pendingPayments": pending_payments.scalar_one(),
         "pendingQuestionnaireRooms": pending_questionnaires.scalar_one(),
+        "pendingShowupQuestionnaireCount": pending_showup.scalar_one(),
+        "pendingShowupQuestionnaireRooms": showup_items,
         "upcomingCount": upcoming_count.scalar_one(),
         "upcomingRooms": upcoming_items,
         "attentionRooms": attention_items,

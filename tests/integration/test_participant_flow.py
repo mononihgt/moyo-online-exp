@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
+from app.timeutil import week_deadline_utc
 from conftest import (
     ApiClient,
     WsClient,
@@ -966,31 +967,59 @@ def test_technical_abort_showup_payment(server):
     ws_b.close()
     archived = ws_a.recv_until("room_archived", timeout=20)
     assert archived["reason"] == "technical_abort"
-    assert archived["rewardKind"] == "showup"
+    assert archived["rewardKind"] == "none"
     assert archived["canRebook"] is False
-    payments = setup.admin.json("GET", "/admin/api/payments")["payments"]
-    assert len(payments) == 2
-    assert all(item["showupPayCents"] == 1000 for item in payments)
-    assert all(item["basePayCents"] == 0 for item in payments)
-    assert all(item["performancePayCents"] == 0 for item in payments)
-    assert all(item["totalCents"] == 1000 for item in payments)
-    assert all(item["status"] == "pending" for item in payments)
+    assert archived["questionnaireRequired"] is True
+    assert archived["showupPayCents"] == 1000
+    assert setup.admin.json("GET", "/admin/api/payments")["payments"] == []
     me_a = participant_a.json("GET", "/api/me")["me"]
-    assert me_a["hasPayment"] is True
+    assert me_a["hasShowupQuestionnaire"] is True
+    assert me_a["hasPayment"] is False
     assert me_a["canBook"] is False
+    pending = participant_a.json("GET", "/api/my-room")["pendingQuestionnaires"]
+    pending_item = next(item for item in pending if item["roomId"] == room["id"])
+    assert pending_item["kind"] == "technical_abort"
+    assert pending_item["showupPayCents"] == 1000
+    assert pending_item["questionnaireRequired"] is True
+    context = participant_a.json(
+        "GET", "/api/questionnaire/context", params={"roomId": room["id"]}
+    )
+    assert context["url"]
     assert participant_a.json("GET", "/api/rooms/bookable")["canBook"] is False
+    resend = setup.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "resend_questionnaire"},
+    )
+    assert {link["participantId"] for link in resend["links"]} == {
+        me_a["id"],
+        participant_b.json("GET", "/api/me")["me"]["id"],
+    }
+    mark_completed_blocked = setup.admin.request(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "mark_completed", "participantId": me_a["id"]},
+    )
+    assert mark_completed_blocked.status_code == 409
+    assert mark_completed_blocked.json()["detail"] == (
+        "技术中止参与者请通过提交后测问卷生成到场费"
+    )
     experiment_a = next(
         item
         for item in participant_a.json("GET", "/api/my-experiments")["experiments"]
         if item["roomId"] == room["id"]
     )
-    assert experiment_a["rewardKind"] == "showup"
+    assert experiment_a["rewardKind"] == "none"
     assert experiment_a["canRebook"] is False
-    assert experiment_a["payment"]["totalCents"] == 1000
+    assert experiment_a["questionnaireRequired"] is True
+    assert experiment_a["payment"] is None
     new_room = setup.room(starts_in_seconds=60, label="复约房间")
     blocked = participant_a.request("POST", f"/api/rooms/{new_room['id']}/book")
     assert blocked.status_code == 409
-    assert blocked.json()["detail"] == "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。"
+    assert blocked.json()["detail"] == (
+        "本次实验因技术原因中止，你已到场。请先填写并提交后测问卷，"
+        "提交后生成到场费；提交之前和之后都无法预约新的场次。"
+    )
     participant_b_id = participant_b.json("GET", "/api/me")["me"]["id"]
     admin_blocked = setup.admin.request(
         "POST",
@@ -998,6 +1027,75 @@ def test_technical_abort_showup_payment(server):
         json={"participantId": participant_b_id},
     )
     assert admin_blocked.status_code == 409
+
+    identity_a = valid_identity_answers("断线甲", phone="13900001111")
+    token_a = _token(context["url"])
+    draft_a = httpx.post(
+        f"{server.base_url}/api/jatos/questionnaire/draft",
+        json={"token": token_a, "answers": {"q1": "female"}},
+        timeout=30,
+    )
+    assert draft_a.status_code == 200, draft_a.text
+    complete_a = httpx.post(
+        f"{server.base_url}/api/jatos/questionnaire/complete",
+        json={
+            "token": token_a,
+            "answers": questionnaire_answers(identity_a, q1="female", q2="技术中止"),
+            "jatos_worker_id": "jatos-worker-a",
+            "jatos_study_result_id": "jatos-study-a",
+            "jatos_component_result_id": "jatos-component-a",
+        },
+        timeout=30,
+    )
+    assert complete_a.status_code == 200, complete_a.text
+    assert complete_a.json()["canonical"] is True
+    identity_b = valid_identity_answers("断线乙", phone="13900001112")
+    setup.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={
+            "action": "import_jatos_result",
+            "participantId": participant_b.json("GET", "/api/me")["me"]["id"],
+            "jatosWorkerId": "jatos-worker-b",
+            "jatosStudyResultId": "jatos-study-b",
+            "jatosComponentResultId": "jatos-component-b",
+            "answers": questionnaire_answers(identity_b, q1="male", q2="管理员导入"),
+        },
+    )
+    payments = setup.admin.json("GET", "/admin/api/payments")["payments"]
+    assert len(payments) == 2
+    payment = next(item for item in payments if item["participantId"] == me_a["id"])
+    assert payment["showupPayCents"] == 1000
+    assert payment["basePayCents"] == 0
+    assert payment["performancePayCents"] == 0
+    assert payment["totalCents"] == 1000
+    assert payment["status"] == "pending"
+    assert all(item["totalCents"] == 1000 for item in payments)
+    me_a_after = participant_a.json("GET", "/api/me")["me"]
+    assert me_a_after["status"] == "eligible"
+    assert me_a_after["isCompleted"] is False
+    assert me_a_after["hasShowupQuestionnaire"] is False
+    assert me_a_after["hasPayment"] is True
+    assert me_a_after["canBook"] is False
+    experiment_a_after = next(
+        item
+        for item in participant_a.json("GET", "/api/my-experiments")["experiments"]
+        if item["roomId"] == room["id"]
+    )
+    assert experiment_a_after["archiveReason"] == "technical_abort"
+    assert experiment_a_after["rewardKind"] == "showup"
+    assert experiment_a_after["questionnaireStatus"] == "completed"
+    assert experiment_a_after["questionnaireRequired"] is False
+    assert experiment_a_after["canRebook"] is False
+    assert experiment_a_after["payment"]["totalCents"] == 1000
+    completed_at = datetime.fromisoformat(
+        experiment_a_after["completedAt"].replace("Z", "+00:00")
+    ).replace(tzinfo=None)
+    expected_deadline = week_deadline_utc(completed_at, "Asia/Shanghai")
+    actual_deadline = datetime.fromisoformat(
+        experiment_a_after["payment"]["deadlineAt"].replace("Z", "+00:00")
+    ).replace(tzinfo=None)
+    assert actual_deadline == expected_deadline
     ws_a.close()
     participant_a.close()
     participant_b.close()

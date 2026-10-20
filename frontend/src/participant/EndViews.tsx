@@ -122,6 +122,7 @@ export function ArchiveView({
   canRebook,
   selfExited,
   questionnaireCompleted,
+  questionnaireRequired,
   rewardKind,
 }: {
   roomId: string;
@@ -129,16 +130,19 @@ export function ArchiveView({
   canRebook: boolean;
   selfExited: boolean;
   questionnaireCompleted: boolean;
+  questionnaireRequired: boolean;
   rewardKind: RewardKind;
 }) {
   const copy = archiveCopyFor(reason, {
     selfExited,
     questionnaireCompleted,
+    questionnaireRequired,
     hasShowupPay: rewardKind === "showup",
     canRebook,
   });
   const needsQuestionnaire =
-    reason === "questionnaire_incomplete" && !questionnaireCompleted;
+    (reason === "questionnaire_incomplete" || questionnaireRequired) &&
+    !questionnaireCompleted;
   const rebookAllowed =
     canRebook &&
     reason !== "completed" &&

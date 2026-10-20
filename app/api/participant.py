@@ -6,6 +6,7 @@ from ..constants import (
     ARCHIVE_ADMIN_CANCELLED,
     ARCHIVE_COMPLETED,
     ARCHIVE_QUESTIONNAIRE_INCOMPLETE,
+    ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
     BOOKING_CANCELED,
@@ -16,7 +17,15 @@ from ..constants import (
     ROOM_OPEN,
     ROOM_QUESTIONNAIRE,
 )
-from ..models import Booking, Payment, Room, RoomEvent, RoomParticipant, SystemSetting
+from ..models import (
+    Booking,
+    MapGroupVersion,
+    Payment,
+    Room,
+    RoomEvent,
+    RoomParticipant,
+    SystemSetting,
+)
 from ..schemas import ConsentRequest, ParticipantQuestionnaireCompleteRequest
 from ..services.instructions import render_markdown
 from ..services.jatos import build_questionnaire_url
@@ -28,8 +37,10 @@ from ..services.rooms import (
     blocking_booking_for_participant,
     book_room,
     cancel_booking,
+    get_room_payment,
     one_time_experiment_lock,
     participant_reward_kind,
+    technical_abort_showup_eligible,
 )
 from ..timeutil import isoformat_utc, utcnow
 from .auth import clear_participant_cookies
@@ -209,9 +220,46 @@ async def my_room(participant: ParticipantDep, db: DbSession):
             "questionnaireStatus": row.questionnaire_status,
             "archiveReason": room.archive_reason,
             "canContinue": True,
+            "kind": "formal",
+            "showupPayCents": 0,
+            "questionnaireRequired": True,
         }
         for room, row in pending_rows.all()
     ]
+    showup_rows = await db.execute(
+        select(Room, RoomParticipant, MapGroupVersion.showup_pay_cents)
+        .join(RoomParticipant, RoomParticipant.room_id == Room.id)
+        .join(
+            Booking,
+            and_(
+                Booking.room_id == Room.id,
+                Booking.participant_id == RoomParticipant.participant_id,
+                Booking.status == BOOKING_ATTENDED,
+            ),
+        )
+        .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .where(
+            RoomParticipant.participant_id == participant.id,
+            RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
+            Room.status == ROOM_ARCHIVED,
+            Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
+            MapGroupVersion.showup_pay_cents > 0,
+        )
+        .order_by(Room.starts_at.desc())
+    )
+    pending_questionnaires.extend(
+        {
+            "roomId": room.id,
+            "startsAt": isoformat_utc(room.starts_at),
+            "questionnaireStatus": row.questionnaire_status,
+            "archiveReason": room.archive_reason,
+            "canContinue": True,
+            "kind": "technical_abort",
+            "showupPayCents": showup_pay_cents,
+            "questionnaireRequired": True,
+        }
+        for room, row, showup_pay_cents in showup_rows.all()
+    )
     booking = await active_booking_for_participant(db, participant.id)
     if booking is None:
         return {"room": None, "pendingQuestionnaires": pending_questionnaires}
@@ -282,6 +330,13 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
             and room.archive_reason not in (ARCHIVE_COMPLETED, ARCHIVE_QUESTIONNAIRE_INCOMPLETE)
             and not lock.locked
         )
+        showup_pay_cents = 0
+        if room.archive_reason == ARCHIVE_TECHNICAL_ABORT and booking.status == BOOKING_ATTENDED:
+            showup_pay_cents = get_room_payment(room)["showupPayCents"]
+        questionnaire_required = (
+            showup_pay_cents > 0
+            and (role_row is None or role_row.questionnaire_status != QUESTIONNAIRE_COMPLETED)
+        )
         items.append(
             {
                 "roomId": room.id,
@@ -296,7 +351,9 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
                 "selfAttended": booking.status == BOOKING_ATTENDED,
                 "selfExited": room.id in exited_rooms,
                 "canRebook": can_rebook,
-                "rewardKind": participant_reward_kind(room, role_row, booking),
+                "questionnaireRequired": questionnaire_required,
+                "showupPayCents": showup_pay_cents,
+                "rewardKind": participant_reward_kind(payment),
                 "payment": (
                     serialize_payment(payment, role_row.analysis_code if role_row else None)
                     if payment is not None
@@ -346,8 +403,12 @@ async def questionnaire_context(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "房间不存在")
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前实验尚未进入问卷阶段")
-    if room.status == ROOM_ARCHIVED and room.archive_reason not in ("questionnaire_incomplete", "completed"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前实验已结束")
+    if room.status == ROOM_ARCHIVED:
+        allowed = room.archive_reason in ("questionnaire_incomplete", "completed")
+        if not allowed:
+            allowed = await technical_abort_showup_eligible(db, room, participant.id)
+        if not allowed:
+            raise HTTPException(status.HTTP_409_CONFLICT, "当前实验已结束")
     row_query = await db.execute(
         select(RoomParticipant).where(
             RoomParticipant.room_id == room.id, RoomParticipant.participant_id == participant.id

@@ -23,6 +23,16 @@ export const ACCOUNT_PENDING_QUESTIONNAIRE =
   "你已完成正式实验但尚未提交后测问卷。完成问卷后才能结束本次实验；不能预约新的场次。";
 export const ACCOUNT_PAYMENT_LOCKED =
   "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。";
+export const ACCOUNT_SHOWUP_QUESTIONNAIRE =
+  "本次实验因技术原因中止，你已到场。请先填写并提交后测问卷，提交后生成到场费；提交之前和之后都无法预约新的场次。";
+export const SHOWUP_QUESTIONNAIRE_TITLE = "技术中止：待填写问卷";
+export const SHOWUP_QUESTIONNAIRE_PENDING_DETAIL =
+  "本次实验因技术原因中止，你已到场。填写并提交后测问卷后，平台会生成到场费。提交问卷前和提交后都不能预约新的场次。";
+export const SHOWUP_QUESTIONNAIRE_SUBMITTED_DETAIL =
+  "本次实验因技术原因中止，后测问卷已提交。到场费按到场规则结算，本次实验不产生基础费与绩效费。";
+export const SHOWUP_FEE_PENDING = "到场费待问卷提交后生成。";
+export const BOOKABLE_HIDDEN_SHOWUP_NOTE =
+  "可预约场次已隐藏：提交技术中止问卷生成到场费前后，你都不能预约新的实验。";
 export const VIEW_REWARD_INFO = "查看报酬信息";
 export const REBOOK = "重新预约";
 export const CONTACT_EXPERIMENTER = "联系主试";
@@ -92,7 +102,9 @@ export const COMPLETE_TRANSFER_NOTE =
 export const COMPLETE_ARCHIVED_SUBMITTED_NOTE =
   "你已提交后测问卷，归档不影响你的完成状态与报酬。";
 export const COMPLETE_TECH_SHOWUP_NOTE =
-  "本次实验未完成，不产生基础费与绩效费。到场费将在中止后的第一个周日 24:00 前通过支付宝完成转账。";
+  "本次实验未完成，不产生基础费与绩效费。到场费将在提交后测问卷后的第一个周日 24:00 前通过支付宝完成转账。";
+export const COMPLETE_TECH_SHOWUP_PENDING_NOTE =
+  "本次实验未完成，不产生基础费与绩效费。填写并提交后测问卷后生成到场费。";
 export const COMPLETE_TECH_ZERO_NOTE =
   "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。";
 export const COMPLETE_REBOOK_NOTE = "你可以重新预约其他时间段参与实验。";
@@ -136,6 +148,7 @@ export function archiveCopyFor(
   state: {
     selfExited: boolean;
     questionnaireCompleted: boolean;
+    questionnaireRequired: boolean;
     hasShowupPay: boolean;
     canRebook: boolean;
   },
@@ -194,6 +207,13 @@ export function archiveCopyFor(
             showContact: false,
           };
     case "technical_abort": {
+      if (state.questionnaireRequired) {
+        return {
+          title: "因技术原因中止",
+          detail: SHOWUP_QUESTIONNAIRE_PENDING_DETAIL,
+          showContact: true,
+        };
+      }
       const base = state.hasShowupPay
         ? "因断线重连超时或系统故障，本次实验未完成，不产生基础费与绩效费。到场费按到场规则结算，你可以在报酬信息中查看金额、支付状态和支付截止日期。"
         : "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。";

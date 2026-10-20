@@ -103,6 +103,13 @@ function findParticipantForBooking(
 
 function canMarkAbsent(detail: RoomDetail, booking: AdminBooking): boolean {
   if (!["booked", "attended"].includes(booking.status)) return false;
+  if (
+    detail.room.status === "archived" &&
+    detail.room.archiveReason === "technical_abort" &&
+    booking.status === "attended"
+  ) {
+    return false;
+  }
   const participant = findParticipantForBooking(detail, booking);
   if (participant === undefined) return true;
   if (participant.questionnaireStatus === "completed") return false;
@@ -258,6 +265,10 @@ export function RoomDetailPage() {
   }, [tab]);
 
   const room = detail?.room ?? null;
+  const canResendQuestionnaire =
+    room !== null &&
+    (room.status === "questionnaire" ||
+      (room.status === "archived" && room.archiveReason === "technical_abort"));
   const roomStarted = room !== null && Date.parse(room.startsAt) <= Date.now();
   const canEdit =
     room !== null &&
@@ -1291,17 +1302,20 @@ export function RoomDetailPage() {
                             </td>
                             <td>{formatDateTime(participant.disconnectedUntil)}</td>
                             <td className="admin-actions-cell">
-                              <button
-                                type="button"
-                                className="admin-btn admin-btn-ghost admin-btn-sm"
-                                onClick={() => void markCompleted(
-                                  detailParticipant ?? { role: participant.role, name: participant.name },
-                                )}
-                                disabled={actionBusy !== null}
-                              >
-                                <CheckCircle2 size={13} />
-                                标记完成
-                              </button>
+                              {room.status === "archived" &&
+                              room.archiveReason === "technical_abort" ? null : (
+                                <button
+                                  type="button"
+                                  className="admin-btn admin-btn-ghost admin-btn-sm"
+                                  onClick={() => void markCompleted(
+                                    detailParticipant ?? { role: participant.role, name: participant.name },
+                                  )}
+                                  disabled={actionBusy !== null}
+                                >
+                                  <CheckCircle2 size={13} />
+                                  标记完成
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="admin-btn admin-btn-ghost admin-btn-sm"
@@ -1383,7 +1397,13 @@ export function RoomDetailPage() {
                       <input
                         id="resend-questionnaire"
                         className="admin-input"
-                        value={room.status === "questionnaire" ? "问卷阶段" : "当前不在问卷阶段"}
+                        value={
+                          room.status === "questionnaire"
+                            ? "问卷阶段"
+                            : room.archiveReason === "technical_abort"
+                              ? "技术中止待问卷"
+                              : "当前不在问卷阶段"
+                        }
                         readOnly
                         disabled
                       />
@@ -1392,7 +1412,7 @@ export function RoomDetailPage() {
                       type="button"
                       className="admin-btn admin-btn-secondary"
                       onClick={() => void resendQuestionnaire()}
-                      disabled={actionBusy !== null || room.status !== "questionnaire"}
+                      disabled={actionBusy !== null || !canResendQuestionnaire}
                     >
                       <Send size={15} />
                       重发问卷链接
@@ -1567,7 +1587,7 @@ export function RoomDetailPage() {
                   type="button"
                   className="admin-btn admin-btn-secondary admin-btn-sm"
                   onClick={() => void resendQuestionnaire()}
-                  disabled={actionBusy !== null || room.status !== "questionnaire"}
+                  disabled={actionBusy !== null || !canResendQuestionnaire}
                 >
                   <Send size={14} />
                   获取问卷链接
@@ -1740,7 +1760,7 @@ export function RoomDetailPage() {
               <EmptyState
                 icon={Wallet}
                 title="暂无付款记录"
-                description="房间归档后会自动计算参与者付款。"
+                description="完成问卷后生成完成报酬；技术中止到场者提交后测问卷后生成到场费。"
               />
             ) : (
               <div className="admin-table-wrap">

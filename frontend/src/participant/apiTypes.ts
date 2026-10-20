@@ -41,6 +41,9 @@ export interface PendingQuestionnaire {
   questionnaireStatus: QuestionnaireStatus;
   archiveReason: ArchiveReason | null;
   canContinue: boolean;
+  kind: "formal" | "technical_abort";
+  showupPayCents: number;
+  questionnaireRequired: boolean;
 }
 
 export interface MyRoomResponse {
@@ -74,6 +77,8 @@ export interface ContactResponse {
 export type ConsentDocumentResponse = ConsentDocument;
 
 export type ClientMessage =
+  | { type: "activity"; roomId: string }
+  | { type: "visibility"; roomId: string; visible: boolean }
   | { type: "enter_room"; roomId: string }
   | { type: "start_matching"; roomId: string }
   | { type: "exit_room"; roomId: string }

@@ -19,6 +19,7 @@ import {
   HISTORY_VIEW_REWARD,
   NO_REWARD,
   REBOOK,
+  SHOWUP_FEE_PENDING,
 } from "./flowCopy";
 import { PageFrame, useSession } from "./session";
 
@@ -34,6 +35,20 @@ interface HistoryEntryState {
 }
 
 function entryState(item: ExperimentRecord): HistoryEntryState {
+  const technicalAbort = item.archiveReason === "technical_abort";
+  const techShowup =
+    item.rewardKind === "showup" ||
+    (technicalAbort && (item.payment?.showupPayCents ?? 0) > 0);
+  if (technicalAbort) {
+    return {
+      label: "技术中止",
+      tone: "warning",
+      formal: "未完成",
+      awaitingQuestionnaire: false,
+      completion: false,
+      techShowup,
+    };
+  }
   const completion = item.questionnaireStatus === "completed";
   const awaitingQuestionnaire =
     !completion &&
@@ -69,11 +84,6 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
       techShowup: false,
     };
   }
-  const techShowup =
-    item.rewardKind === "showup" ||
-    (item.archiveReason === "technical_abort" &&
-      item.selfAttended &&
-      (item.payment?.showupPayCents ?? 0) > 0);
   const base = {
     formal: "未完成",
     awaitingQuestionnaire: false,
@@ -81,8 +91,6 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
     techShowup,
   };
   switch (item.archiveReason) {
-    case "technical_abort":
-      return { ...base, label: "技术中止", tone: "warning" };
     case "abandoned":
       return item.selfExited
         ? { ...base, label: "已退出", tone: "neutral" }
@@ -115,6 +123,9 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
 }
 
 function questionnaireLabel(item: ExperimentRecord): string {
+  if (item.archiveReason === "technical_abort") {
+    return item.questionnaireStatus === "completed" ? "已提交" : "未提交";
+  }
   if (item.questionnaireStatus === "completed") return "已完成";
   if (item.questionnaireStatus === null) return "—";
   return "未提交";
@@ -223,7 +234,12 @@ export default function HistoryPage() {
                           ? formatMoney(item.payment?.totalCents)
                           : state.techShowup
                             ? `到场费：${formatMoney(item.payment?.showupPayCents)}`
-                            : NO_REWARD}
+                            : item.questionnaireRequired
+                              ? SHOWUP_FEE_PENDING
+                              : item.archiveReason === "technical_abort" &&
+                                  item.questionnaireStatus === "completed"
+                                ? "报酬记录尚未同步，请联系实验主试。"
+                                : NO_REWARD}
                       </dd>
                     </div>
                     {showReward && item.payment !== null ? (
@@ -288,7 +304,7 @@ export default function HistoryPage() {
                     >
                       {HISTORY_VIEW_REWARD}
                     </Link>
-                    {state.awaitingQuestionnaire ? (
+                    {state.awaitingQuestionnaire || item.questionnaireRequired ? (
                       <ContinueQuestionnaireButton
                         roomId={item.roomId}
                         className="p-btn p-btn-secondary"

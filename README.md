@@ -81,8 +81,12 @@ JATOS_BASE_URL=http://127.0.0.1:9000
 JATOS_STUDY_CODE=<JATOS study code>
 JATOS_API_TOKEN=<JATOS API token>
 COOKIE_SECURE=false
+INACTIVITY_TIMEOUT_SECONDS=600
+INACTIVITY_WARNING_SECONDS=60
 TZ=Asia/Shanghai
 ```
+
+`INACTIVITY_TIMEOUT_SECONDS` 和 `INACTIVITY_WARNING_SECONDS` 控制指导语、对局和休息阶段的无操作归档。告警值必须小于超时值；默认 600 秒和 60 秒。Node 无操作端到端测试使用独立的 `playwright.inactivity.config.ts` 缩短超时。
 
 生产环境必须使用 HTTPS，`COOKIE_SECURE=true`，并设置 `TRUST_PROXY_HEADERS=true`。`IDENTITY_ENCRYPTION_KEY` 是受保护问卷字段的 Fernet 密钥，必须与 `PHONE_ENCRYPTION_KEY` 不同，并与数据库和媒体备份分开保存。
 
@@ -138,6 +142,17 @@ JATOS study 的批次必须允许 `GeneralMultiple`。API 创建的 study 默认
 
 问卷必须包含真实姓名、支付宝手机号和身份证明三个受保护题型。平台在草稿、上下文回显和导出中移除这些字段，提交时使用 `IDENTITY_ENCRYPTION_KEY` 加密保存到平台身份记录。JATOS 自身仍可能保存组件提交的原始答案，包括受保护字段；JATOS 管理权限、数据库和备份必须按同样的个人信息标准保护。
 
+技术中止归档后，已到场且到场费参数大于 0 的参与者仍可填写并提交后测问卷。提交后生成只含到场费的 Payment，不产生基础费与绩效费，不标记为完成，也不改变归档原因。管理端可以从房间详情重发问卷或导入 JATOS 结果。
+
+## 运行时规则
+
+- 等待阶段仅搭档未进入时允许主动退出；双方均已进入后不能退出。等待到期按 `not_full`、`no_show`、`no_start` 归档。
+- 指导语、对局和休息阶段允许主动退出，归档 `abandoned`，双方 0 报酬。
+- 指导语、对局和休息阶段启用无操作归档：页面可见、连接正常且连续 10 分钟没有用户手势时，先显示警告，到期归档 `abandoned`。页面隐藏时暂停计时；断线检查优先。等待和问卷阶段不启用。
+- 断线时暂停计时并进入重连窗口。重连超时归档 `technical_abort`。到场且到场费参数大于 0 的参与者立即锁定，提交问卷后生成到场费；未到场或到场费参数为 0 时可以重新预约。
+- 所有 Payment 的支付截止日期取问卷提交时间之后的第一个周日 24:00（Asia/Shanghai）。事件发生在周日时顺延到下周日。
+- 存在任意 Payment 或技术中止待问卷的参与者不能预约新的 Room。
+
 ## 测试
 
 所有测试使用真实代码、真实 MariaDB、真实 uvicorn、真实 WebSocket 客户端、真实 JATOS 和真实浏览器，不使用 mock。
@@ -163,6 +178,9 @@ uv run pytest tests/e2e
 
 # Node Playwright 冒烟测试（自动启动测试服务器）
 npm --prefix frontend run test:e2e
+
+# Node Playwright 无操作归档测试（缩短无操作超时，自动启动测试服务器）
+npm --prefix frontend run test:e2e:inactivity
 ```
 
 JATOS 测试读取 `TEST_JATOS_API_TOKEN`，或读取 `.review/jatos/api_token.env`（由 `scripts/jatos_dev_setup.sh` 生成）。测试会创建独立的 JATOS study，并自动启用 GeneralMultiple。
@@ -184,8 +202,9 @@ CHROME_PATH（Node Playwright）
 - 统一 `schemaVersion = 5`。
 - 完整 Room JSON：`GET /admin/api/rooms/{id}/export.json`。
 - 分析 ZIP：`GET /admin/api/rooms/{id}/analysis.zip`，包含 manifest、room、participants、trials、turns、questionnaire、events、payment 和媒体快照。`payment.csv` 保留全部 Payment 记录。
-- 支付名单：`GET /admin/api/payments/export-payment-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、待支付、非技术中止的记录，包含姓名和支付宝手机号，仅管理员可下载，并写入审计日志。
-- 报销清单：`GET /admin/api/payments/export-reimbursement-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、已支付、非技术中止的记录，包含姓名、手机号和证件号码，仅管理员可下载，并写入审计日志。
+- 支付名单：`GET /admin/api/payments/export-payment-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、待支付的记录，包含技术中止到场费，包含姓名和支付宝手机号，仅管理员可下载，并写入审计日志。
+- 报销清单：`GET /admin/api/payments/export-reimbursement-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、已支付的记录，包含技术中止到场费，包含姓名、手机号和证件号码，仅管理员可下载，并写入审计日志。
+- 两类清单要求问卷完成且存在身份记录。历史技术中止 Payment 如果没有问卷提交或身份记录，不进入清单，需要主试单独审计。
 - 批量付款：`GET /admin/api/payments/bulk?from=YYYY-MM-DD&to=YYYY-MM-DD` 返回区间内全部 Payment，包含技术中止到场费和已支付记录；`POST /admin/api/payments/bulk-mark-paid` 只更新待支付记录并统计跳过数量。
 - 分析导出使用假名分析编号 `P-` 加 12 位十六进制，不包含姓名、手机号、身份证号和内部参与者 UUID。受保护问卷字段不进入分析 ZIP。
 - 归档快照保存地图组、指导语、问卷结构、配置和媒体清单；导出材料优先使用该快照，运行数据、问卷答案和付款实时读取。

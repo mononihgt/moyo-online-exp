@@ -6,7 +6,11 @@ from fastapi import HTTPException
 from app.models import GameTrial, Room
 from app.schemas import MapPaymentInput
 from app.services.payment_lists import parse_date_range, range_bounds
-from app.services.payments import _payment_from_snapshot, compute_performance_cents
+from app.services.payments import (
+    _payment_from_snapshot,
+    compute_performance_cents,
+    payment_deadline,
+)
 
 
 def _payment(**overrides) -> dict:
@@ -121,6 +125,11 @@ def test_performance_requires_ended_formal_trials():
     assert compute_performance_cents(Room(), practice_only, 1, payment=_payment()) is None
     missing_role = [_trial(player2=1000)]
     assert compute_performance_cents(Room(), missing_role, 1, payment=_payment()) is None
+
+
+def test_payment_deadline_uses_questionnaire_submission_time():
+    assert payment_deadline(datetime(2026, 10, 17, 12, 0)) == datetime(2026, 10, 18, 16, 0)
+    assert payment_deadline(datetime(2026, 10, 18, 2, 0)) == datetime(2026, 10, 25, 16, 0)
 
 
 def test_parse_date_range_accepts_iso_dates():

@@ -105,6 +105,58 @@ export function DashboardPage() {
 
           <div className="admin-card admin-card-flat">
             <div className="admin-stat-row">
+              <div>
+                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
+                  技术中止待问卷
+                </h2>
+                <p className="admin-hint" style={{ margin: 0 }}>
+                  技术中止到场者提交后测问卷后生成到场费；提交前后都不能预约新的房间。
+                </p>
+              </div>
+              <StatusChip tone="warning">
+                {data.pendingShowupQuestionnaireCount} 个房间
+              </StatusChip>
+            </div>
+            {data.pendingShowupQuestionnaireRooms.length === 0 ? (
+              <EmptyState
+                icon={ClipboardList}
+                title="暂无技术中止待问卷"
+                description="技术中止归档后需要填写后测问卷领取到场费的房间会显示在这里。"
+              />
+            ) : (
+              <div className="admin-table-wrap" style={{ marginTop: "12px" }}>
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>内部名称</th>
+                      <th>开始时间</th>
+                      <th>报名</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.pendingShowupQuestionnaireRooms.map((room) => (
+                      <tr key={room.id}>
+                        <td>{room.internalLabel}</td>
+                        <td>{formatDateTime(room.startsAt)}</td>
+                        <td>
+                          {room.bookedCount}/{room.capacity}
+                        </td>
+                        <td>
+                          <Link className="admin-row-link" to={`/admin/rooms/${room.id}`}>
+                            处理
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="admin-card admin-card-flat">
+            <div className="admin-stat-row">
               <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
                 房间状态分布
               </h2>

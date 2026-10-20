@@ -5,11 +5,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
-    ARCHIVE_TECHNICAL_ABORT,
     PAYMENT_PAID,
     PAYMENT_PENDING,
     QUESTIONNAIRE_COMPLETED,
@@ -64,13 +63,6 @@ def _local_date(value: datetime) -> str:
     return localize(value, TIMEZONE).strftime("%Y-%m-%d")
 
 
-def _exclude_technical_abort():
-    return or_(
-        Room.archive_reason.is_(None),
-        Room.archive_reason != ARCHIVE_TECHNICAL_ABORT,
-    )
-
-
 def _identity_join():
     return and_(
         ParticipantIdentity.room_id == Payment.room_id,
@@ -96,7 +88,6 @@ async def payment_list_csv(db: AsyncSession, date_from: date, date_to: date) -> 
         .where(
             RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
             Payment.status == PAYMENT_PENDING,
-            _exclude_technical_abort(),
             Room.starts_at >= start,
             Room.starts_at < end,
         )
@@ -122,7 +113,6 @@ async def reimbursement_list_csv(db: AsyncSession, date_from: date, date_to: dat
         .where(
             RoomParticipant.questionnaire_status == QUESTIONNAIRE_COMPLETED,
             Payment.status == PAYMENT_PAID,
-            _exclude_technical_abort(),
             Room.starts_at >= start,
             Room.starts_at < end,
         )

@@ -106,14 +106,9 @@ def compute_performance_cents(
     return max(floor, min(cap, amount))
 
 
-def payment_deadline(room: Room, completed_at):
+def payment_deadline(completed_at):
     settings = get_settings()
-    base_deadline = week_deadline_utc(room.starts_at, settings.timezone)
-    if completed_at is not None:
-        completion_deadline = week_deadline_utc(completed_at, settings.timezone)
-        if completion_deadline > base_deadline:
-            return completion_deadline
-    return base_deadline
+    return week_deadline_utc(completed_at, settings.timezone)
 
 
 async def upsert_payment(
@@ -126,9 +121,18 @@ async def upsert_payment(
 ) -> Payment | None:
     if booking is None:
         query = await db.execute(
-            select(Booking).where(Booking.room_id == room.id, Booking.participant_id == participant_id)
+            select(Booking).where(
+                Booking.room_id == room.id,
+                Booking.participant_id == participant_id,
+                Booking.status == BOOKING_ATTENDED,
+            )
         )
         booking = query.scalars().first()
+        if booking is None:
+            query = await db.execute(
+                select(Booking).where(Booking.room_id == room.id, Booking.participant_id == participant_id)
+            )
+            booking = query.scalars().first()
     if room_participant is None:
         query = await db.execute(
             select(RoomParticipant).where(
@@ -136,14 +140,25 @@ async def upsert_payment(
             )
         )
         room_participant = query.scalars().first()
+    if room_participant is None:
+        return None
 
-    completed = room_participant is not None and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
+    completed = room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
     attended = booking is not None and booking.status == BOOKING_ATTENDED
+    technical_abort = room.status == ROOM_ARCHIVED and room.archive_reason == ARCHIVE_TECHNICAL_ABORT
 
     base = 0
     performance = 0
     showup = 0
-    if completed:
+    deadline = None
+    if technical_abort:
+        if not completed or not attended:
+            return None
+        params = await load_payment_parameters(db, room)
+        if params["showupPayCents"] <= 0:
+            return None
+        showup = params["showupPayCents"]
+    elif completed:
         params = await load_payment_parameters(db, room)
         trials_query = await db.execute(
             select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
@@ -159,18 +174,16 @@ async def upsert_payment(
             return None
         base = params["basePayCents"]
         performance = performance_cents
-        deadline = payment_deadline(room, room_participant.completed_at)
-    elif room.status == ROOM_ARCHIVED and room.archive_reason == ARCHIVE_TECHNICAL_ABORT:
-        if not attended:
-            return None
-        params = await load_payment_parameters(db, room)
-        if params["showupPayCents"] <= 0:
-            return None
-        showup = params["showupPayCents"]
-        settings = get_settings()
-        deadline = week_deadline_utc(room.archived_at or utcnow(), settings.timezone)
     else:
         return None
+    if room_participant.completed_at is None:
+        logger.error(
+            "房间 %s 参与者 %s 没有问卷提交时间，跳过付款计算",
+            room.id,
+            participant_id,
+        )
+        return None
+    deadline = payment_deadline(room_participant.completed_at)
 
     existing_query = await db.execute(
         select(Payment).where(Payment.room_id == room.id, Payment.participant_id == participant_id)

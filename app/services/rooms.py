@@ -57,7 +57,6 @@ from .events import add_event
 from .instructions import serialize_instruction
 from .map_groups import map_group_payment, serialize_map, serialize_map_group_snapshot
 from .participants import current_consent_version
-from .payments import upsert_payment
 from .questionnaires import (
     QuestionnaireValidationError,
     serialize_questionnaire,
@@ -276,10 +275,45 @@ async def blocking_booking_for_participant(db: AsyncSession, participant_id: str
     return query.scalars().first()
 
 
+async def technical_abort_showup_eligible(
+    db: AsyncSession,
+    room: Room,
+    participant_id: str,
+    *,
+    room_participant: RoomParticipant | None = None,
+    booking: Booking | None = None,
+) -> bool:
+    if room.status != ROOM_ARCHIVED or room.archive_reason != ARCHIVE_TECHNICAL_ABORT:
+        return False
+    if room_participant is None:
+        query = await db.execute(
+            select(RoomParticipant).where(
+                RoomParticipant.room_id == room.id,
+                RoomParticipant.participant_id == participant_id,
+            )
+        )
+        room_participant = query.scalars().first()
+    if room_participant is None:
+        return False
+    if booking is None:
+        query = await db.execute(
+            select(Booking).where(
+                Booking.room_id == room.id,
+                Booking.participant_id == participant_id,
+                Booking.status == BOOKING_ATTENDED,
+            )
+        )
+        booking = query.scalars().first()
+    if booking is None or booking.status != BOOKING_ATTENDED:
+        return False
+    return get_room_payment(room)["showupPayCents"] > 0
+
+
 @dataclass(frozen=True)
 class ExperimentLock:
     locked: bool
     pending_questionnaire: bool
+    pending_showup_questionnaire: bool
     has_payment: bool
     reason: str | None
 
@@ -287,7 +321,7 @@ class ExperimentLock:
 async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> ExperimentLock:
     participant = await db.get(Participant, participant_id)
     if participant is None:
-        return ExperimentLock(False, False, False, None)
+        return ExperimentLock(False, False, False, False, None)
     rows = await db.execute(
         select(RoomParticipant.questionnaire_status)
         .join(Room, Room.id == RoomParticipant.room_id)
@@ -304,12 +338,36 @@ async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> Exp
     )
     statuses = list(rows.scalars().all())
     pending = any(status != QUESTIONNAIRE_COMPLETED for status in statuses)
+    showup_rows = await db.execute(
+        select(RoomParticipant.id)
+        .join(Room, Room.id == RoomParticipant.room_id)
+        .join(
+            Booking,
+            and_(
+                Booking.room_id == RoomParticipant.room_id,
+                Booking.participant_id == RoomParticipant.participant_id,
+                Booking.status == BOOKING_ATTENDED,
+            ),
+        )
+        .join(MapGroupVersion, MapGroupVersion.id == Room.map_group_version_id)
+        .where(
+            RoomParticipant.participant_id == participant_id,
+            Room.status == ROOM_ARCHIVED,
+            Room.archive_reason == ARCHIVE_TECHNICAL_ABORT,
+            MapGroupVersion.showup_pay_cents > 0,
+            RoomParticipant.questionnaire_status != QUESTIONNAIRE_COMPLETED,
+        )
+        .limit(1)
+    )
+    pending_showup = showup_rows.first() is not None
     payment_query = await db.execute(
         select(Payment.id).where(Payment.participant_id == participant_id).limit(1)
     )
     has_payment = payment_query.first() is not None
     if pending:
         reason = "pending_questionnaire"
+    elif pending_showup:
+        reason = "pending_showup_questionnaire"
     elif participant.status == PARTICIPANT_COMPLETED or bool(statuses):
         reason = "completed"
     elif has_payment:
@@ -319,6 +377,7 @@ async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> Exp
     return ExperimentLock(
         locked=reason is not None,
         pending_questionnaire=pending,
+        pending_showup_questionnaire=pending_showup,
         has_payment=has_payment,
         reason=reason,
     )
@@ -327,24 +386,23 @@ async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> Exp
 def booking_lock_message(lock: ExperimentLock) -> str:
     if lock.reason == "pending_questionnaire":
         return "你已完成本次正式实验，但后测问卷尚未提交。请先继续填写并提交问卷，目前无法预约新的场次。"
+    if lock.reason == "pending_showup_questionnaire":
+        return "本次实验因技术原因中止，你已到场。请先填写并提交后测问卷，提交后生成到场费；提交之前和之后都无法预约新的场次。"
     if lock.reason == "payment":
         return "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。"
     return "你已完成全部实验，无法再预约新的场次。"
 
 
-def participant_reward_kind(
-    room: Room, room_participant: RoomParticipant | None, booking: Booking | None
-) -> str:
-    if room_participant is not None and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED:
-        return "completion"
+def participant_reward_kind(payment: Payment | None) -> str:
+    if payment is None:
+        return "none"
     if (
-        room.archive_reason == ARCHIVE_TECHNICAL_ABORT
-        and booking is not None
-        and booking.status == BOOKING_ATTENDED
-        and get_room_payment(room)["showupPayCents"] > 0
+        payment.showup_pay_cents > 0
+        and payment.base_pay_cents == 0
+        and payment.performance_pay_cents == 0
     ):
         return "showup"
-    return "none"
+    return "completion"
 
 
 async def can_rebook_for_participant(db: AsyncSession, room: Room, participant_id: str) -> bool:
@@ -497,19 +555,6 @@ async def archive_room(db: AsyncSession, room: Room, reason: str) -> None:
             pass
         elif booking.status == BOOKING_CANCELED:
             pass
-    participants_query = await db.execute(select(RoomParticipant).where(RoomParticipant.room_id == room.id))
-    room_participants = {item.participant_id: item for item in participants_query.scalars().all()}
-    if reason == ARCHIVE_TECHNICAL_ABORT and get_room_payment(room)["showupPayCents"] > 0:
-        for booking in bookings:
-            if booking.status != BOOKING_ATTENDED:
-                continue
-            await upsert_payment(
-                db,
-                room,
-                booking.participant_id,
-                booking=booking,
-                room_participant=room_participants.get(booking.participant_id),
-            )
     add_event(
         db,
         room,
