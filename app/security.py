@@ -141,7 +141,7 @@ def verify_signed_payload(token: str, salt: str, max_age: int, settings: Setting
     try:
         payload = _serializer(settings, salt).loads(token, max_age=max_age)
     except SignatureExpired as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "链接已过期，请向主试申请新的问卷链接") from exc
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "链接已过期，请向实验工作人员申请新的问卷链接") from exc
     except BadSignature as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "链接无效") from exc
     if not isinstance(payload, dict):

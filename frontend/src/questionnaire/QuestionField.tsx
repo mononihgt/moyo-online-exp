@@ -75,7 +75,7 @@ export default function QuestionField({
         <div className="q-card q-card-error">
           <p className="q-question-label">{label}</p>
           {help}
-          <p className="q-question-error">题目配置不完整，请联系主试。</p>
+          <p className="q-question-error">题目配置不完整，请联系实验工作人员。</p>
         </div>
       );
     }
@@ -148,7 +148,7 @@ export default function QuestionField({
         <div className="q-card q-card-error">
           <p className="q-question-label">{label}</p>
           {help}
-          <p className="q-question-error">题目配置不完整，请联系主试。</p>
+          <p className="q-question-error">题目配置不完整，请联系实验工作人员。</p>
         </div>
       );
     }
@@ -345,7 +345,7 @@ export default function QuestionField({
     <div className="q-card q-card-error">
       <p className="q-question-label">{label}</p>
       {help}
-      <p className="q-question-error">题目配置不完整，请联系主试。</p>
+      <p className="q-question-error">题目配置不完整，请联系实验工作人员。</p>
     </div>
   );
 }

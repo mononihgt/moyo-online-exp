@@ -41,7 +41,7 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
     (technicalAbort && (item.payment?.showupPayCents ?? 0) > 0);
   if (technicalAbort) {
     return {
-      label: "技术中止",
+      label: "故障中止",
       tone: "warning",
       formal: "未完成",
       awaitingQuestionnaire: false,
@@ -92,13 +92,16 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
   };
   switch (item.archiveReason) {
     case "abandoned":
-      return item.selfExited
-        ? { ...base, label: "已退出", tone: "neutral" }
-        : { ...base, label: "已中止", tone: "error" };
+      if (item.selfExited) {
+        return item.selfExitReason === "inactivity"
+          ? { ...base, label: "自动结束", tone: "neutral" }
+          : { ...base, label: "已退出", tone: "neutral" };
+      }
+      return { ...base, label: "已结束", tone: "error" };
     case "admin_cancelled":
       return { ...base, label: "已取消", tone: "neutral" };
     case "admin_aborted":
-      return { ...base, label: "已中止", tone: "error" };
+      return { ...base, label: "已结束", tone: "error" };
     case "not_full":
     case "no_show":
     case "no_start":
@@ -108,7 +111,7 @@ function entryState(item: ExperimentRecord): HistoryEntryState {
     case "questionnaire_incomplete":
       return item.selfExited
         ? { ...base, label: "已退出", tone: "neutral" }
-        : { ...base, label: "已中止", tone: "error" };
+        : { ...base, label: "已结束", tone: "error" };
     default:
       break;
   }
@@ -238,7 +241,7 @@ export default function HistoryPage() {
                               ? SHOWUP_FEE_PENDING
                               : item.archiveReason === "technical_abort" &&
                                   item.questionnaireStatus === "completed"
-                                ? "报酬记录尚未同步，请联系实验主试。"
+                                ? "报酬记录尚未同步，请联系实验工作人员。"
                                 : NO_REWARD}
                       </dd>
                     </div>
@@ -274,7 +277,7 @@ export default function HistoryPage() {
                     ) : null}
                     {item.archiveReason !== null ? (
                       <div className="p-detail-row">
-                        <dt>房间归档原因</dt>
+                        <dt>实验结束原因</dt>
                         <dd>{ARCHIVE_REASON_LABELS[item.archiveReason]}</dd>
                       </div>
                     ) : null}

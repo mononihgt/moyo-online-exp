@@ -57,6 +57,9 @@ export default function LoginPage() {
           登录实验平台
         </h1>
         <SessionNotice text={notice} />
+        <p className="p-muted">
+          首次登录会自动创建账号。请填写真实姓名和手机号；再次登录时，姓名和手机号必须与首次完全一致。如需修改，请联系实验工作人员。
+        </p>
         {error !== "" ? (
           <div className="p-banner p-banner-error" id="login-error" role="alert">
             {error}

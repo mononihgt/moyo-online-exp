@@ -37,7 +37,7 @@ test("白名单拒绝未列出的覆盖来源", () => {
       allowOverride: true,
       allowedOrigins: ["http://127.0.0.1:8000"],
     }),
-  ).toThrow("平台地址不在允许列表");
+  ).toThrow("问卷配置异常");
 });
 
 test("白名单允许列出的覆盖来源", () => {
@@ -57,7 +57,7 @@ test("拒绝非 HTTP 协议", () => {
       allowOverride: true,
       overrideBase: "javascript:alert(1)",
     }),
-  ).toThrow("平台地址配置无效");
+  ).toThrow("问卷配置异常");
 });
 
 test("解析来源白名单并拒绝非法配置", () => {
@@ -65,6 +65,6 @@ test("解析来源白名单并拒绝非法配置", () => {
     parseAllowedOrigins("https://a.example, http://127.0.0.1:8000/"),
   ).toEqual(["https://a.example", "http://127.0.0.1:8000"]);
   expect(() => parseAllowedOrigins("not a url")).toThrow(
-    "平台地址白名单配置无效",
+    "问卷配置异常",
   );
 });

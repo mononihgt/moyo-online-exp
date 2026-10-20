@@ -110,7 +110,7 @@ async function readErrorDetail(response: Response): Promise<string> {
       // 响应不是合法 JSON 时使用状态码说明。
     }
   }
-  return `平台请求失败（${response.status}）。`;
+  return "平台暂时无法处理请求，请重试。";
 }
 
 function extractDetail(payload: unknown): string {

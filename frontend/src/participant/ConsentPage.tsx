@@ -106,14 +106,14 @@ export default function ConsentPage() {
       ) : document === null ? (
         <div className="p-card">
           <div className="p-banner p-banner-warning" role="alert">
-            平台尚未发布知情同意书。请联系实验主试后再试。
+            平台尚未发布知情同意书。请联系实验工作人员后再试。
           </div>
           <button
             type="button"
             className="p-btn p-btn-secondary"
             onClick={() => navigate("/contact")}
           >
-            联系主试
+            联系实验工作人员
           </button>
         </div>
       ) : (

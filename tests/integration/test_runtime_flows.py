@@ -1891,3 +1891,112 @@ def test_activity_messages_prevent_inactivity_archive():
         context.admin.close()
     finally:
         server.stop()
+
+
+@pytest.mark.integration
+def test_inactivity_timer_starts_when_instructions_begin():
+    reset_database()
+    server = ServerHandle(
+        env_overrides={
+            "INACTIVITY_TIMEOUT_SECONDS": "5",
+            "INACTIVITY_WARNING_SECONDS": "2",
+        }
+    )
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            min_reading=0,
+            wait_window=30,
+        )
+        _book(setup, participant_a, participant_b)
+        _wait_can_enter(participant_a, participant_b)
+        ws_a, _ = _connect(server, participant_a)
+        ws_b, _ = _connect(server, participant_b)
+        ws_a.send("enter_room")
+        ws_b.send("enter_room")
+        wait_until(
+            lambda: (participant_a.json("GET", "/api/my-room")["room"] or {}).get("status")
+            == "waiting"
+        )
+        # A 提前点击开始匹配后不再操作，B 在超过无操作阈值后才点击。
+        ws_a.send("start_matching")
+        time.sleep(6)
+        ws_b.send("start_matching")
+        _receive_any(ws_a, {"instruction_state"})
+        _receive_any(ws_b, {"instruction_state"})
+        time.sleep(2.5)
+        detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
+        assert detail["room"]["status"] == "instructions"
+        assert detail["room"]["archiveReason"] is None
+        ws_a.close()
+        ws_b.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.integration
+def test_completed_instruction_waits_without_inactivity_archive():
+    reset_database()
+    server = ServerHandle(
+        env_overrides={
+            "INACTIVITY_TIMEOUT_SECONDS": "5",
+            "INACTIVITY_WARNING_SECONDS": "2",
+        }
+    )
+    server.start()
+    try:
+        context = Context(server)
+        participant_a, participant_b = context.participants()
+        setup = context.make_room(
+            troop_rows=STAY_ROWS,
+            grid=(2, 2),
+            spawns=SPAWNS_2X2,
+            min_reading=0,
+            wait_window=30,
+        )
+        _book(setup, participant_a, participant_b)
+        _wait_can_enter(participant_a, participant_b)
+        ws_a, _ = _connect(server, participant_a)
+        ws_b, _ = _connect(server, participant_b)
+        ws_a.send("enter_room")
+        ws_b.send("enter_room")
+        wait_until(
+            lambda: (participant_a.json("GET", "/api/my-room")["room"] or {}).get("status")
+            == "waiting"
+        )
+        _start_instructions(ws_a, ws_b)
+        ws_a.send("instruction_complete")
+        _wait_instruction_completed(ws_a)
+        # B 在 A 完成阅读后才活动，因此 B 的最后活动时间更晚。
+        ws_b.send("activity", roomId=setup.room["id"])
+        archived_b = _recv_while(
+            ws_b,
+            lambda message: message.get("type") == "room_archived",
+            "room_archived",
+            timeout=15,
+        )
+        archived_a = _recv_while(
+            ws_a,
+            lambda message: message.get("type") == "room_archived",
+            "room_archived",
+            timeout=15,
+        )
+        assert archived_b["selfExited"] is True
+        assert archived_a["selfExited"] is False
+        assert archived_b["selfExitReason"] == "inactivity"
+        assert archived_a["partnerExitReason"] == "inactivity"
+        ws_a.close()
+        ws_b.close()
+        participant_a.close()
+        participant_b.close()
+        context.admin.close()
+    finally:
+        server.stop()

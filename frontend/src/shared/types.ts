@@ -19,6 +19,7 @@ export type ArchiveReason =
   | "questionnaire_incomplete"
   | "admin_aborted"
   | "admin_cancelled";
+export type ExitReason = "manual" | "inactivity";
 export type RewardKind = "completion" | "showup" | "none";
 export type BookingStatus = "booked" | "canceled" | "attended" | "no_show";
 export type QuestionnaireStatus = "not_started" | "in_progress" | "completed";
@@ -111,6 +112,7 @@ export interface ExperimentRecord {
   payment: Payment | null;
   selfAttended: boolean;
   selfExited: boolean;
+  selfExitReason: ExitReason | null;
   canRebook: boolean;
   questionnaireRequired: boolean;
   showupPayCents: number;
@@ -559,6 +561,8 @@ export interface RoomStateMessage {
     reason: ArchiveReason;
     canRebook: boolean;
     selfExited: boolean;
+    selfExitReason: ExitReason | null;
+    partnerExitReason: ExitReason | null;
     selfAttended: boolean;
     questionnaireRequired: boolean;
     showupPayCents: number;
@@ -659,6 +663,8 @@ export type ServerMessage =
       roomId: string;
       reason: ArchiveReason | null;
       selfExited: boolean;
+      selfExitReason: ExitReason | null;
+      partnerExitReason: ExitReason | null;
       selfAttended: boolean;
       selfQuestionnaireStatus: QuestionnaireStatus | null;
       selfCompleted: boolean;

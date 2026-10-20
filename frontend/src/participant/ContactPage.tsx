@@ -42,8 +42,8 @@ export default function ContactPage() {
   return (
     <PageFrame narrow>
       <SubpageHeader
-        title="联系实验主试"
-        description="遇到实验、问卷或付款问题时，请通过以下方式联系实验组织者。"
+        title="联系实验工作人员"
+        description="遇到实验、问卷或付款问题时，请通过以下方式联系实验工作人员。"
       />
 
       {loading ? (
@@ -76,7 +76,7 @@ export default function ContactPage() {
             {contactText}
           </p>
           <div className="p-divider" />
-          <h3 className="p-label">建议联系主试的情况</h3>
+          <h3 className="p-label">建议联系实验工作人员的情况</h3>
           <ul className="contact-topics">
             <li>另一名参与者缺席、断线后无法重新连接，或实验被意外中止。</li>
             <li>你主动退出后发现状态或报酬记录不正确。</li>
@@ -85,8 +85,8 @@ export default function ContactPage() {
             <li>无法登录、预约、取消预约，或无法重新预约。</li>
           </ul>
           <p className="p-muted contact-note">
-            技术中止的到场费支付截止日期为中止后的第一个周日
-            24:00（北京时间）；如逾期未收到，请通过以上方式联系实验主试。
+            因故障中止的到场费支付截止日期为提交后测问卷后的第一个周日
+            24:00（北京时间）；如逾期未收到，请通过以上方式联系实验工作人员。
           </p>
         </section>
       )}

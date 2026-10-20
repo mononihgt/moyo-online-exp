@@ -440,7 +440,7 @@ export function RoomDetailPage() {
     if (!room) return;
     const ok = await confirm({
       title: "把预约改成缺席",
-      message: `确认把 ${booking.name} 的预约改成缺席？这个预约不会产生付款。`,
+      message: `确认把 ${booking.name} 的预约改成缺席？该参与者不会获得本场报酬；如果之后提交问卷，报酬记录会保留为 0 元。`,
       confirmLabel: "确认改为缺席",
       danger: true,
     });

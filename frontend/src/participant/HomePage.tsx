@@ -308,7 +308,7 @@ export default function HomePage() {
                       : PENDING_QUESTIONNAIRE_TITLE}
                   </h2>
                   <StatusChip tone="warning">
-                    {technicalAbort ? "技术中止" : archived ? "已归档" : "待填写"}
+                    {technicalAbort ? "故障中止" : archived ? "待补交" : "待填写"}
                   </StatusChip>
                 </div>
                 <p className="p-muted">{formatDateTime(item.startsAt)}</p>
@@ -484,7 +484,7 @@ export default function HomePage() {
                         ? ACCOUNT_PENDING_QUESTIONNAIRE
                         : session.me.hasPayment
                           ? ACCOUNT_PAYMENT_LOCKED
-                          : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
+                          : "你当前无法预约新的场次。如有疑问，请联系实验工作人员。"}
               </p>
             </section>
           ) : null}

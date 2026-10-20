@@ -101,14 +101,14 @@ async def load_context(db: AsyncSession, token: str) -> tuple[Room, RoomParticip
     payload = read_questionnaire_token(token)
     room = await db.get(Room, payload["roomId"])
     if room is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "房间不存在")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "实验不存在")
     room_participant = await db.get(RoomParticipant, payload["roomParticipantId"])
     if room_participant is None or room_participant.room_id != room.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "参与者记录不存在")
     if room_participant.participant_id != payload["participantId"]:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "问卷链接与参与者不匹配")
     if room.questionnaire_version_id != payload["questionnaireVersionId"]:
-        raise HTTPException(status.HTTP_409_CONFLICT, "问卷版本已变化，请向主试申请新链接")
+        raise HTTPException(status.HTTP_409_CONFLICT, "问卷版本已变化，请向实验工作人员申请新链接")
     questionnaire = await db.get(QuestionnaireVersion, room.questionnaire_version_id)
     if questionnaire is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "问卷版本不存在")
@@ -151,11 +151,11 @@ async def questionnaire_context(db: AsyncSession, token: str) -> dict:
 async def _questionnaire_context_locked(db: AsyncSession, token: str) -> dict:
     room, room_participant, questionnaire = await load_context(db, token)
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间尚未进入问卷阶段")
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前实验尚未进入问卷阶段")
     if room.status == ROOM_ARCHIVED and not await _questionnaire_archive_allowed(
         db, room, room_participant
     ):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
+        raise HTTPException(status.HTTP_409_CONFLICT, "本次实验已结束")
     existing = await _canonical_response(db, room.id, room_participant.participant_id)
     draft = await db.execute(
         select(QuestionnaireDraft).where(
@@ -223,9 +223,9 @@ async def _save_draft_locked(db: AsyncSession, token: str, answers: dict) -> dic
     if room.status == ROOM_ARCHIVED and not await _questionnaire_draft_allowed(
         db, room, room_participant
     ):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
+        raise HTTPException(status.HTTP_409_CONFLICT, "本次实验已结束")
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间不在问卷阶段")
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前实验不在问卷阶段")
     sanitized_answers, _identity = _split_answers(
         questionnaire.schema_json, answers, enforce_required=False
     )
@@ -262,11 +262,11 @@ async def complete_questionnaire(
     source: str,
 ) -> dict:
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间尚未进入问卷阶段")
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前实验尚未进入问卷阶段")
     if room.status == ROOM_ARCHIVED and not await _questionnaire_archive_allowed(
         db, room, room_participant
     ):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间已结束")
+        raise HTTPException(status.HTTP_409_CONFLICT, "本次实验已结束")
     technical_abort = (
         room.status == ROOM_ARCHIVED and room.archive_reason == "technical_abort"
     )
@@ -329,13 +329,14 @@ async def complete_questionnaire(
         payment = await upsert_payment(
             db, room, room_participant.participant_id, room_participant=room_participant
         )
-        if technical_abort:
-            if payment is None:
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    "到场费计算失败，请联系实验主试",
-                )
-        else:
+        if payment is None:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "到场费计算失败，请联系实验工作人员"
+                if technical_abort
+                else "报酬计算失败，请联系实验工作人员",
+            )
+        if not technical_abort:
             participant = await db.get(Participant, room_participant.participant_id)
             participant.status = PARTICIPANT_COMPLETED
 
@@ -360,7 +361,7 @@ async def complete_questionnaire(
         if payment is None:
             raise HTTPException(
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "到场费计算失败，请联系实验主试",
+                "到场费计算失败，请联系实验工作人员",
             )
     await db.commit()
     redirect = f"{get_settings().public_base_url.rstrip('/')}/complete?room={room.id}"
@@ -404,7 +405,7 @@ async def _complete_with_participant_locked(
 ) -> dict:
     room = await db.get(Room, room_id)
     if room is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "房间不存在")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "实验不存在")
     room_participant_query = await db.execute(
         select(RoomParticipant).where(
             RoomParticipant.room_id == room.id, RoomParticipant.participant_id == participant.id
@@ -412,7 +413,7 @@ async def _complete_with_participant_locked(
     )
     room_participant = room_participant_query.scalars().first()
     if room_participant is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "你不属于该房间")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "你不属于本次实验")
     return await complete_questionnaire(
         db,
         room,

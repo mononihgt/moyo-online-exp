@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
 import type {
   ArchiveReason,
+  ExitReason,
   GameState,
   InstructionState,
   PartnerState,
@@ -45,6 +46,8 @@ interface ArchiveInfo {
   reason: ArchiveReason | null;
   canRebook: boolean;
   selfExited: boolean;
+  selfExitReason: ExitReason | null;
+  partnerExitReason: ExitReason | null;
   questionnaireCompleted: boolean;
   questionnaireRequired: boolean;
   rewardKind: RewardKind;
@@ -189,6 +192,8 @@ export default function RoomPage() {
             reason: null,
             canRebook: false,
             selfExited: false,
+            selfExitReason: null,
+            partnerExitReason: null,
             questionnaireCompleted: false,
             questionnaireRequired: false,
             rewardKind: "none",
@@ -276,6 +281,8 @@ export default function RoomPage() {
               canRebook:
                 message.archive?.canRebook ?? fallbackRebook(reason),
               selfExited,
+              selfExitReason: message.archive?.selfExitReason ?? null,
+              partnerExitReason: message.archive?.partnerExitReason ?? null,
               questionnaireCompleted,
               questionnaireRequired:
                 message.archive?.questionnaireRequired === true,
@@ -385,7 +392,11 @@ export default function RoomPage() {
           break;
         }
         case "room_archived": {
-          if (message.selfExited && roomWasActiveRef.current) {
+          if (
+            message.selfExited &&
+            message.selfExitReason === "manual" &&
+            roomWasActiveRef.current
+          ) {
             setTerminal(true);
             navigate("/", {
               replace: true,
@@ -397,6 +408,8 @@ export default function RoomPage() {
             reason: message.reason,
             canRebook: message.canRebook,
             selfExited: message.selfExited,
+            selfExitReason: message.selfExitReason,
+            partnerExitReason: message.partnerExitReason,
             questionnaireCompleted:
               message.selfQuestionnaireStatus === "completed",
             questionnaireRequired: message.questionnaireRequired === true,
@@ -678,6 +691,8 @@ export default function RoomPage() {
             roomState.archive?.canRebook ??
             fallbackRebook(roomState.archiveReason),
           selfExited: roomState.archive?.selfExited === true,
+          selfExitReason: roomState.archive?.selfExitReason ?? null,
+          partnerExitReason: roomState.archive?.partnerExitReason ?? null,
           questionnaireCompleted:
             roomState.self.questionnaireStatus === "completed",
           questionnaireRequired: roomState.archive?.questionnaireRequired === true,
@@ -809,6 +824,8 @@ export default function RoomPage() {
           reason={archiveInfo.reason}
           canRebook={archiveInfo.canRebook}
           selfExited={archiveInfo.selfExited}
+          selfExitReason={archiveInfo.selfExitReason}
+          partnerExitReason={archiveInfo.partnerExitReason}
           questionnaireCompleted={archiveInfo.questionnaireCompleted}
           questionnaireRequired={archiveInfo.questionnaireRequired}
           rewardKind={archiveInfo.rewardKind}
@@ -901,7 +918,7 @@ export default function RoomPage() {
           <div className="exp-end-card">
             <h1 className="exp-rest-title">正在准备实验…</h1>
             <p className="exp-rest-info" role="status">
-              正在等待服务器同步房间状态。
+              正在等待服务器同步实验状态。
             </p>
           </div>
         </div>

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import type {
   ArchiveReason,
+  ExitReason,
   QuestionnaireStatus,
   RewardKind,
 } from "../shared/types";
@@ -104,7 +105,7 @@ export function QuestionnaireView({
                 <div className="exp-end-links">
                   <Link to="/contact">
                     <Mail size={14} aria-hidden="true" />
-                    联系主试
+                    联系实验工作人员
                   </Link>
                 </div>
               </div>
@@ -121,6 +122,8 @@ export function ArchiveView({
   reason,
   canRebook,
   selfExited,
+  selfExitReason,
+  partnerExitReason,
   questionnaireCompleted,
   questionnaireRequired,
   rewardKind,
@@ -129,12 +132,16 @@ export function ArchiveView({
   reason: ArchiveReason | null;
   canRebook: boolean;
   selfExited: boolean;
+  selfExitReason: ExitReason | null;
+  partnerExitReason: ExitReason | null;
   questionnaireCompleted: boolean;
   questionnaireRequired: boolean;
   rewardKind: RewardKind;
 }) {
   const copy = archiveCopyFor(reason, {
     selfExited,
+    selfExitReason,
+    partnerExitReason,
     questionnaireCompleted,
     questionnaireRequired,
     hasShowupPay: rewardKind === "showup",
@@ -151,7 +158,7 @@ export function ArchiveView({
   return (
     <div className="exp-centered exp-archive">
       <div className="exp-end-card">
-        <p className="exp-kicker">实验房间已关闭</p>
+        <p className="exp-kicker">本次实验已结束</p>
         <h1 className="exp-rest-title">{copy.title}</h1>
         <p className="exp-rest-info">{copy.detail}</p>
         <div className="p-btn-row exp-end-actions">
@@ -191,7 +198,7 @@ export function ArchiveView({
           {copy.showContact ? (
             <Link className="p-btn p-btn-secondary" to="/contact">
               <Mail size={18} aria-hidden="true" />
-              联系主试
+              联系实验工作人员
             </Link>
           ) : null}
         </div>
@@ -205,7 +212,7 @@ export function NoRoomView() {
     <div className="exp-centered">
       <div className="exp-end-card">
         <p className="exp-kicker">无法进入实验</p>
-        <h1 className="exp-rest-title">当前没有可进入的房间</h1>
+        <h1 className="exp-rest-title">当前没有可进入的实验</h1>
         <p className="exp-rest-info">
           本次预约可能已结束或已被取消。你可以返回首页查看预约状态并重新选择场次。
         </p>
@@ -216,7 +223,7 @@ export function NoRoomView() {
           </Link>
           <Link className="p-btn p-btn-secondary" to="/contact">
             <Mail size={18} aria-hidden="true" />
-            联系主试
+            联系实验工作人员
           </Link>
         </div>
       </div>

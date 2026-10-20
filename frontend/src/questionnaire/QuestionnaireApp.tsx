@@ -55,7 +55,7 @@ const SAVE_STATUS_TEXT: Record<SaveState, string> = {
   error: "草稿未保存",
 };
 
-const SUBMIT_ERROR_HEADLINE = "后测问卷提交失败，请重试或联系主试。";
+const SUBMIT_ERROR_HEADLINE = "后测问卷提交失败，请重试或联系实验工作人员。";
 
 export default function QuestionnaireApp() {
   const [screen, setScreen] = useState<Screen>("loading");
@@ -90,20 +90,24 @@ export default function QuestionnaireApp() {
     try {
       const jatos = getJatos();
       if (!jatos) {
-        throw new Error("请在 JATOS 中打开本问卷");
+        throw new Error("无法识别问卷链接，请从实验平台重新打开问卷。");
       }
       const ready = await waitForJatos(jatos);
       if (runId !== runIdRef.current) return;
       const base = resolvePlatformBase(ready);
       const token = readQueryParam(ready, "rt");
       if (!token) {
-        throw new Error("问卷链接缺少访问令牌，请联系主试重新获取链接。");
+        throw new Error(
+          "问卷链接不完整，请从实验平台重新打开问卷；如仍无法打开，请联系实验工作人员。",
+        );
       }
       const pid = readQueryParam(ready, "pid");
       const context = await fetchQuestionnaireContext(base, token);
       if (runId !== runIdRef.current) return;
       if (pid !== null && pid !== context.analysisCode) {
-        throw new Error("问卷链接中的参与者编号与服务器记录不一致，请联系主试。");
+        throw new Error(
+          "问卷链接与当前账号不匹配，请从实验平台重新打开问卷。",
+        );
       }
       setLoaded({ jatos: ready, base, token, pid, context });
       if (context.completed) {
@@ -232,7 +236,9 @@ export default function QuestionnaireApp() {
       });
       const ids = readJatosResultIds(jatos);
       if (!ids) {
-        throw new Error("无法读取 JATOS 结果编号，请重试或联系主试。");
+        throw new Error(
+          "问卷提交信息不完整，请重试；如仍失败，请联系实验工作人员。",
+        );
       }
       const result = await completeQuestionnaire(loaded.base, {
         token: loaded.token,
@@ -254,7 +260,11 @@ export default function QuestionnaireApp() {
           return;
         }
       }
-      setSubmitIssue(messageOf(error));
+      setSubmitIssue(
+        error instanceof PlatformError && error.status === 400
+          ? "答案未通过校验，请检查必填项后重试。"
+          : messageOf(error),
+      );
     } finally {
       setSubmitting(false);
       submitLockRef.current = false;
@@ -292,7 +302,7 @@ export default function QuestionnaireApp() {
             <div className="q-error" role="alert">
               {loadError}
             </div>
-            <p className="q-description">请检查网络后重试。如果问题持续出现，请联系主试。</p>
+            <p className="q-description">请检查网络后重试。如果问题持续出现，请联系实验工作人员。</p>
             <div className="q-error-actions">
               <button
                 type="button"
@@ -325,7 +335,7 @@ export default function QuestionnaireApp() {
                 返回平台
               </button>
             ) : (
-              <p className="q-done-text">请联系主试返回实验平台。</p>
+              <p className="q-done-text">请联系实验工作人员返回实验平台。</p>
             )}
           </div>
         </div>

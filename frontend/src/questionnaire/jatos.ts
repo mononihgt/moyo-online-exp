@@ -35,14 +35,14 @@ export function getJatos(): JatosApi | undefined {
 
 export function waitForJatos(jatos: JatosApi): Promise<JatosApi> {
   if (typeof jatos.onLoad !== "function") {
-    return Promise.reject(new Error("JATOS 未能初始化，请重新打开问卷。"));
+    return Promise.reject(new Error("问卷服务未能启动，请返回实验平台重新打开问卷。"));
   }
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = window.setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new Error("JATOS 初始化超时，请刷新页面或联系主试。"));
+      reject(new Error("问卷加载超时，请刷新页面；如仍无法打开，请联系实验工作人员。"));
     }, JATOS_INIT_TIMEOUT_MS);
     try {
       jatos.onLoad!(() => {
@@ -54,7 +54,11 @@ export function waitForJatos(jatos: JatosApi): Promise<JatosApi> {
     } catch (error) {
       settled = true;
       window.clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error("JATOS 未能初始化，请重新打开问卷。"));
+      reject(
+        error instanceof Error
+          ? error
+          : new Error("问卷服务未能启动，请返回实验平台重新打开问卷。"),
+      );
     }
   });
 }
@@ -100,7 +104,7 @@ export function readJatosResultIds(jatos: JatosApi): JatosResultIds | null {
 
 export function submitJatosResultData(jatos: JatosApi, resultData: Record<string, unknown>): Promise<void> {
   if (typeof jatos.submitResultData !== "function") {
-    return Promise.reject(new Error("JATOS 提交接口不可用，请重新打开问卷。"));
+    return Promise.reject(new Error("问卷服务暂时不可用，请返回实验平台重新打开问卷。"));
   }
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -163,5 +167,5 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 function describeJatosError(error: unknown): string {
   if (typeof error === "string" && error.trim() !== "") return error;
   if (error instanceof Error && error.message !== "") return error.message;
-  return "JATOS 未能保存问卷结果，请重试。";
+  return "问卷结果未能保存，请重试；如仍失败，请联系实验工作人员。";
 }

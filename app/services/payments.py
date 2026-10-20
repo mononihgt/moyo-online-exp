@@ -160,20 +160,24 @@ async def upsert_payment(
         showup = params["showupPayCents"]
     elif completed:
         params = await load_payment_parameters(db, room)
-        trials_query = await db.execute(
-            select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
-        )
-        trials = list(trials_query.scalars().all())
-        performance_cents = compute_performance_cents(room, trials, room_participant.role, payment=params)
-        if performance_cents is None:
-            logger.error(
-                "房间 %s 参与者 %s 没有已结束的正式对局，跳过完成付款计算",
-                room.id,
-                participant_id,
+        if attended:
+            trials_query = await db.execute(
+                select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
             )
-            return None
-        base = params["basePayCents"]
-        performance = performance_cents
+            trials = list(trials_query.scalars().all())
+            performance_cents = compute_performance_cents(
+                room, trials, room_participant.role, payment=params
+            )
+            if performance_cents is None:
+                logger.error(
+                    "房间 %s 参与者 %s 没有已结束的正式对局，跳过完成付款计算",
+                    room.id,
+                    participant_id,
+                )
+                return None
+            base = params["basePayCents"]
+            performance = performance_cents
+        # 管理端已把预约改为缺席时，保留一条 0 元记录，不产生完成报酬。
     else:
         return None
     if room_participant.completed_at is None:

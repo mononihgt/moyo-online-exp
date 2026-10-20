@@ -97,7 +97,7 @@ export function WaitingView({
   return (
     <div className="exp-waiting-stage">
       <section className="p-wait-card exp-waiting-card" aria-labelledby="waiting-title">
-        <p className="exp-kicker">已进入等待房间</p>
+        <p className="exp-kicker">等待实验开始</p>
         <h1 className="exp-rest-title" id="waiting-title">
           等待实验开始
         </h1>

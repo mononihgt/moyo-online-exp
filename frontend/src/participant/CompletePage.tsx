@@ -37,18 +37,21 @@ function stateLabel(experiment: ExperimentRecord | null, awaiting: boolean, comp
   if (awaiting) return { label: "待填写问卷", tone: "warning" };
   const reason = experiment?.archiveReason ?? null;
   if (reason === "technical_abort") {
-    return { label: "技术中止", tone: "warning" };
+    return { label: "故障中止", tone: "warning" };
   }
   if (completed) return { label: "已完成", tone: "success" };
   switch (reason) {
     case "abandoned":
-      return experiment?.selfExited === true
-        ? { label: "已退出", tone: "neutral" }
-        : { label: "已中止", tone: "error" };
+      if (experiment?.selfExited === true) {
+        return experiment.selfExitReason === "inactivity"
+          ? { label: "自动结束", tone: "neutral" }
+          : { label: "已退出", tone: "neutral" };
+      }
+      return { label: "已结束", tone: "error" };
     case "admin_cancelled":
       return { label: "已取消", tone: "neutral" };
     case "admin_aborted":
-      return { label: "已中止", tone: "error" };
+      return { label: "已结束", tone: "error" };
     case "not_full":
     case "no_show":
     case "no_start":
@@ -152,6 +155,8 @@ export default function CompletePage() {
     } else if (archiveReason !== null) {
       noRewardDetail = archiveCopyFor(archiveReason, {
         selfExited: experiment.selfExited,
+        selfExitReason: experiment.selfExitReason,
+        partnerExitReason: null,
         questionnaireCompleted,
         questionnaireRequired: false,
         hasShowupPay: false,
@@ -239,7 +244,7 @@ export default function CompletePage() {
               </div>
               {archiveReason !== null ? (
                 <div className="p-detail-row">
-                  <dt>房间归档原因</dt>
+                  <dt>实验结束原因</dt>
                   <dd>{ARCHIVE_REASON_LABELS[archiveReason]}</dd>
                 </div>
               ) : null}
@@ -322,7 +327,7 @@ export default function CompletePage() {
                   </>
                 ) : questionnaireCompleted ? (
                   <div className="p-banner p-banner-warning" role="status">
-                    报酬记录尚未同步。请联系实验主试核对。
+                    报酬记录尚未同步。请联系实验工作人员核对。
                   </div>
                 ) : (
                   <>
@@ -368,7 +373,7 @@ export default function CompletePage() {
                   </>
                 ) : (
                   <div className="p-banner p-banner-warning" role="status">
-                    报酬记录尚未同步。请联系实验主试核对。
+                    报酬记录尚未同步。请联系实验工作人员核对。
                   </div>
                 )}
                 <p className="p-muted">

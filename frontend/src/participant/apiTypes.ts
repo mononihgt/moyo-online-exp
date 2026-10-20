@@ -113,7 +113,7 @@ export const ROOM_STATUS_LABELS: Record<RoomStatus, string> = {
 
 export const QUESTIONNAIRE_STATUS_LABELS: Record<QuestionnaireStatus, string> = {
   not_started: "未开始",
-  in_progress: "未成功提交问卷",
+  in_progress: "填写中（尚未提交）",
   completed: "已完成",
 };
 

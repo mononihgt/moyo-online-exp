@@ -26,7 +26,7 @@ from conftest import (
 
 COMPLETED_MESSAGE = "你已完成全部实验，无法再预约新的场次。"
 PENDING_QUESTIONNAIRE_MESSAGE = (
-    "你已完成本次正式实验，但后测问卷尚未提交。请先继续填写并提交问卷，目前无法预约新的场次。"
+    "你已完成本次正式实验，但后测问卷尚未提交。请先提交问卷；提交问卷前后都无法预约新的场次。"
 )
 FAST_PROFILE_ROWS = [
     {"soldiersA": 5, "soldiersB": 5},
@@ -280,7 +280,7 @@ def test_booking_capacity_and_bookable_rules(server):
     assert full_item["canBook"] is False
     over_capacity = participant_c.request("POST", f"/api/rooms/{first['id']}/book")
     assert over_capacity.status_code == 409
-    assert over_capacity.json()["detail"] == "该房间已满"
+    assert over_capacity.json()["detail"] == "该场次已满"
 
     other_room = participant_a.request("POST", f"/api/rooms/{second['id']}/book")
     assert other_room.status_code == 409
@@ -718,6 +718,50 @@ def test_room_sections_follow_status_and_pending_payment(server):
 
 
 @pytest.mark.integration
+def test_marked_absent_participant_gets_zero_payment_after_questionnaire(server):
+    setup = Setup(server)
+    participant_a, participant_b = _login(
+        server, setup.admin, [("缺席甲", "13700001046"), ("缺席乙", "13700001047")]
+    )
+    room = setup.room(starts_in_seconds=3, wait_window_seconds=600, label="缺席报酬房间")
+    participant_a.json("POST", f"/api/rooms/{room['id']}/book")
+    participant_b.json("POST", f"/api/rooms/{room['id']}/book")
+    ws_a, ws_b, _questionnaire_a, _questionnaire_b = _play_to_questionnaire(
+        server, setup, room, participant_a, participant_b
+    )
+    participant_a_id = participant_a.json("GET", "/api/me")["me"]["id"]
+    setup.admin.json(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "mark_absent", "participantId": participant_a_id},
+    )
+    participant_a.json(
+        "POST",
+        "/api/questionnaire/complete",
+        json=_complete_payload(room["id"], IDENTITY_A, q1="female", q2="缺席"),
+    )
+    assert participant_a.json("GET", "/api/me")["me"]["status"] == "completed"
+    detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    participant = next(
+        item for item in detail["participants"] if item["name"] == "缺席甲"
+    )
+    payment = next(
+        item
+        for item in detail["payments"]
+        if item["analysisCode"] == participant["analysisCode"]
+    )
+    assert payment["basePayCents"] == 0
+    assert payment["performancePayCents"] == 0
+    assert payment["showupPayCents"] == 0
+    assert payment["totalCents"] == 0
+    ws_a.close()
+    ws_b.close()
+    participant_a.close()
+    participant_b.close()
+    setup.close()
+
+
+@pytest.mark.integration
 def test_wait_expiry_not_full_no_show_no_start(server):
     setup = Setup(server)
     participant_a, participant_b = _login(
@@ -1017,8 +1061,8 @@ def test_technical_abort_showup_payment(server):
     blocked = participant_a.request("POST", f"/api/rooms/{new_room['id']}/book")
     assert blocked.status_code == 409
     assert blocked.json()["detail"] == (
-        "本次实验因技术原因中止，你已到场。请先填写并提交后测问卷，"
-        "提交后生成到场费；提交之前和之后都无法预约新的场次。"
+        "本次实验因网络或系统故障中止，你已到场。请先填写并提交后测问卷，"
+        "提交后生成到场费；提交前后都无法预约新的场次。"
     )
     participant_b_id = participant_b.json("GET", "/api/me")["me"]["id"]
     admin_blocked = setup.admin.request(

@@ -385,11 +385,11 @@ async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> Exp
 
 def booking_lock_message(lock: ExperimentLock) -> str:
     if lock.reason == "pending_questionnaire":
-        return "你已完成本次正式实验，但后测问卷尚未提交。请先继续填写并提交问卷，目前无法预约新的场次。"
+        return "你已完成本次正式实验，但后测问卷尚未提交。请先提交问卷；提交问卷前后都无法预约新的场次。"
     if lock.reason == "pending_showup_questionnaire":
-        return "本次实验因技术原因中止，你已到场。请先填写并提交后测问卷，提交后生成到场费；提交之前和之后都无法预约新的场次。"
+        return "本次实验因网络或系统故障中止，你已到场。请先填写并提交后测问卷，提交后生成到场费；提交前后都无法预约新的场次。"
     if lock.reason == "payment":
-        return "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。"
+        return "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验工作人员。"
     return "你已完成全部实验，无法再预约新的场次。"
 
 
@@ -430,17 +430,17 @@ async def book_room(
     now = utcnow()
     allowed_statuses = (ROOM_OPEN, ROOM_FULL) + ((ROOM_WAITING,) if allow_after_start else ())
     if room.status not in allowed_statuses:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该房间当前不可报名")
+        raise HTTPException(status.HTTP_409_CONFLICT, "该场次当前不可报名")
     if now >= room.starts_at and not allow_after_start:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该房间已过报名截止时间")
+        raise HTTPException(status.HTTP_409_CONFLICT, "该场次已过报名截止时间")
     active = await blocking_booking_for_participant(db, participant.id)
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "你已有有效预约，请先取消当前预约")
     await db.refresh(room, with_for_update=True)
     if room.status not in allowed_statuses:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该房间当前不可报名")
+        raise HTTPException(status.HTTP_409_CONFLICT, "该场次当前不可报名")
     if utcnow() >= room.starts_at and not allow_after_start:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该房间已过报名截止时间")
+        raise HTTPException(status.HTTP_409_CONFLICT, "该场次已过报名截止时间")
     count_result = await db.execute(
         select(Booking.id)
         .where(
@@ -451,7 +451,7 @@ async def book_room(
     )
     count = len(count_result.scalars().all())
     if count >= CAPACITY:
-        raise HTTPException(status.HTTP_409_CONFLICT, "该房间已满")
+        raise HTTPException(status.HTTP_409_CONFLICT, "该场次已满")
     existing = await db.execute(
         select(Booking)
         .where(
@@ -462,7 +462,7 @@ async def book_room(
         .with_for_update()
     )
     if existing.scalars().first() is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "你已报名该房间")
+        raise HTTPException(status.HTTP_409_CONFLICT, "你已预约该场次")
     booking = Booking(room_id=room.id, participant_id=participant.id, status=BOOKING_BOOKED)
     db.add(booking)
     try:
@@ -480,7 +480,7 @@ async def cancel_booking(db: AsyncSession, room: Room, booking: Booking) -> None
     await db.refresh(room, with_for_update=True)
     await db.refresh(booking, with_for_update=True)
     if room.status not in (ROOM_OPEN, ROOM_FULL):
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前房间状态不允许取消预约")
+        raise HTTPException(status.HTTP_409_CONFLICT, "当前状态不允许取消预约")
     if utcnow() >= room.starts_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "报名截止时间已过，无法取消预约")
     if booking.status != BOOKING_BOOKED:

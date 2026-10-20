@@ -48,7 +48,7 @@ export function ContinueQuestionnaireButton({
         setError(
           formatUnknownError(
             error,
-            "无法继续填写问卷，请稍后重试或联系实验主试。",
+            "无法继续填写问卷，请稍后重试或联系实验工作人员。",
           ),
         );
       }

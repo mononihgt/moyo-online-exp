@@ -18,10 +18,10 @@ export function parseAllowedOrigins(raw: string | undefined): string[] {
       try {
         url = new URL(value);
       } catch {
-        throw new Error("平台地址白名单配置无效，请联系主试。");
+        throw new Error("问卷配置异常，请联系实验工作人员。");
       }
       if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error("平台地址白名单配置无效，请联系主试。");
+        throw new Error("问卷配置异常，请联系实验工作人员。");
       }
       return url.origin;
     });
@@ -39,17 +39,17 @@ export function selectPlatformBase(options: PlatformBaseOptions): string {
   try {
     url = new URL(raw, options.resolutionBase);
   } catch {
-    throw new Error("平台地址配置无效，请联系主试。");
+    throw new Error("问卷配置异常，请联系实验工作人员。");
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("平台地址配置无效，请联系主试。");
+    throw new Error("问卷配置异常，请联系实验工作人员。");
   }
   if (
     useOverride &&
     options.allowedOrigins.length > 0 &&
     !options.allowedOrigins.includes(url.origin)
   ) {
-    throw new Error("平台地址不在允许列表，请联系主试。");
+    throw new Error("问卷配置异常，请联系实验工作人员。");
   }
   return url.href.replace(/\/+$/, "");
 }

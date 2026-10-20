@@ -224,7 +224,7 @@ class RuntimeManager:
             if booking is None:
                 await self._safe_send(
                     websocket,
-                    {"type": "error", "code": "no_active_room", "message": "当前没有可进入的房间"},
+                    {"type": "error", "code": "no_active_room", "message": "当前没有可进入的实验"},
                 )
                 await websocket.close(code=4404)
                 return None
@@ -236,7 +236,7 @@ class RuntimeManager:
                 if room is None:
                     await self._safe_send(
                         websocket,
-                        {"type": "error", "code": "no_active_room", "message": "当前没有可进入的房间"},
+                        {"type": "error", "code": "no_active_room", "message": "当前没有可进入的实验"},
                     )
                     await websocket.close(code=4404)
                     return None
@@ -381,7 +381,7 @@ class RuntimeManager:
             )
             booking = bookings.scalars().first()
             if booking is None:
-                await self._send_error(participant.id, None, "no_active_room", "当前没有可进入的房间")
+                await self._send_error(participant.id, None, "no_active_room", "当前没有可进入的实验")
                 return
             room_id = booking.room_id
         if websocket is not None and self.connections.get(room_id, {}).get(participant.id) is not websocket:
@@ -392,12 +392,12 @@ class RuntimeManager:
                 booking = await db.get(Booking, booking.id)
                 if room is None or room.status == ROOM_ARCHIVED:
                     await self._send_error(
-                        participant.id, room_id, "room_archived", "房间已归档"
+                        participant.id, room_id, "room_archived", "本次实验已结束"
                     )
                     return
                 requested_room = message.get("roomId")
                 if requested_room is not None and requested_room != room.id:
-                    await self._send_error(participant.id, room_id, "room_mismatch", "房间不匹配")
+                    await self._send_error(participant.id, room_id, "room_mismatch", "实验信息不匹配，请返回首页重新进入")
                     return
                 self._touch_activity(room_id, participant.id)
                 if message_type == "enter_room":
@@ -513,6 +513,9 @@ class RuntimeManager:
         }
         state["disconnected"] = {}
         rows = await self._room_participant_rows(db, room.id)
+        # 无操作计时只从进入指导语开始，不继承等待阶段的时间。
+        for row in rows:
+            self._touch_activity(room.id, row.participant_id)
         now = utcnow()
         for row in rows:
             row.instruction_started_at = row.instruction_started_at or now
@@ -538,7 +541,7 @@ class RuntimeManager:
         rows = await self._room_participant_rows(db, room.id)
         row = next((item for item in rows if item.participant_id == participant.id), None)
         if row is None:
-            await self._send_error(participant.id, room.id, "not_in_room", "你不属于该房间")
+            await self._send_error(participant.id, room.id, "not_in_room", "你不属于本次实验")
             return
         state = _state(room)
         if row.instruction_completed_at is not None:
@@ -609,7 +612,7 @@ class RuntimeManager:
         elif room.status not in (ROOM_INSTRUCTIONS, ROOM_PLAYING):
             await self._send_error(participant.id, room.id, "invalid_state", "当前状态不能退出")
             return
-        add_event(db, room, "participant_exited", participant.id)
+        add_event(db, room, "participant_exited", participant.id, {"reason": "manual"})
         await archive_room(db, room, ARCHIVE_ABANDONED)
         await db.commit()
         await self._notify_archived(db, room)
@@ -628,7 +631,7 @@ class RuntimeManager:
         rows = await self._room_participant_rows(db, room.id)
         row = next((item for item in rows if item.participant_id == participant.id), None)
         if row is None:
-            await self._send_error(participant.id, room.id, "not_in_room", "你不属于该房间")
+            await self._send_error(participant.id, room.id, "not_in_room", "你不属于本次实验")
             return
         role_key = str(row.role)
         cells = message.get("cells")
@@ -650,7 +653,7 @@ class RuntimeManager:
             return
         trial = await self._current_trial(db, room.id, state["trial_index"])
         if trial is None:
-            await self._send_error(participant.id, room.id, "invalid_state", "当前 trial 不存在")
+            await self._send_error(participant.id, room.id, "invalid_state", "实验数据异常，请返回首页重新进入")
             return
         db.add(
             TurnSubmission(
@@ -719,6 +722,9 @@ class RuntimeManager:
         state["phase"] = PHASE_TURN
         state["trial_index"] = 0
         state["enter_requests"] = []
+        # 进入正式对局时重新开始无操作计时。
+        for participant_id in self.connections.get(room.id, {}):
+            self._touch_activity(room.id, participant_id)
         now = utcnow()
         connected = set(self.connections.get(room.id, {}))
         state["disconnected"] = {
@@ -1151,9 +1157,9 @@ class RuntimeManager:
                         await db.commit()
                         await self._notify_archived(db, room)
                         return
-                    if await self._check_inactivity(db, room, state):
-                        return
                     rows = await self._room_participant_rows(db, room.id)
+                    if await self._check_inactivity(db, room, state, rows):
+                        return
                     saved_at = state["instruction"].get("saved_at")
                     if saved_at is None or (
                         now - datetime.fromisoformat(saved_at.replace("Z", "+00:00")).replace(tzinfo=None)
@@ -1461,7 +1467,11 @@ class RuntimeManager:
         return False
 
     async def _check_inactivity(
-        self, db: AsyncSession, room: Room, state: dict
+        self,
+        db: AsyncSession,
+        room: Room,
+        state: dict,
+        rows: list[RoomParticipant] | None = None,
     ) -> bool:
         if room.status not in (ROOM_INSTRUCTIONS, ROOM_PLAYING):
             return False
@@ -1470,12 +1480,25 @@ class RuntimeManager:
         connections = self.connections.get(room.id, {})
         if len(connections) < 2:
             return False
+        waiting_after_reading: set[str] = set()
+        if room.status == ROOM_INSTRUCTIONS:
+            if rows is None:
+                rows = await self._room_participant_rows(db, room.id)
+            if not all(row.instruction_completed_at is not None for row in rows):
+                # 已完成阅读、正在等待搭档的参与者不属于无操作。
+                waiting_after_reading = {
+                    row.participant_id
+                    for row in rows
+                    if row.instruction_completed_at is not None
+                }
         settings = get_settings()
         timeout = settings.inactivity_timeout_seconds
         warning_lead = settings.inactivity_warning_seconds
         now = time.monotonic()
         expired: list[tuple[float, str]] = []
         for participant_id in connections:
+            if participant_id in waiting_after_reading:
+                continue
             if not self.visibility.get(room.id, {}).get(participant_id, True):
                 continue
             last = self.last_activity.get(room.id, {}).get(participant_id)
@@ -1612,6 +1635,8 @@ class RuntimeManager:
                 "reason": archive_payload["reason"],
                 "canRebook": archive_payload["canRebook"],
                 "selfExited": archive_payload["selfExited"],
+                "selfExitReason": archive_payload["selfExitReason"],
+                "partnerExitReason": archive_payload["partnerExitReason"],
                 "selfAttended": archive_payload["selfAttended"],
                 "selfQuestionnaireStatus": archive_payload["selfQuestionnaireStatus"],
                 "selfCompleted": archive_payload["selfCompleted"],
@@ -1896,15 +1921,29 @@ class RuntimeManager:
         )
         role_row = rows.scalars().first()
         exited_query = await db.execute(
-            select(RoomEvent.id)
-            .where(
+            select(RoomEvent.participant_id, RoomEvent.payload_json).where(
                 RoomEvent.room_id == room.id,
-                RoomEvent.participant_id == participant_id,
                 RoomEvent.type == "participant_exited",
             )
-            .limit(1)
         )
-        self_exited = exited_query.first() is not None
+        exit_reasons: dict[str, str] = {}
+        for exited_participant_id, payload in exited_query.all():
+            if exited_participant_id is None:
+                continue
+            reason = (payload or {}).get("reason")
+            exit_reasons[exited_participant_id] = (
+                "inactivity" if reason == "inactivity" else "manual"
+            )
+        self_exited = participant_id in exit_reasons
+        self_exit_reason = exit_reasons.get(participant_id)
+        partner_exit_reason = next(
+            (
+                reason
+                for exited_participant_id, reason in exit_reasons.items()
+                if exited_participant_id != participant_id
+            ),
+            None,
+        )
         booking_query = await db.execute(
             select(Booking).where(
                 Booking.room_id == room.id,
@@ -1929,6 +1968,8 @@ class RuntimeManager:
         return {
             "reason": room.archive_reason,
             "selfExited": self_exited,
+            "selfExitReason": self_exit_reason,
+            "partnerExitReason": partner_exit_reason,
             "selfAttended": self_attended,
             "selfQuestionnaireStatus": role_row.questionnaire_status if role_row else None,
             "selfCompleted": bool(

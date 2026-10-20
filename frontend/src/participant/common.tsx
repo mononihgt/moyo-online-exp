@@ -90,7 +90,7 @@ export function PageLinks({
       {items.includes("contact") ? (
         <Link to="/contact">
           <Mail size={14} aria-hidden="true" />
-          联系主试
+          联系实验工作人员
         </Link>
       ) : null}
     </div>

@@ -134,7 +134,7 @@ async def bookable_rooms(participant: ParticipantDep, db: DbSession):
 async def create_booking(room_id: str, participant: ParticipantDep, db: DbSession):
     room = await db.get(Room, room_id)
     if room is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "房间不存在")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "实验不存在")
     booking = await book_room(db, room, participant)
     await db.commit()
     count = await db.execute(
@@ -303,13 +303,17 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
         )
         canceled_by_participant = set(canceled_rows.scalars().all())
         exited_rows = await db.execute(
-            select(RoomEvent.room_id).where(
+            select(RoomEvent.room_id, RoomEvent.payload_json).where(
                 RoomEvent.participant_id == participant.id,
                 RoomEvent.type == "participant_exited",
                 RoomEvent.room_id.in_(room_ids),
             )
         )
-        exited_rooms = set(exited_rows.scalars().all())
+        exit_reasons_by_room: dict[str, str] = {}
+        for exited_room_id, payload in exited_rows.all():
+            exit_reasons_by_room[exited_room_id] = (
+                "inactivity" if (payload or {}).get("reason") == "inactivity" else "manual"
+            )
     lock = await one_time_experiment_lock(db, participant.id)
     items = []
     for booking, room in records:
@@ -349,7 +353,8 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
                 "questionnaireStatus": role_row.questionnaire_status if role_row else None,
                 "completedAt": isoformat_utc(role_row.completed_at) if role_row else None,
                 "selfAttended": booking.status == BOOKING_ATTENDED,
-                "selfExited": room.id in exited_rooms,
+                "selfExited": room.id in exit_reasons_by_room,
+                "selfExitReason": exit_reasons_by_room.get(room.id),
                 "canRebook": can_rebook,
                 "questionnaireRequired": questionnaire_required,
                 "showupPayCents": showup_pay_cents,
@@ -400,7 +405,7 @@ async def questionnaire_context(
         room_id = booking.room_id
     room = await db.get(Room, room_id)
     if room is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "房间不存在")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "实验不存在")
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前实验尚未进入问卷阶段")
     if room.status == ROOM_ARCHIVED:
@@ -416,7 +421,7 @@ async def questionnaire_context(
     )
     row = row_query.scalars().first()
     if row is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "你不属于该房间")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "你不属于本次实验")
     try:
         url = await build_questionnaire_url(db, room, row)
     except HTTPException:

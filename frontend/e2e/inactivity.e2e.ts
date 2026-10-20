@@ -72,13 +72,13 @@ test("指导语阶段无操作先警告再归档，双方可以重新预约", as
     await expect(ackOne).toHaveCount(0);
     await expect(pageOne.getByTestId("instruction-content")).toBeVisible();
 
-    const archiveHeading = /实验已中止|你已退出实验/;
     for (const page of [pageOne, pageTwo]) {
       await expect(
-        page
-          .getByRole("heading", { name: archiveHeading })
-          .or(page.getByText("你已主动退出本次实验", { exact: false })),
+        page.getByRole("heading", { name: "实验已自动结束", exact: true }),
       ).toBeVisible({ timeout: 40000 });
+      await expect(
+        page.getByText("长时间没有操作", { exact: false }),
+      ).toBeVisible();
       await expect(
         page
           .getByTestId("rebook")
