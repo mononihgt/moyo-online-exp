@@ -6,6 +6,7 @@ import zipfile
 from fastapi import HTTPException, status
 from openpyxl import load_workbook
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
@@ -21,10 +22,6 @@ from ..timeutil import isoformat_utc
 _NAME_HEADERS = {"name", "姓名"}
 _PHONE_HEADERS = {"phone", "手机号", "手机", "phone number", "phonenumber"}
 _NOTES_HEADERS = {"notes", "note", "备注", "说明"}
-
-
-class ImportErrorRow(Exception):
-    pass
 
 
 def _header_key(value) -> str:
@@ -71,73 +68,67 @@ def parse_roster(data: bytes, filename: str) -> list[dict]:
     return result
 
 
-async def import_roster(db: AsyncSession, data: bytes, filename: str) -> dict:
-    rows = parse_roster(data, filename)
-    report = {"total": len(rows), "imported": 0, "skipped": 0, "errors": []}
-    seen_hashes: set[str] = set()
-    for row in rows:
-        try:
-            name = row["name"].strip()
-            if not name:
-                raise ImportErrorRow("姓名为空")
-            phone = normalize_phone(row["phone"])
-            digest = phone_hash(phone)
-            if digest in seen_hashes:
-                raise ImportErrorRow("名单内手机号重复")
-            seen_hashes.add(digest)
-            existing = await db.execute(select(Participant).where(Participant.phone_hash == digest))
-            if existing.scalars().first() is not None:
-                raise ImportErrorRow("手机号已存在")
-            participant = Participant(
-                name=name,
-                phone_hash=digest,
-                phone_encrypted=encrypt_phone(phone),
-                status=PARTICIPANT_ELIGIBLE,
-                notes=row["notes"],
-            )
-            db.add(participant)
-            await db.flush()
-            report["imported"] += 1
-        except (ValueError, ImportErrorRow) as exc:
-            report["skipped"] += 1
-            report["errors"].append(
-                {
-                    "row": row["row"],
-                    "name": row["name"],
-                    "phoneMasked": _safe_mask(row["phone"]),
-                    "error": str(exc),
-                }
-            )
-    await db.commit()
-    return report
-
-
 async def import_completed(db: AsyncSession, data: bytes, filename: str) -> dict:
     rows = parse_roster(data, filename)
-    result = {"total": len(rows), "matched": 0, "unmatched": 0, "rows": []}
+    result = {"total": len(rows), "created": 0, "matched": 0, "unmatched": 0, "rows": []}
+    seen_hashes: set[str] = set()
+
+    def record(row: dict, row_status: str, error: str | None) -> None:
+        result["rows"].append(
+            {
+                "row": row["row"],
+                "name": row["name"],
+                "phoneMasked": _safe_mask(row["phone"]),
+                "status": row_status,
+                "error": error,
+            }
+        )
+
     for row in rows:
+        name = row["name"].strip()
+        if not name:
+            result["unmatched"] += 1
+            record(row, "unmatched", "姓名为空")
+            continue
+        if len(name) > 120:
+            result["unmatched"] += 1
+            record(row, "unmatched", "姓名过长")
+            continue
         try:
             phone = normalize_phone(row["phone"])
         except ValueError as exc:
             result["unmatched"] += 1
-            result["rows"].append(
-                {"row": row["row"], "name": row["name"], "phoneMasked": _safe_mask(row["phone"]), "status": "unmatched", "error": str(exc)}
-            )
+            record(row, "unmatched", str(exc))
             continue
         digest = phone_hash(phone)
+        if digest in seen_hashes:
+            result["unmatched"] += 1
+            record(row, "unmatched", "名单内手机号重复")
+            continue
+        seen_hashes.add(digest)
         query = await db.execute(select(Participant).where(Participant.phone_hash == digest))
         participant = query.scalars().first()
-        if participant is None or participant.name.strip() != row["name"].strip():
-            result["unmatched"] += 1
-            result["rows"].append(
-                {"row": row["row"], "name": row["name"], "phoneMasked": _safe_mask(row["phone"]), "status": "unmatched", "error": "未匹配到名单"}
+        if participant is None:
+            db.add(
+                Participant(
+                    name=name,
+                    phone_hash=digest,
+                    phone_encrypted=encrypt_phone(phone),
+                    status=PARTICIPANT_COMPLETED,
+                    notes=row["notes"],
+                )
             )
+            await db.flush()
+            result["created"] += 1
+            record(row, "created", None)
+            continue
+        if participant.name.strip() != name:
+            result["unmatched"] += 1
+            record(row, "unmatched", "姓名与已有记录不一致")
             continue
         participant.status = PARTICIPANT_COMPLETED
         result["matched"] += 1
-        result["rows"].append(
-            {"row": row["row"], "name": row["name"], "phoneMasked": _safe_mask(row["phone"]), "status": "matched", "error": None}
-        )
+        record(row, "matched", None)
     await db.commit()
     return result
 
@@ -149,15 +140,41 @@ def _safe_mask(raw: str) -> str:
         return "****"
 
 
-async def authenticate_participant(db: AsyncSession, name: str, phone_raw: str) -> Participant:
+async def login_or_register_participant(db: AsyncSession, name: str, phone_raw: str) -> Participant:
     try:
         phone = normalize_phone(phone_raw)
     except ValueError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确") from exc
-    query = await db.execute(select(Participant).where(Participant.phone_hash == phone_hash(phone)))
-    participant = query.scalars().first()
-    if participant is None or participant.name.strip() != name.strip():
+    cleaned_name = name.strip()
+    if not cleaned_name:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确")
+    digest = phone_hash(phone)
+
+    async def find_existing() -> Participant | None:
+        query = await db.execute(select(Participant).where(Participant.phone_hash == digest))
+        return query.scalars().first()
+
+    participant = await find_existing()
+    if participant is not None:
+        if participant.name.strip() != cleaned_name:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确")
+        return participant
+
+    participant = Participant(
+        name=cleaned_name,
+        phone_hash=digest,
+        phone_encrypted=encrypt_phone(phone),
+        status=PARTICIPANT_ELIGIBLE,
+    )
+    db.add(participant)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        participant = await find_existing()
+        if participant is None or participant.name.strip() != cleaned_name:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "姓名或手机号不正确") from exc
+        return participant
     return participant
 
 
@@ -182,14 +199,15 @@ async def participant_me(db: AsyncSession, participant: Participant) -> dict:
         )
     )
     completed_count = completed_count_query.scalar_one()
-    locked, pending_questionnaire = await one_time_experiment_lock(db, participant.id)
+    lock = await one_time_experiment_lock(db, participant.id)
     return {
         "id": participant.id,
         "name": participant.name,
         "phoneMasked": mask_phone(decrypt_phone(participant.phone_encrypted)),
         "status": participant.status,
-        "canBook": participant.status == PARTICIPANT_ELIGIBLE and not consent_required and not locked,
-        "hasPendingQuestionnaire": pending_questionnaire,
+        "canBook": participant.status == PARTICIPANT_ELIGIBLE and not consent_required and not lock.locked,
+        "hasPendingQuestionnaire": lock.pending_questionnaire,
+        "hasPayment": lock.has_payment,
         "consentRequired": consent_required,
         "consentVersion": (
             {"id": consent.id, "version": consent.version, "publishedAt": isoformat_utc(consent.published_at)}

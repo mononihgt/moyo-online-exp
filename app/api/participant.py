@@ -92,8 +92,8 @@ async def bookable_rooms(participant: ParticipantDep, db: DbSession):
     blocking_booking = await blocking_booking_for_participant(db, participant.id)
     consent = await current_consent_version(db)
     consent_ok = consent is not None and participant.consent_version_id == consent.id
-    locked, _pending = await one_time_experiment_lock(db, participant.id)
-    eligible = participant.status == PARTICIPANT_ELIGIBLE and consent_ok and not locked
+    lock = await one_time_experiment_lock(db, participant.id)
+    eligible = participant.status == PARTICIPANT_ELIGIBLE and consent_ok and not lock.locked
     items = []
     for room in rooms:
         count = int(counts.get(room.id, 0))
@@ -262,7 +262,7 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
             )
         )
         exited_rooms = set(exited_rows.scalars().all())
-    locked, _pending = await one_time_experiment_lock(db, participant.id)
+    lock = await one_time_experiment_lock(db, participant.id)
     items = []
     for booking, room in records:
         if booking.status == BOOKING_CANCELED and room.id in canceled_by_participant:
@@ -280,7 +280,7 @@ async def my_experiments(participant: ParticipantDep, db: DbSession):
         can_rebook = (
             room.status == ROOM_ARCHIVED
             and room.archive_reason not in (ARCHIVE_COMPLETED, ARCHIVE_QUESTIONNAIRE_INCOMPLETE)
-            and not locked
+            and not lock.locked
         )
         items.append(
             {

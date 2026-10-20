@@ -56,9 +56,6 @@ export default function LoginPage() {
         <h1 className="p-title-sm" id="login-title">
           登录实验平台
         </h1>
-        <p className="p-subtitle">
-          请使用报名时登记的姓名和手机号登录。手机号仅用于身份核对和付款，不会完整显示。
-        </p>
         <SessionNotice text={notice} />
         {error !== "" ? (
           <div className="p-banner p-banner-error" id="login-error" role="alert">
@@ -113,9 +110,6 @@ export default function LoginPage() {
             {submitting ? "正在登录…" : "登录"}
           </button>
         </form>
-        <p className="p-muted p-login-help">
-          如无法登录，请确认姓名和手机号与名单一致，或联系实验组织者。
-        </p>
       </main>
     </div>
   );

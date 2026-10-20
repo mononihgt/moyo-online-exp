@@ -33,6 +33,32 @@ const FORMAL_ONE_B = 9;
 const FORMAL_TWO_A = 6;
 const FORMAL_TWO_B = 5;
 
+test("登录页不显示名单提示，新参与者可以直接登录", async ({ page }) => {
+  await page.goto("/login");
+  await expect(
+    page.getByText("请使用报名时登记的姓名和手机号登录", { exact: false }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("如无法登录，请确认姓名和手机号与名单一致", {
+      exact: false,
+    }),
+  ).toHaveCount(0);
+  await page.getByTestId("login-name").fill("自助注册甲");
+  await page.getByTestId("login-phone").fill("13700009991");
+  await page.getByTestId("login-submit").click();
+  await page.waitForURL(
+    (url) => url.pathname === "/" || url.pathname === "/consent",
+    { timeout: 20000 },
+  );
+  if (new URL(page.url()).pathname === "/consent") {
+    await page.getByTestId("consent-agree").click();
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 20000 });
+  }
+  await expect(page.getByTestId("current-booking")).toBeVisible({
+    timeout: 20000,
+  });
+});
+
 function beijingDate(daysAgo: number): string {
   return new Date(Date.now() + 8 * 3600 * 1000 - daysAgo * 86400 * 1000)
     .toISOString()
@@ -390,6 +416,13 @@ test("双方完成练习与正式对局、问卷身份、报酬及批量付款",
   const adminContext = await browser.newContext();
   const adminPage = await adminContext.newPage();
   await adminLoginPage(adminPage);
+  await adminPage.goto("/admin/participants");
+  await expect(
+    adminPage.getByRole("heading", { name: "导入历史已完成名单" }),
+  ).toBeVisible({ timeout: 20000 });
+  await expect(
+    adminPage.getByText("导入被试名单", { exact: true }),
+  ).toHaveCount(0);
   const from = beijingDate(6);
   const to = beijingDate(0);
   await adminPage.goto(

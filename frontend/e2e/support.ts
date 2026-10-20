@@ -156,31 +156,6 @@ export async function adminLogin(
   if (!response.ok()) throw new Error(await response.text());
 }
 
-export async function importRoster(
-  request: APIRequestContext,
-  baseURL: string,
-  entries: RosterEntry[],
-): Promise<void> {
-  const roster = [
-    "姓名,手机号",
-    ...entries.map((entry) => `${entry.name},${entry.phone}`),
-    "",
-  ].join("\n");
-  const csrf = await adminCsrfToken(request);
-  const response = await request.fetch(`${baseURL}/admin/api/participants/import`, {
-    method: "POST",
-    headers: { "X-CSRF-Token": csrf },
-    multipart: {
-      file: {
-        name: "roster.csv",
-        mimeType: "text/csv",
-        buffer: Buffer.from(roster, "utf8"),
-      },
-    },
-  });
-  if (!response.ok()) throw new Error(await response.text());
-}
-
 export async function publishConsentVersion(
   request: APIRequestContext,
   baseURL: string,
@@ -465,10 +440,8 @@ async function createRoom(
 export async function prepareConsentBase(
   request: APIRequestContext,
   baseURL: string,
-  entries: RosterEntry[],
 ): Promise<void> {
   await adminLogin(request, baseURL);
-  await importRoster(request, baseURL, entries);
   await publishConsentVersion(
     request,
     baseURL,
@@ -481,7 +454,7 @@ export async function prepareWorld(
   baseURL: string,
   config: WorldConfig,
 ): Promise<World> {
-  await prepareConsentBase(request, baseURL, config.entries);
+  await prepareConsentBase(request, baseURL);
   const troopRows = config.troopRows ?? DEFAULT_TROOP_ROWS;
   const profileVersionId = await createTroopProfile(request, baseURL, troopRows);
   const mapConfig = config.map ?? {};

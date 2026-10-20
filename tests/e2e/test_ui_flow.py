@@ -13,7 +13,6 @@ from conftest import (
     create_questionnaire,
     create_room,
     create_troop_profile,
-    import_roster,
     questionnaire_answers,
     reset_database,
     valid_identity_answers,
@@ -147,7 +146,6 @@ def _submit_questionnaires(server, room_id):
 def test_two_browser_contexts_full_participant_flow_and_admin_smoke(ui_server):
     server = ui_server
     admin = ApiClient(server.base_url).login_admin()
-    import_roster(admin, [("界面甲", "13400000001"), ("界面乙", "13400000002")])
     create_consent(admin)
     profile = create_troop_profile(
         admin,

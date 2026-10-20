@@ -18,7 +18,6 @@ from conftest import (
     create_troop_profile,
     fetch_all,
     fetch_one,
-    import_roster,
     upload_media,
     valid_identity_answers,
     wait_until,
@@ -79,7 +78,6 @@ def _wait_archived(admin: ApiClient, room_id: str, reason: str | None = None, ti
 
 
 def _extra_participants(context: Context, players) -> list[ApiClient]:
-    import_roster(context.admin, list(players))
     clients = []
     for name, phone in players:
         client = ApiClient(context.server.base_url).login_participant(name, phone)
@@ -480,9 +478,25 @@ def test_analysis_export_and_audit_without_pii(server):
         for value in pii:
             assert value not in text, f"{name} 包含敏感值 {value}"
 
+    history_name = "历史完成甲"
+    history_phone = "13800005555"
+    history_note = "历史备注敏感值"
+    history_content = (
+        "姓名,手机号,备注\n"
+        f"{history_name},{history_phone},{history_note}\n"
+    )
+    history_report = context.admin.json(
+        "POST",
+        "/admin/api/participants/import-completed",
+        files={"file": ("completed.csv", history_content.encode("utf-8"), "text/csv")},
+    )
+    assert history_report["created"] == 1
+    assert history_report["matched"] == 0
+    assert history_report["unmatched"] == 0
+
     audit = context.admin.json("GET", "/admin/api/audit?limit=500")
     entries = audit["entries"]
-    assert any(entry["action"] == "participants_import" for entry in entries)
+    assert any(entry["action"] == "participants_import_completed" for entry in entries)
     audit_text = json.dumps(entries, ensure_ascii=False)
     for value in [
         players[0][0],
@@ -495,6 +509,9 @@ def test_analysis_export_and_audit_without_pii(server):
         identity_b["alipay_phone"],
         ID_CARD_SAMPLE,
         PASSPORT_SAMPLE,
+        history_name,
+        history_phone,
+        history_note,
     ]:
         assert value not in audit_text
 

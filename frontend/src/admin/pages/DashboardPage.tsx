@@ -6,7 +6,7 @@ import {
   CalendarClock,
   ClipboardList,
   Plus,
-  Upload,
+  Users,
   Wallet,
 } from "lucide-react";
 import { adminApi, errorMessage } from "../api";
@@ -61,8 +61,8 @@ export function DashboardPage() {
               创建 Room
             </Link>
             <Link className="admin-btn admin-btn-secondary" to="/admin/participants">
-              <Upload size={16} />
-              导入名单
+              <Users size={16} />
+              被试名单
             </Link>
             <Link className="admin-btn admin-btn-secondary" to="/admin/payments">
               <Wallet size={16} />

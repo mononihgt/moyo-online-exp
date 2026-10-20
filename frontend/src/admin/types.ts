@@ -41,30 +41,17 @@ export interface ParticipantListResponse {
   total: number;
 }
 
-export interface RosterImportError {
-  row: number;
-  name: string;
-  phoneMasked: string;
-  error: string;
-}
-
-export interface RosterImportReport {
-  total: number;
-  imported: number;
-  skipped: number;
-  errors: RosterImportError[];
-}
-
 export interface CompletedImportRow {
   row: number;
   name: string;
   phoneMasked: string;
-  status: "matched" | "unmatched";
+  status: "created" | "matched" | "unmatched";
   error: string | null;
 }
 
 export interface CompletedImportReport {
   total: number;
+  created: number;
   matched: number;
   unmatched: number;
   rows: CompletedImportRow[];

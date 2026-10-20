@@ -22,7 +22,6 @@ from conftest import (
     create_room,
     create_troop_profile,
     fetch_all,
-    import_roster,
     reset_database,
     wait_until,
 )
@@ -316,7 +315,6 @@ def test_real_jatos_protected_answers_and_manual_import():
         )
         server.start()
         admin = ApiClient(server.base_url).login_admin()
-        import_roster(admin, [LOGIN_A, LOGIN_B, LOGIN_C, LOGIN_D])
         create_consent(admin)
         profile = create_troop_profile(admin, PROFILE_ROWS)
         map_group = create_map_group(

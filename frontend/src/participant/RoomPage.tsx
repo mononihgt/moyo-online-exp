@@ -49,8 +49,17 @@ interface ArchiveInfo {
   rewardKind: RewardKind;
 }
 
+const REBOOKABLE_ARCHIVE_REASONS: ArchiveReason[] = [
+  "not_full",
+  "no_show",
+  "no_start",
+  "abandoned",
+  "admin_aborted",
+  "admin_cancelled",
+];
+
 function fallbackRebook(reason: ArchiveReason | null): boolean {
-  return reason !== "completed" && reason !== "questionnaire_incomplete";
+  return reason !== null && REBOOKABLE_ARCHIVE_REASONS.includes(reason);
 }
 
 function deriveRestFromGame(game: GameState): RestViewData {
@@ -176,7 +185,7 @@ export default function RoomPage() {
         if (message.code === "room_archived") {
           setArchive({
             reason: null,
-            canRebook: true,
+            canRebook: false,
             selfExited: false,
             questionnaireCompleted: false,
             rewardKind: "none",

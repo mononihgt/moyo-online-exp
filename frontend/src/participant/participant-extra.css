@@ -28,11 +28,6 @@
   color: var(--participant-muted);
 }
 
-.p-login-help {
-  margin: 16px 0 0;
-  text-align: center;
-}
-
 .p-span-loading {
   min-width: 240px;
   padding: 40px 24px;

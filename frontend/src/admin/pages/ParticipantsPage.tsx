@@ -1,14 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, FormEvent } from "react";
-import { FileUp, Pencil, Search, UserCheck, UserX, Users } from "lucide-react";
+import { Pencil, Search, UserCheck, UserX, Users } from "lucide-react";
 import type { AdminParticipant, ParticipantStatus } from "../../shared/types";
 import { formatDateTime } from "../../shared/format";
 import { adminApi, errorMessage, fileUploadForm } from "../api";
-import type {
-  CompletedImportReport,
-  ParticipantListResponse,
-  RosterImportReport,
-} from "../types";
+import type { CompletedImportReport, ParticipantListResponse } from "../types";
 import {
   EmptyState,
   ErrorNotice,
@@ -36,13 +32,6 @@ export function ParticipantsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
-
-  const [rosterFile, setRosterFile] = useState<File | null>(null);
-  const [rosterReport, setRosterReport] = useState<RosterImportReport | null>(null);
-  const [rosterError, setRosterError] = useState<string | null>(null);
-  const [rosterUploading, setRosterUploading] = useState(false);
-  const [rosterDragging, setRosterDragging] = useState(false);
-  const rosterInputRef = useRef<HTMLInputElement | null>(null);
 
   const [completedFile, setCompletedFile] = useState<File | null>(null);
   const [completedReport, setCompletedReport] = useState<CompletedImportReport | null>(null);
@@ -100,31 +89,6 @@ export function ParticipantsPage() {
     setEditError(null);
   }
 
-  async function handleRosterImport() {
-    if (!rosterFile) {
-      setRosterError("请先选择 CSV 或 XLSX 文件");
-      return;
-    }
-    setRosterUploading(true);
-    setRosterError(null);
-    setRosterReport(null);
-    try {
-      const report = await adminApi.upload<RosterImportReport>(
-        "/participants/import",
-        fileUploadForm(rosterFile),
-      );
-      setRosterReport(report);
-      notify(`导入完成：成功 ${report.imported} 行，跳过 ${report.skipped} 行`);
-      setRosterFile(null);
-      if (rosterInputRef.current) rosterInputRef.current.value = "";
-      refresh();
-    } catch (err) {
-      setRosterError(errorMessage(err));
-    } finally {
-      setRosterUploading(false);
-    }
-  }
-
   async function handleCompletedImport() {
     if (!completedFile) {
       setCompletedError("请先选择 CSV 或 XLSX 文件");
@@ -139,7 +103,9 @@ export function ParticipantsPage() {
         fileUploadForm(completedFile),
       );
       setCompletedReport(report);
-      notify(`匹配完成：匹配 ${report.matched} 行，未匹配 ${report.unmatched} 行`);
+      notify(
+        `导入完成：新建 ${report.created} 行，匹配 ${report.matched} 行，未匹配 ${report.unmatched} 行`,
+      );
       setCompletedFile(null);
       if (completedInputRef.current) completedInputRef.current.value = "";
       refresh();
@@ -242,94 +208,16 @@ export function ParticipantsPage() {
     <div>
       <PageHeader
         title="被试名单"
-        subtitle="导入参与者名单、维护状态，并上传历史已完成名单。"
-        actions={
-          <button
-            type="button"
-            className="admin-btn admin-btn-secondary"
-            onClick={() => rosterInputRef.current?.focus()}
-          >
-            <FileUp size={16} />
-            导入名单
-          </button>
-        }
+        subtitle="查看已注册参与者、维护状态，并上传历史已完成名单。"
       />
 
-      <div className="admin-grid admin-grid-2">
-        <section className="admin-card" aria-labelledby="roster-import-title">
-          <h2 className="admin-section-title" id="roster-import-title">
-            导入被试名单
-          </h2>
-          <p className="admin-hint">
-            接受 CSV 或 XLSX。文件需要包含姓名和手机号列，可选备注列。已存在的手机号会在导入报告中列为跳过。
-          </p>
-          <div
-            className={`admin-file-drop${rosterDragging ? " is-dragover" : ""}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-              setRosterDragging(true);
-            }}
-            onDragLeave={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                setRosterDragging(false);
-              }
-            }}
-            onDrop={(event) => acceptDroppedFile(event, setRosterFile, setRosterDragging)}
-          >
-            <input
-              ref={rosterInputRef}
-              type="file"
-              accept=".csv,.xlsx,.xlsm"
-              data-testid="participants-import"
-              onChange={(event) => setRosterFile(event.target.files?.[0] ?? null)}
-              aria-label="选择被试名单文件"
-            />
-            <p className="admin-drop-hint">也可以将 CSV 或 XLSX 文件拖拽到此处。</p>
-            <div className="admin-submit-row">
-              <button
-                type="button"
-                className="admin-btn admin-btn-primary"
-                onClick={() => void handleRosterImport()}
-                disabled={rosterUploading || !rosterFile}
-                data-testid="participants-import-submit"
-              >
-                <FileUp size={16} />
-                {rosterUploading ? "导入中" : "上传并导入"}
-              </button>
-              <span className="admin-hint">{rosterFile ? rosterFile.name : "尚未选择文件"}</span>
-            </div>
-          </div>
-          {rosterError ? <div className="admin-error" role="alert">{rosterError}</div> : null}
-          {rosterReport ? (
-            <div className="admin-import-report" data-testid="participants-import-report">
-              <h3>导入报告</h3>
-              <div className="admin-import-summary">
-                <span>读取 {rosterReport.total} 行</span>
-                <span>成功 {rosterReport.imported} 行</span>
-                <span>跳过 {rosterReport.skipped} 行</span>
-              </div>
-              {rosterReport.errors.length > 0 ? (
-                <div className="admin-import-errors">
-                  {rosterReport.errors.map((item, index) => (
-                    <div key={`${item.row}-${index}`} className="admin-import-error-row">
-                      第 {item.row} 行 {item.name || "未命名"}（{item.phoneMasked}）：{item.error}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="admin-hint">所有行均已成功导入。</div>
-              )}
-            </div>
-          ) : null}
-        </section>
-
+      <div className="admin-grid">
         <section className="admin-card" aria-labelledby="completed-import-title">
           <h2 className="admin-section-title" id="completed-import-title">
             导入历史已完成名单
           </h2>
           <p className="admin-hint">
-            按姓名和手机号匹配已有参与者，并将匹配成功的参与者标记为已完成。未匹配行会在报告中列出。
+            接受 CSV 或 XLSX。文件需要包含姓名和手机号列，可选备注列。手机号不存在时新建参与者并标记为已完成；姓名与已有记录不一致时列为未匹配。
           </p>
           <div
             className={`admin-file-drop${completedDragging ? " is-dragover" : ""}`}
@@ -363,7 +251,7 @@ export function ParticipantsPage() {
                 data-testid="participants-import-completed-submit"
               >
                 <UserCheck size={16} />
-                {completedUploading ? "匹配中" : "上传并匹配"}
+                {completedUploading ? "导入中" : "上传并导入"}
               </button>
               <span className="admin-hint">{completedFile ? completedFile.name : "尚未选择文件"}</span>
             </div>
@@ -371,9 +259,10 @@ export function ParticipantsPage() {
           {completedError ? <div className="admin-error" role="alert">{completedError}</div> : null}
           {completedReport ? (
             <div className="admin-import-report" data-testid="participants-import-completed-report">
-              <h3>匹配报告</h3>
+              <h3>导入报告</h3>
               <div className="admin-import-summary">
                 <span>读取 {completedReport.total} 行</span>
+                <span>新建 {completedReport.created} 行</span>
                 <span>匹配 {completedReport.matched} 行</span>
                 <span>未匹配 {completedReport.unmatched} 行</span>
               </div>
@@ -383,10 +272,18 @@ export function ParticipantsPage() {
                     <div
                       key={`${item.row}-${index}`}
                       className="admin-import-error-row"
-                      style={item.status === "matched" ? { color: "var(--admin-success)" } : undefined}
+                      style={
+                        item.status === "unmatched"
+                          ? undefined
+                          : { color: "var(--admin-success)" }
+                      }
                     >
                       第 {item.row} 行 {item.name}（{item.phoneMasked}）：
-                      {item.status === "matched" ? "匹配成功" : item.error ?? "未匹配"}
+                      {item.status === "created"
+                        ? "新建成功"
+                        : item.status === "matched"
+                          ? "匹配成功"
+                          : item.error ?? "未匹配"}
                     </div>
                   ))}
                 </div>
@@ -457,16 +354,7 @@ export function ParticipantsPage() {
           <EmptyState
             icon={Users}
             title="暂无匹配的参与者"
-            description="导入名单后，参与者会出现在这里。也可以调整搜索条件。"
-            action={
-              <button
-                type="button"
-                className="admin-btn admin-btn-primary"
-                onClick={() => rosterInputRef.current?.focus()}
-              >
-                导入名单
-              </button>
-            }
+            description="参与者首次登录后会自动出现在这里。也可以调整搜索条件。"
           />
         ) : (
           <>

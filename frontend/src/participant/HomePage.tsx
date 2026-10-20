@@ -22,6 +22,7 @@ import { ContinueQuestionnaireButton } from "./ContinueQuestionnaireButton";
 import {
   ACCOUNT_COMPLETED,
   ACCOUNT_DISABLED,
+  ACCOUNT_PAYMENT_LOCKED,
   ACCOUNT_PENDING_QUESTIONNAIRE,
   AFTER_START_BOOKING_NOTE,
   BOOKABLE_HIDDEN_NOTE,
@@ -461,7 +462,9 @@ export default function HomePage() {
                     ? ACCOUNT_DISABLED
                     : pendingLocked
                       ? ACCOUNT_PENDING_QUESTIONNAIRE
-                      : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
+                      : session.me.hasPayment
+                        ? ACCOUNT_PAYMENT_LOCKED
+                        : "你当前无法预约新的场次。如有疑问，请联系实验主试。"}
               </p>
             </section>
           ) : null}

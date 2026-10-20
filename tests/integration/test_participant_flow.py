@@ -18,7 +18,6 @@ from conftest import (
     create_questionnaire,
     create_room,
     create_troop_profile,
-    import_roster,
     questionnaire_answers,
     valid_identity_answers,
     wait_until,
@@ -90,7 +89,6 @@ class Setup:
 
 
 def _login(server, admin, accounts):
-    import_roster(admin, accounts)
     clients = []
     for name, phone in accounts:
         client = ApiClient(server.base_url).login_participant(name, phone)
@@ -969,7 +967,7 @@ def test_technical_abort_showup_payment(server):
     archived = ws_a.recv_until("room_archived", timeout=20)
     assert archived["reason"] == "technical_abort"
     assert archived["rewardKind"] == "showup"
-    assert archived["canRebook"] is True
+    assert archived["canRebook"] is False
     payments = setup.admin.json("GET", "/admin/api/payments")["payments"]
     assert len(payments) == 2
     assert all(item["showupPayCents"] == 1000 for item in payments)
@@ -977,13 +975,29 @@ def test_technical_abort_showup_payment(server):
     assert all(item["performancePayCents"] == 0 for item in payments)
     assert all(item["totalCents"] == 1000 for item in payments)
     assert all(item["status"] == "pending" for item in payments)
+    me_a = participant_a.json("GET", "/api/me")["me"]
+    assert me_a["hasPayment"] is True
+    assert me_a["canBook"] is False
+    assert participant_a.json("GET", "/api/rooms/bookable")["canBook"] is False
     experiment_a = next(
         item
         for item in participant_a.json("GET", "/api/my-experiments")["experiments"]
         if item["roomId"] == room["id"]
     )
     assert experiment_a["rewardKind"] == "showup"
+    assert experiment_a["canRebook"] is False
     assert experiment_a["payment"]["totalCents"] == 1000
+    new_room = setup.room(starts_in_seconds=60, label="复约房间")
+    blocked = participant_a.request("POST", f"/api/rooms/{new_room['id']}/book")
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。"
+    participant_b_id = participant_b.json("GET", "/api/me")["me"]["id"]
+    admin_blocked = setup.admin.request(
+        "POST",
+        f"/admin/api/rooms/{new_room['id']}/bookings",
+        json={"participantId": participant_b_id},
+    )
+    assert admin_blocked.status_code == 409
     ws_a.close()
     participant_a.close()
     participant_b.close()

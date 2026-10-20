@@ -15,7 +15,7 @@ from ..security import (
     rate_limiter,
     verify_password,
 )
-from ..services.participants import authenticate_participant, participant_me
+from ..services.participants import login_or_register_participant, participant_me
 from ..timeutil import isoformat_utc, utcnow
 from .deps import DbSession, ParticipantDep
 
@@ -64,7 +64,7 @@ async def participant_login(payload: LoginRequest, request: Request, response: R
         settings.login_rate_limit_attempts,
         settings.login_rate_limit_seconds,
     )
-    participant = await authenticate_participant(db, payload.name, payload.phone)
+    participant = await login_or_register_participant(db, payload.name, payload.phone)
     csrf_token = request.cookies.get(CSRF_COOKIE) or new_csrf_token()
     set_participant_cookies(response, participant.id, csrf_token)
     return {"me": await participant_me(db, participant), "csrfToken": csrf_token}

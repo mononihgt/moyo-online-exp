@@ -30,7 +30,7 @@ from ..schemas import (
 )
 from ..security import decrypt_phone, mask_phone
 from ..services.media import save_image, serialize_media
-from ..services.participants import import_completed, import_roster
+from ..services.participants import import_completed
 from ..services.rooms import room_summary
 from ..timeutil import isoformat_utc, utcnow
 from .admin_common import audit, audit_import_report
@@ -120,17 +120,6 @@ async def list_participants(
             }
         )
     return {"participants": items, "total": total}
-
-
-@router.post("/participants/import", dependencies=[Depends(require_csrf)])
-async def import_participants(
-    admin: AdminDep, db: DbSession, file: UploadFile = File(...)
-):
-    data = await file.read()
-    report = await import_roster(db, data, file.filename or "roster.csv")
-    audit(db, admin, "participants_import", "participant", "bulk", audit_import_report(report))
-    await db.commit()
-    return report
 
 
 @router.post("/participants/import-completed", dependencies=[Depends(require_csrf)])

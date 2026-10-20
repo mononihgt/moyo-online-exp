@@ -135,6 +135,7 @@ export function ArchiveView({
     selfExited,
     questionnaireCompleted,
     hasShowupPay: rewardKind === "showup",
+    canRebook,
   });
   const needsQuestionnaire =
     reason === "questionnaire_incomplete" && !questionnaireCompleted;

@@ -23,7 +23,6 @@ from conftest import (
     create_troop_profile,
     fetch_all,
     fetch_one,
-    import_roster,
     questionnaire_answers,
     upload_media,
     valid_identity_answers,
@@ -255,12 +254,6 @@ def _assert_no_pii(text: str, pii_values: list[str], location: str) -> None:
 @pytest.mark.integration
 def test_full_two_participant_flow_and_exports(server):
     admin = ApiClient(server.base_url).login_admin()
-    roster = import_roster(admin, [LOGIN_A, LOGIN_B])
-    assert roster["imported"] == 2
-    assert roster["skipped"] == 0
-    assert roster["errors"] == []
-    assert LOGIN_A[0] not in json.dumps(roster, ensure_ascii=False)
-    assert LOGIN_A[1] not in json.dumps(roster, ensure_ascii=False)
     create_consent(admin)
 
     profile = create_troop_profile(admin, PROFILE_ROWS)
@@ -778,7 +771,6 @@ def test_full_two_participant_flow_and_exports(server):
     audit_entries = admin.json("GET", "/admin/api/audit", params={"limit": 500})
     actions = {entry["action"] for entry in audit_entries["entries"]}
     assert {
-        "participants_import",
         "room_created",
         "room_published",
         "payments_bulk_viewed",
@@ -1000,7 +992,6 @@ def test_full_two_participant_flow_and_exports(server):
 @pytest.mark.integration
 def test_cancel_before_start_reopens_slot(server):
     admin = ApiClient(server.base_url).login_admin()
-    import_roster(admin, [("取消甲", "13900000001"), ("取消乙", "13900000002")])
     create_consent(admin)
     profile = create_troop_profile(admin)
     map_group = create_map_group(admin, profile["id"])

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from fastapi import HTTPException, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -274,10 +276,18 @@ async def blocking_booking_for_participant(db: AsyncSession, participant_id: str
     return query.scalars().first()
 
 
-async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> tuple[bool, bool]:
+@dataclass(frozen=True)
+class ExperimentLock:
+    locked: bool
+    pending_questionnaire: bool
+    has_payment: bool
+    reason: str | None
+
+
+async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> ExperimentLock:
     participant = await db.get(Participant, participant_id)
     if participant is None:
-        return False, False
+        return ExperimentLock(False, False, False, None)
     rows = await db.execute(
         select(RoomParticipant.questionnaire_status)
         .join(Room, Room.id == RoomParticipant.room_id)
@@ -294,13 +304,31 @@ async def one_time_experiment_lock(db: AsyncSession, participant_id: str) -> tup
     )
     statuses = list(rows.scalars().all())
     pending = any(status != QUESTIONNAIRE_COMPLETED for status in statuses)
-    locked = participant.status == PARTICIPANT_COMPLETED or bool(statuses)
-    return locked, pending
-
-
-def booking_lock_message(pending: bool) -> str:
+    payment_query = await db.execute(
+        select(Payment.id).where(Payment.participant_id == participant_id).limit(1)
+    )
+    has_payment = payment_query.first() is not None
     if pending:
+        reason = "pending_questionnaire"
+    elif participant.status == PARTICIPANT_COMPLETED or bool(statuses):
+        reason = "completed"
+    elif has_payment:
+        reason = "payment"
+    else:
+        reason = None
+    return ExperimentLock(
+        locked=reason is not None,
+        pending_questionnaire=pending,
+        has_payment=has_payment,
+        reason=reason,
+    )
+
+
+def booking_lock_message(lock: ExperimentLock) -> str:
+    if lock.reason == "pending_questionnaire":
         return "你已完成本次正式实验，但后测问卷尚未提交。请先继续填写并提交问卷，目前无法预约新的场次。"
+    if lock.reason == "payment":
+        return "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。"
     return "你已完成全部实验，无法再预约新的场次。"
 
 
@@ -324,16 +352,16 @@ async def can_rebook_for_participant(db: AsyncSession, room: Room, participant_i
         return False
     if room.archive_reason in (ARCHIVE_COMPLETED, ARCHIVE_QUESTIONNAIRE_INCOMPLETE):
         return False
-    locked, _pending = await one_time_experiment_lock(db, participant_id)
-    return not locked
+    lock = await one_time_experiment_lock(db, participant_id)
+    return not lock.locked
 
 
 async def book_room(
     db: AsyncSession, room: Room, participant, *, allow_after_start: bool = False
 ) -> Booking:
-    locked, pending = await one_time_experiment_lock(db, participant.id)
-    if locked:
-        raise HTTPException(status.HTTP_409_CONFLICT, booking_lock_message(pending))
+    lock = await one_time_experiment_lock(db, participant.id)
+    if lock.locked:
+        raise HTTPException(status.HTTP_409_CONFLICT, booking_lock_message(lock))
     if participant.status != PARTICIPANT_ELIGIBLE:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "当前账号状态不允许报名")
     consent = await current_consent_version(db)

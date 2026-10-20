@@ -21,7 +21,6 @@ from conftest import (
     create_troop_profile,
     fetch_all,
     fetch_one,
-    import_roster,
     questionnaire_answers,
     upload_media,
     wait_until,
@@ -95,12 +94,8 @@ class Context:
         self.admin = ApiClient(server.base_url).login_admin()
         self.consent = create_consent(self.admin)
         self.questionnaire = create_questionnaire(self.admin)
-        self._roster_imported = False
 
     def participants(self, players=DEFAULT_PLAYERS):
-        if not self._roster_imported:
-            import_roster(self.admin, list(players))
-            self._roster_imported = True
         clients = []
         for name, phone in players:
             client = ApiClient(self.server.base_url).login_participant(name, phone)
@@ -1127,7 +1122,11 @@ def test_technical_abort_payment_attended_only(server):
     archived = game.ws_a.recv_until("room_archived", timeout=15)
     assert archived["reason"] == "technical_abort"
     assert archived["rewardKind"] == "showup"
-    assert archived["canRebook"] is True
+    assert archived["canRebook"] is False
+    assert _me(participant_a)["hasPayment"] is True
+    assert _me(participant_a)["canBook"] is False
+    assert _me(participant_b)["hasPayment"] is False
+    assert _me(participant_b)["canBook"] is True
 
     detail = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}")
     assert detail["room"]["status"] == "archived"

@@ -499,15 +499,6 @@ def create_questionnaire(
     return questionnaire
 
 
-def import_roster(admin: ApiClient, participants: list[tuple[str, str]]) -> dict:
-    content = "姓名,手机号\n" + "\n".join(f"{name},{phone}" for name, phone in participants) + "\n"
-    return admin.json(
-        "POST",
-        "/admin/api/participants/import",
-        files={"file": ("roster.csv", content.encode("utf-8"), "text/csv")},
-    )
-
-
 def create_room(
     admin: ApiClient,
     map_group_version_id: str,

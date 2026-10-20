@@ -36,6 +36,7 @@ export interface ParticipantMe {
   status: ParticipantStatus;
   canBook: boolean;
   hasPendingQuestionnaire: boolean;
+  hasPayment: boolean;
   consentRequired: boolean;
   consentVersion: { id: string; version: number; publishedAt: string | null } | null;
   completedExperiments: number;

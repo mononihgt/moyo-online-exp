@@ -150,6 +150,7 @@ export default function CompletePage() {
         selfExited: experiment.selfExited,
         questionnaireCompleted,
         hasShowupPay: false,
+        canRebook,
       }).detail;
     } else {
       noRewardDetail = "本次实验尚未结束，报酬将在实验结束后结算。";

@@ -15,7 +15,6 @@ from conftest import (
     create_questionnaire,
     create_room,
     create_troop_profile,
-    import_roster,
 )
 
 OVERSIZED_BYTES = 10 * 1024 * 1024 + 1
@@ -151,7 +150,6 @@ def test_media_upload_formats_exif_and_limits(server):
     missing = admin.request("GET", f"/media/{uuid.uuid4()}")
     assert missing.status_code == 404
 
-    import_roster(admin, [("媒体参与者", "13700002001")])
     participant = ApiClient(server.base_url).login_participant("媒体参与者", "13700002001")
     permitted = participant.request("GET", f"/media/{png['id']}")
     assert permitted.status_code == 200

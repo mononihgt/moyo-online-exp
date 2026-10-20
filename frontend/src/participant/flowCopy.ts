@@ -21,6 +21,8 @@ export const ACCOUNT_DISABLED =
   "你的账号当前已停用，无法预约新的场次。如有疑问，请联系实验主试。";
 export const ACCOUNT_PENDING_QUESTIONNAIRE =
   "你已完成正式实验但尚未提交后测问卷。完成问卷后才能结束本次实验；不能预约新的场次。";
+export const ACCOUNT_PAYMENT_LOCKED =
+  "你已产生实验报酬，无法再预约新的场次。如有疑问，请联系实验主试。";
 export const VIEW_REWARD_INFO = "查看报酬信息";
 export const REBOOK = "重新预约";
 export const CONTACT_EXPERIMENTER = "联系主试";
@@ -92,7 +94,7 @@ export const COMPLETE_ARCHIVED_SUBMITTED_NOTE =
 export const COMPLETE_TECH_SHOWUP_NOTE =
   "本次实验未完成，不产生基础费与绩效费。到场费将在中止后的第一个周日 24:00 前通过支付宝完成转账。";
 export const COMPLETE_TECH_ZERO_NOTE =
-  "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。你可以重新预约其他时间段参与实验。";
+  "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。";
 export const COMPLETE_REBOOK_NOTE = "你可以重新预约其他时间段参与实验。";
 export const COMPLETE_QUESTIONNAIRE_ARCHIVE_NOTE =
   "房间归档原因：问卷未完成。房间归档后仍可继续填写并提交问卷。";
@@ -122,12 +124,20 @@ export interface ArchiveCopy {
   showContact: boolean;
 }
 
+const REBOOK_DETAIL = "你可以重新预约其他时间段参与实验。";
+const SHOWUP_LOCK_DETAIL = "你已获得本次实验的到场费，无法再预约新的场次。";
+
+function withRebook(detail: string, canRebook: boolean): string {
+  return canRebook ? `${detail}${REBOOK_DETAIL}` : detail;
+}
+
 export function archiveCopyFor(
   reason: ArchiveReason | null,
   state: {
     selfExited: boolean;
     questionnaireCompleted: boolean;
     hasShowupPay: boolean;
+    canRebook: boolean;
   },
 ): ArchiveCopy {
   switch (reason) {
@@ -141,46 +151,61 @@ export function archiveCopyFor(
     case "not_full":
       return {
         title: "实验未能开始",
-        detail:
-          "等待时间结束时未达到两名参与者，本次实验未能开始，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+        detail: withRebook(
+          "等待时间结束时未达到两名参与者，本次实验未能开始，本次实验未完成，不产生报酬。",
+          state.canRebook,
+        ),
         showContact: false,
       };
     case "no_show":
       return {
         title: "实验未能开始",
-        detail:
-          "本次实验因参与者未按时到齐而未能开始，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+        detail: withRebook(
+          "本次实验因参与者未按时到齐而未能开始，本次实验未完成，不产生报酬。",
+          state.canRebook,
+        ),
         showContact: false,
       };
     case "no_start":
       return {
         title: "实验未能开始",
-        detail:
-          "双方均已进入，但等待时间结束时仍未开始实验，本次实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+        detail: withRebook(
+          "双方均已进入，但等待时间结束时仍未开始实验，本次实验未完成，不产生报酬。",
+          state.canRebook,
+        ),
         showContact: false,
       };
     case "abandoned":
       return state.selfExited
         ? {
             title: "你已退出实验",
-            detail:
-              "你已主动退出本次实验，本次实验未完成，无实验报酬。你可以重新预约。",
+            detail: withRebook(
+              "你已主动退出本次实验，本次实验未完成，无实验报酬。",
+              state.canRebook,
+            ),
             showContact: false,
           }
         : {
             title: "实验已中止",
-            detail:
-              "另一名参与者已主动退出，实验被迫中止，无法计算报酬。你可以重新预约其他时间段参与实验",
+            detail: withRebook(
+              "另一名参与者已主动退出，实验被迫中止，无法计算报酬。",
+              state.canRebook,
+            ),
             showContact: false,
           };
-    case "technical_abort":
+    case "technical_abort": {
+      const base = state.hasShowupPay
+        ? "因断线重连超时或系统故障，本次实验未完成，不产生基础费与绩效费。到场费按到场规则结算，你可以在报酬信息中查看金额、支付状态和支付截止日期。"
+        : "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。";
       return {
         title: "因技术原因中止",
-        detail: state.hasShowupPay
-          ? "因断线重连超时或系统故障，本次实验未完成，不产生基础费与绩效费。到场费按到场规则结算，你可以在报酬信息中查看金额、支付状态和支付截止日期。你可以重新预约其他时间段参与实验。"
-          : "因断线重连超时或系统故障，本次实验未完成，不产生报酬。本次也没有到场费，且无法计算基础费与绩效费。你可以重新预约其他时间段参与实验。",
+        detail:
+          state.hasShowupPay && !state.canRebook
+            ? `${base}${SHOWUP_LOCK_DETAIL}`
+            : withRebook(base, state.canRebook),
         showContact: true,
       };
+    }
     case "questionnaire_incomplete":
       return state.questionnaireCompleted
         ? {
@@ -198,15 +223,19 @@ export function archiveCopyFor(
     case "admin_aborted":
       return {
         title: "实验已中止",
-        detail:
-          "本次实验由主试中止，实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+        detail: withRebook(
+          "本次实验由主试中止，实验未完成，不产生报酬。",
+          state.canRebook,
+        ),
         showContact: false,
       };
     case "admin_cancelled":
       return {
         title: "实验已取消",
-        detail:
-          "本次实验在开始前已取消，实验未完成，不产生报酬。你可以重新预约其他时间段参与实验。",
+        detail: withRebook(
+          "本次实验在开始前已取消，实验未完成，不产生报酬。",
+          state.canRebook,
+        ),
         showContact: false,
       };
     default:
