@@ -15,12 +15,12 @@
 | 数据库密码文件 | `.review/jatos/jatos_db.env` |
 | API token 文件 | `.review/jatos/api_token.env` |
 
-`.review/` 位于独立仓库 `canvasOnlineGame/` 之外，不提交到 git。JATOS 端口为 `127.0.0.1:9000`，MariaDB 端口为 `127.0.0.1:3307`。安装包内自带 Temurin Java 11.0.29，使用 MySQL Connector/J 8.0.28，MariaDB 版本为 10.11.19。
+`.review/` 位于独立仓库 `moyo-online-exp/` 之外，不提交到 git。JATOS 端口为 `127.0.0.1:9000`，MariaDB 端口为 `127.0.0.1:3307`。安装包内自带 Temurin Java 11.0.29，使用 MySQL Connector/J 8.0.28，MariaDB 版本为 10.11.19。
 
 ## 一键启动
 
 ```bash
-cd /Users/mpxuann/Documents/research/projects/26-Moyo/canvasOnlineGame
+cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 ./scripts/jatos_dev_setup.sh
 ```
 
@@ -519,7 +519,7 @@ JATOS 原始结果边界：平台只控制自身保存的数据和导出。JATOS
 构建：
 
 ```bash
-cd /Users/mpxuann/Documents/research/projects/26-Moyo/canvasOnlineGame/frontend
+cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp/frontend
 npm install
 npm run build
 ```
@@ -537,7 +537,7 @@ npm run build
 5. 生成 GeneralMultiple study code，并输出 JSON。
 
 ```bash
-cd /Users/mpxuann/Documents/research/projects/26-Moyo/canvasOnlineGame
+cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 set -a
 . .review/jatos/api_token.env
 set +a
@@ -580,7 +580,7 @@ http://127.0.0.1:9000/publix/<studyCode>?rt=<token>&pid=<analysisCode>&base=http
 运行：
 
 ```bash
-cd /Users/mpxuann/Documents/research/projects/26-Moyo/canvasOnlineGame
+cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 uv run pytest tests/integration/test_jatos.py -q
 ```
 
@@ -608,7 +608,7 @@ rm -rf .review/jatos
 rm -rf .review/mariadb-data .review/mariadb-run .review/mariadb-server.log
 ```
 
-`.review/jatos` 包含安装文件、令牌和测试资产，`.review/mariadb-data` 包含测试数据库。两者都在 `canvasOnlineGame/` 仓库之外，不提交到 git。重跑 `scripts/jatos_dev_setup.sh` 会重新创建这些内容。
+`.review/jatos` 包含安装文件、令牌和测试资产，`.review/mariadb-data` 包含测试数据库。两者都在 `moyo-online-exp/` 仓库之外，不提交到 git。重跑 `scripts/jatos_dev_setup.sh` 会重新创建这些内容。
 
 ## JATOS 3.11.3 与 3.12.0 的已知差异
 
