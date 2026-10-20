@@ -9,6 +9,7 @@ export type SocketStatus = "connecting" | "open" | "closed";
 interface UseRoomSocketResult {
   status: SocketStatus;
   send: (message: ClientMessage) => boolean;
+  superseded: boolean;
 }
 
 const RECONNECT_DELAY_MS = 1500;
@@ -20,6 +21,7 @@ export function useRoomSocket(
   onMessage: (message: ServerMessage) => void,
 ): UseRoomSocketResult {
   const [status, setStatus] = useState<SocketStatus>("connecting");
+  const [superseded, setSuperseded] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const heartbeatTimerRef = useRef<number | null>(null);
@@ -39,6 +41,7 @@ export function useRoomSocket(
     if (!active) {
       return;
     }
+    setSuperseded(false);
     let disposed = false;
 
     const clearReconnect = () => {
@@ -77,13 +80,21 @@ export function useRoomSocket(
         onMessageRef.current(parsed as ServerMessage);
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (socketRef.current === socket) {
           socketRef.current = null;
         }
         if (disposed) return;
         setStatus("closed");
         clearReconnect();
+        if (event.code === 4000) {
+          if (heartbeatTimerRef.current !== null) {
+            window.clearInterval(heartbeatTimerRef.current);
+            heartbeatTimerRef.current = null;
+          }
+          setSuperseded(true);
+          return;
+        }
         reconnectTimerRef.current = window.setTimeout(connect, RECONNECT_DELAY_MS);
       };
 
@@ -116,5 +127,5 @@ export function useRoomSocket(
     };
   }, [roomId, active]);
 
-  return { status, send };
+  return { status, send, superseded };
 }

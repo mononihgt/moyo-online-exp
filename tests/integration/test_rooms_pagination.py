@@ -78,4 +78,23 @@ def test_room_list_pagination(server):
     invalid = admin.request("GET", "/admin/api/rooms?section=draft&offset=-1")
     assert invalid.status_code == 422
 
+
+@pytest.mark.integration
+def test_dashboard_upcoming_count_is_not_limited_to_preview(server):
+    admin = ApiClient(server.base_url).login_admin()
+    materials = _setup_materials(admin)
+    starts_at = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
+    for index in range(6):
+        room = _create_draft_room(
+            admin, materials, f"仪表盘即将开始 {index}", starts_at
+        )
+        admin.json("POST", f"/admin/api/rooms/{room['id']}/publish")
+
+    dashboard = admin.json("GET", "/admin/api/dashboard")
+    assert dashboard["upcomingCount"] == 6
+    assert len(dashboard["upcomingRooms"]) == 5
+    admin.close()
+
     admin.close()

@@ -1491,7 +1491,6 @@ class RuntimeManager:
             "capacity": 2,
             "phase": state["phase"],
             "role": role_row.role if role_row is not None else None,
-            "enterRequests": state["enter_requests"],
             "self": {
                 "startRequested": participant_id in state["start_requests"],
                 "instructionCompleted": bool(role_row and role_row.instruction_completed_at is not None),

@@ -1,6 +1,12 @@
 import pytest
 
-from conftest import ApiClient, create_consent, import_roster
+from conftest import (
+    ApiClient,
+    ServerHandle,
+    create_consent,
+    import_roster,
+    reset_database,
+)
 
 
 @pytest.mark.integration
@@ -53,3 +59,46 @@ def test_participant_csrf_and_login_errors(server):
     assert csrf_response.status_code == 403
     admin.close()
     client.close()
+
+
+@pytest.mark.integration
+def test_participant_login_limit_is_per_account():
+    reset_database()
+    server = ServerHandle(env_overrides={"LOGIN_RATE_LIMIT_ATTEMPTS": "2"})
+    server.start()
+    admin = None
+    participant_a = None
+    participant_b = None
+    try:
+        admin = ApiClient(server.base_url).login_admin()
+        import_roster(
+            admin,
+            [("限制甲", "13800000001"), ("限制乙", "13800000002")],
+        )
+        participant_a = ApiClient(server.base_url)
+        for _ in range(2):
+            allowed = participant_a.request(
+                "POST",
+                "/api/login",
+                json={"name": "限制甲", "phone": "13800000001"},
+            )
+            assert allowed.status_code == 200
+        blocked = participant_a.request(
+            "POST",
+            "/api/login",
+            json={"name": "限制甲", "phone": "13800000001"},
+        )
+        assert blocked.status_code == 429
+
+        participant_b = ApiClient(server.base_url)
+        other_account = participant_b.request(
+            "POST",
+            "/api/login",
+            json={"name": "限制乙", "phone": "13800000002"},
+        )
+        assert other_account.status_code == 200
+    finally:
+        for client in (participant_a, participant_b, admin):
+            if client is not None:
+                client.close()
+        server.stop()

@@ -178,7 +178,7 @@ export function ParticipantsPage() {
     }
     const ok = await confirm({
       title: "停用被试",
-      message: `确认停用 ${participant.name}？停用后该被试无法登录和报名。已有的实验记录、预约和付款数据不会被删除。`,
+      message: `确认停用 ${participant.name}？停用后该被试仍可登录，但不能预约新的场次。已有的实验记录、预约和付款数据不会被删除。`,
       confirmLabel: "停用",
       danger: true,
     });
@@ -205,7 +205,7 @@ export function ParticipantsPage() {
     if (editStatus === "disabled" && editing.status !== "disabled") {
       const ok = await confirm({
         title: "停用被试",
-        message: `保存后 ${editName.trim()} 将被停用，无法登录和报名。已有记录会保留。`,
+        message: `保存后 ${editName.trim()} 将被停用，仍可登录，但不能预约新的场次。已有记录会保留。`,
         confirmLabel: "停用并保存",
         danger: true,
       });

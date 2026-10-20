@@ -31,6 +31,7 @@ export interface DashboardData {
   pendingPayments: number;
   pendingQuestionnaireRooms: number;
   pendingQuestionnaireCount?: number;
+  upcomingCount: number;
   upcomingRooms: RoomSummary[];
   attentionRooms: RoomSummary[];
 }

@@ -10,6 +10,8 @@ from ..security import (
     issue_admin_session,
     issue_participant_session,
     new_csrf_token,
+    normalize_phone,
+    phone_hash,
     rate_limiter,
     verify_password,
 )
@@ -52,8 +54,13 @@ def clear_participant_cookies(response: Response) -> None:
 @router.post("/api/login")
 async def participant_login(payload: LoginRequest, request: Request, response: Response, db: DbSession):
     settings = get_settings()
+    raw_phone = payload.phone.strip()
+    try:
+        account_key = normalize_phone(raw_phone)
+    except ValueError:
+        account_key = raw_phone
     rate_limiter.check(
-        f"participant-login:{client_ip(request, settings)}",
+        f"participant-login:{phone_hash(account_key)}",
         settings.login_rate_limit_attempts,
         settings.login_rate_limit_seconds,
     )

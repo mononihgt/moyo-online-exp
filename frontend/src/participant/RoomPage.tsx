@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
 import type {
   ArchiveReason,
@@ -401,7 +401,7 @@ export default function RoomPage() {
     [navigate, roomId],
   );
 
-  const { status: socketStatus, send } = useRoomSocket(
+  const { status: socketStatus, send, superseded } = useRoomSocket(
     roomId,
     roomId !== "" && !terminal,
     handleMessage,
@@ -490,6 +490,37 @@ export default function RoomPage() {
 
   if (roomId === "") {
     return <Navigate to="/" replace />;
+  }
+
+  if (superseded) {
+    return (
+      <div className="exp-centered">
+        <div className="exp-end-card">
+          <p className="exp-kicker">实验已在另一个标签页打开</p>
+          <h1 className="exp-rest-title">请回到另一个标签页继续</h1>
+          <p className="exp-rest-info">
+            这个页面已经停止连接，避免两个页面互相影响。如果另一个标签页已经关闭，可以刷新本页继续。
+          </p>
+          <div className="p-btn-row exp-end-actions">
+            <button
+              type="button"
+              className="p-btn p-btn-primary"
+              data-testid="takeover-refresh"
+              onClick={() => window.location.reload()}
+            >
+              刷新这个页面
+            </button>
+            <Link
+              className="p-btn p-btn-secondary"
+              data-testid="takeover-home"
+              to="/"
+            >
+              返回首页
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const startRequested =

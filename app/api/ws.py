@@ -2,6 +2,7 @@ import json
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnected
 
 from ..config import get_settings
 from ..db import session_scope
@@ -58,7 +59,7 @@ async def room_socket(websocket: WebSocket):
                 await websocket.send_json({"type": "error", "code": "invalid_message", "message": "消息必须是对象"})
                 continue
             await runtime_manager.handle(participant, message)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, WebSocketDisconnected):
         await runtime_manager.disconnect(participant, websocket)
     except Exception:
         await runtime_manager.disconnect(participant, websocket)

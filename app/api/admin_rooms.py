@@ -14,7 +14,6 @@ from ..constants import (
     BOOKING_NO_SHOW,
     PARTICIPANT_COMPLETED,
     PARTICIPANT_DISABLED,
-    PAYMENT_PAID,
     QUESTIONNAIRE_COMPLETED,
     ROOM_ARCHIVED,
     ROOM_FULL,
@@ -48,7 +47,7 @@ from ..services.events import add_event
 from ..services.export import build_analysis_zip, build_room_export
 from ..services.jatos import build_questionnaire_url, jatos_config
 from ..services.locking import room_lock
-from ..services.payments import serialize_payment, upsert_payment
+from ..services.payments import serialize_payment
 from ..services.questionnaire_flow import complete_questionnaire
 from ..services.rooms import (
     add_config_revision,
@@ -230,7 +229,14 @@ async def patch_room(room_id: str, payload: RoomPatch, admin: AdminDep, db: DbSe
         await db.commit()
         room = await _get_room(db, room_id)
         room = await update_room(db, room, payload.model_dump(exclude_unset=True))
-        audit(db, admin, "room_updated", "room", room.id, payload.model_dump(exclude_unset=True))
+        audit(
+            db,
+            admin,
+            "room_updated",
+            "room",
+            room.id,
+            payload.model_dump(mode="json", exclude_unset=True),
+        )
         await db.commit()
     return {"room": await room_summary(db, room)}
 
@@ -490,16 +496,31 @@ async def room_action(room_id: str, payload: RoomAction, admin: AdminDep, db: Db
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "预约不存在")
             if booking.status not in (BOOKING_BOOKED, BOOKING_ATTENDED):
                 raise HTTPException(status.HTTP_409_CONFLICT, "预约当前状态不允许标记缺席")
-            booking.status = BOOKING_NO_SHOW
+            room_participant_query = await db.execute(
+                select(RoomParticipant).where(
+                    RoomParticipant.room_id == room.id,
+                    RoomParticipant.participant_id == payload.participant_id,
+                )
+            )
+            room_participant = room_participant_query.scalars().first()
+            if (
+                room_participant is not None
+                and room_participant.questionnaire_status == QUESTIONNAIRE_COMPLETED
+            ):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "参与者已完成问卷，不能改为缺席"
+                )
             payment_query = await db.execute(
                 select(Payment).where(
                     Payment.room_id == room.id,
                     Payment.participant_id == payload.participant_id,
                 )
             )
-            payment = payment_query.scalars().first()
-            if payment is not None and payment.status != PAYMENT_PAID:
-                await upsert_payment(db, room, payload.participant_id, booking=booking)
+            if payment_query.scalars().first() is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "参与者已有付款记录，不能改为缺席"
+                )
+            booking.status = BOOKING_NO_SHOW
             add_event(db, room, "admin_action", payload={"action": action, "participantId": payload.participant_id})
             audit(db, admin, "participant_marked_absent", "room", room.id, {"participantId": payload.participant_id})
             await db.commit()

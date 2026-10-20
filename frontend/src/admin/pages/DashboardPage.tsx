@@ -81,7 +81,7 @@ export function DashboardPage() {
           <div className="admin-grid admin-grid-4">
             <div className="admin-stat">
               <div className="admin-stat-label">即将开始</div>
-              <div className="admin-stat-value">{data.upcomingRooms.length}</div>
+              <div className="admin-stat-value">{data.upcomingCount}</div>
               <div className="admin-hint">可报名与已满且未开始的房间</div>
             </div>
             <div className="admin-stat">
@@ -188,13 +188,13 @@ export function DashboardPage() {
                 <AlertTriangle size={18} style={{ verticalAlign: "-3px", marginRight: "6px" }} />
                 需要关注
               </h2>
-              <span className="admin-hint">等待、对局与问卷阶段的房间</span>
+              <span className="admin-hint">等待、指导语、对局与问卷阶段的房间</span>
             </div>
             {data.attentionRooms.length === 0 ? (
               <EmptyState
                 icon={ClipboardList}
                 title="暂无需要关注的房间"
-                description="处于等待、对局或问卷阶段的房间会显示在这里。"
+                description="处于等待、指导语、对局或问卷阶段的房间会显示在这里。"
               />
             ) : (
               <div className="admin-table-wrap">

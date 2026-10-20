@@ -19,7 +19,11 @@ export default defineConfig({
       "/api": "http://127.0.0.1:8000",
       "/admin/api": "http://127.0.0.1:8000",
       "/media": "http://127.0.0.1:8000",
-      "/ws": { target: "ws://127.0.0.1:8000", ws: true },
+      "/ws": {
+        target: "ws://127.0.0.1:8000",
+        ws: true,
+        rewriteWsOrigin: true,
+      },
     },
   },
 });

@@ -538,7 +538,6 @@ export interface RoomStateMessage {
   capacity: number;
   phase: string | null;
   role: Role | null;
-  enterRequests: string[];
   self: {
     startRequested: boolean;
     instructionCompleted: boolean;

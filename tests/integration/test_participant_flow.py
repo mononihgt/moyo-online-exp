@@ -1,5 +1,8 @@
+import csv
+import io
 import time
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -325,9 +328,25 @@ def test_room_lifecycle_publish_close_and_config_revisions(server):
     draft_close = setup.admin.request("POST", f"/admin/api/rooms/{room_id}/close-booking")
     assert draft_close.status_code == 409
 
-    new_start = (datetime.now(timezone.utc) + timedelta(seconds=240)).isoformat().replace(
-        "+00:00", "Z"
+    new_start = (
+        (datetime.now(timezone.utc) + timedelta(seconds=240))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
+    configured_draft = setup.admin.json(
+        "PATCH",
+        f"/admin/api/rooms/{room_id}",
+        json={
+            "internalLabel": "生命周期房间-改期",
+            "startsAt": new_start,
+            "waitWindowSeconds": 55,
+        },
+    )["room"]
+    assert configured_draft["internalLabel"] == "生命周期房间-改期"
+    assert configured_draft["startsAt"] == new_start
+    assert configured_draft["waitWindowSeconds"] == 55
+
     published = setup.admin.json("POST", f"/admin/api/rooms/{room_id}/publish")["room"]
     assert published["status"] == "open"
     _assert_counts(setup.admin, draft=0, open=1, in_progress=0, unpaid=0, archived=0)
@@ -404,8 +423,64 @@ def test_room_lifecycle_publish_close_and_config_revisions(server):
     rebook = participant_b.json("POST", f"/api/rooms/{rebook_room['id']}/book")
     assert rebook["bookedCount"] == 1
 
+    expired_draft = setup.room(
+        starts_in_seconds=-60, publish=False, label="过期草稿房间"
+    )
+    rescheduled_start = (
+        (datetime.now(timezone.utc) + timedelta(hours=2))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    rescheduled = setup.admin.json(
+        "PATCH",
+        f"/admin/api/rooms/{expired_draft['id']}",
+        json={"startsAt": rescheduled_start},
+    )["room"]
+    assert rescheduled["status"] == "draft"
+    assert rescheduled["startsAt"] == rescheduled_start
+
     participant_a.close()
     participant_b.close()
+    setup.close()
+
+
+@pytest.mark.integration
+def test_canceled_booking_is_exported(server):
+    setup = Setup(server)
+    (participant,) = _login(
+        server, setup.admin, [("取消导出甲", "13700001051")]
+    )
+    room = setup.room(starts_in_seconds=180, label="取消导出房间")
+    participant.json("POST", f"/api/rooms/{room['id']}/book")
+    setup.admin.json("POST", f"/admin/api/rooms/{room['id']}/cancel")
+
+    exported = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}/export.json")
+    assert len(exported["participants"]) == 1
+    entry = exported["participants"][0]
+    assert entry["analysisCode"] is None
+    assert entry["role"] is None
+    assert entry["bookingStatus"] == "canceled"
+    assert entry["attendedAt"] is None
+    assert entry["instruction"] is None
+    assert entry["questionnaire"] is None
+
+    archive_response = setup.admin.request(
+        "GET", f"/admin/api/rooms/{room['id']}/analysis.zip"
+    )
+    assert archive_response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(archive_response.content)) as archive:
+        rows = list(
+            csv.DictReader(
+                io.StringIO(archive.read("participants.csv").decode("utf-8-sig"))
+            )
+        )
+    assert len(rows) == 1
+    assert rows[0]["analysisCode"] == ""
+    assert rows[0]["role"] == ""
+    assert rows[0]["bookingStatus"] == "canceled"
+
+    participant.close()
     setup.close()
 
 
@@ -529,6 +604,22 @@ def test_one_time_lock_questionnaire_wait_and_late_submission(server):
     payments = setup.admin.json("GET", "/admin/api/payments")["payments"]
     assert len(payments) == 2
     assert {item["status"] for item in payments} == {"pending"}
+
+    blocked_absent = setup.admin.request(
+        "POST",
+        f"/admin/api/rooms/{room['id']}/actions",
+        json={"action": "mark_absent", "participantId": me_b["id"]},
+    )
+    assert blocked_absent.status_code == 409
+    assert blocked_absent.json()["detail"] == "参与者已完成问卷，不能改为缺席"
+    unchanged_detail = setup.admin.json("GET", f"/admin/api/rooms/{room['id']}")
+    unchanged_booking = next(
+        item
+        for item in unchanged_detail["bookings"]
+        if item["participantId"] == me_b["id"]
+    )
+    assert unchanged_booking["status"] == "attended"
+
     experiment_b = next(
         item
         for item in participant_b.json("GET", "/api/my-experiments")["experiments"]

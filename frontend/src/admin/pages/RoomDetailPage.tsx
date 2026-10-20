@@ -91,6 +91,26 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "payments", label: "付款" },
 ];
 
+function findParticipantForBooking(
+  detail: RoomDetail,
+  booking: AdminBooking,
+): AdminRoomParticipant | undefined {
+  return detail.participants.find(
+    (item) =>
+      item.name === booking.name && item.phoneMasked === booking.phoneMasked,
+  );
+}
+
+function canMarkAbsent(detail: RoomDetail, booking: AdminBooking): boolean {
+  if (!["booked", "attended"].includes(booking.status)) return false;
+  const participant = findParticipantForBooking(detail, booking);
+  if (participant === undefined) return true;
+  if (participant.questionnaireStatus === "completed") return false;
+  return !detail.payments.some(
+    (payment) => payment.analysisCode === participant.analysisCode,
+  );
+}
+
 function findBookingForParticipant(
   detail: RoomDetail,
   participant: AdminRoomParticipant | { role: number; name: string },
@@ -240,7 +260,9 @@ export function RoomDetailPage() {
   const room = detail?.room ?? null;
   const roomStarted = room !== null && Date.parse(room.startsAt) <= Date.now();
   const canEdit =
-    room !== null && ["draft", "open", "full"].includes(room.status) && !roomStarted;
+    room !== null &&
+    (room.status === "draft" ||
+      (["open", "full"].includes(room.status) && !roomStarted));
   const lockStartsAt = room !== null && room.status !== "draft";
   const previewVersionId = room?.mapGroup.versionId ?? "";
   const optionMapGroup = useMemo(
@@ -406,9 +428,9 @@ export function RoomDetailPage() {
   async function markAbsent(booking: AdminBooking) {
     if (!room) return;
     const ok = await confirm({
-      title: "标记缺席",
-      message: `确认将 ${booking.name} 标记为缺席？缺席记录的付款金额为 0，已有数据会保留。`,
-      confirmLabel: "标记缺席",
+      title: "把预约改成缺席",
+      message: `确认把 ${booking.name} 的预约改成缺席？这个预约不会产生付款。`,
+      confirmLabel: "确认改为缺席",
       danger: true,
     });
     if (!ok) return;
@@ -418,7 +440,7 @@ export function RoomDetailPage() {
         action: "mark_absent",
         participantId: booking.participantId,
       });
-      notify("已标记缺席");
+      notify("预约已改为缺席");
       refresh();
     } catch (err) {
       notify(errorMessage(err), "error");
@@ -527,7 +549,7 @@ export function RoomDetailPage() {
     }
     const ok = await confirm({
       title: "停用参与者",
-      message: `确认停用 ${participant.name}？停用后无法登录和报名，已有实验记录、预约和付款数据会保留。`,
+      message: `确认停用 ${participant.name}？停用后仍可登录，但不能预约新的场次。已有实验记录、预约和付款数据会保留。`,
       confirmLabel: "停用",
       danger: true,
     });
@@ -1144,7 +1166,7 @@ export function RoomDetailPage() {
                               移除
                             </button>
                           ) : null}
-                          {!["no_show", "canceled"].includes(booking.status) ? (
+                          {canMarkAbsent(detail, booking) ? (
                             <button
                               type="button"
                               className="admin-btn admin-btn-ghost admin-btn-sm"

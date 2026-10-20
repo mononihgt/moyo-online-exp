@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..constants import SCHEMA_VERSION, TIMEZONE
+from ..constants import BOOKING_CANCELED, SCHEMA_VERSION, TIMEZONE
 from ..models import (
     Booking,
     GameTrial,
@@ -282,15 +282,23 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         "configRevisions": revisions,
     }
 
-    bookings_query = await db.execute(select(Booking).where(Booking.room_id == room.id))
-    bookings = {booking.participant_id: booking for booking in bookings_query.scalars().all()}
+    bookings_query = await db.execute(
+        select(Booking)
+        .where(Booking.room_id == room.id)
+        .order_by(Booking.created_at, Booking.id)
+    )
+    bookings: dict[str, Booking] = {}
+    for booking in bookings_query.scalars().all():
+        existing = bookings.get(booking.participant_id)
+        if existing is None or (
+            existing.status == BOOKING_CANCELED and booking.status != BOOKING_CANCELED
+        ):
+            bookings[booking.participant_id] = booking
     rows_query = await db.execute(
         select(RoomParticipant).where(RoomParticipant.room_id == room.id).order_by(RoomParticipant.role)
     )
     room_participants = list(rows_query.scalars().all())
-    participant_ids = {row.participant_id for row in room_participants}
-    if not participant_ids:
-        participant_ids = {booking.participant_id for booking in bookings.values() if booking.status != "canceled"}
+    participant_ids = {row.participant_id for row in room_participants} | set(bookings)
     responses_query = await db.execute(
         select(QuestionnaireResponse)
         .where(QuestionnaireResponse.room_id == room.id)

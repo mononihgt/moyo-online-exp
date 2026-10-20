@@ -196,7 +196,9 @@ def _me(client: ApiClient) -> dict:
 
 def _connect(server, participant: ApiClient):
     socket = WsClient(server, participant.cookie_value("moyo_participant"))
-    return socket, socket.recv_until("room_state")
+    state = socket.recv_until("room_state")
+    assert "enterRequests" not in state
+    return socket, state
 
 
 def _recv_while(ws: WsClient, predicate, description: str, timeout: float = 20, limit: int = 300) -> dict:
@@ -1610,3 +1612,68 @@ def test_idempotent_and_stale_submissions(server):
         "WHERE game_trial_id IN (SELECT id FROM game_trials WHERE room_id = %s) AND round = 1",
         (setup.room["id"],),
     )["count"] == 2
+
+
+def test_dashboard_attention_includes_instructions(server):
+    context = Context(server)
+    participant_a, participant_b = context.participants()
+    setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns=SPAWNS_2X2,
+        practice_cap=1,
+        practice_seconds=2,
+        formal_cap=1,
+        formal_seconds=2,
+        starts_in=2,
+        reconnect_window=10,
+    )
+    _book(setup, participant_a, participant_b)
+    ws_a, ws_b, _waiting_a, _waiting_b = _open_room(
+        server, participant_a, participant_b
+    )
+    _start_instructions(ws_a, ws_b)
+
+    dashboard = context.admin.json("GET", "/admin/api/dashboard")
+    attention_ids = {room["id"] for room in dashboard["attentionRooms"]}
+    assert setup.room["id"] in attention_ids
+    assert dashboard["roomCounts"]["instructions"] == 1
+
+    ws_a.close()
+    ws_b.close()
+    participant_a.close()
+    participant_b.close()
+    context.admin.close()
+
+
+def test_duplicate_connection_does_not_log_asgi_exception(server):
+    context = Context(server)
+    participant_a, participant_b = context.participants()
+    setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns=SPAWNS_2X2,
+        starts_in=120,
+        wait_window=600,
+        reconnect_window=10,
+    )
+    _book(setup, participant_a)
+
+    old = WsClient(server, participant_a.cookie_value("moyo_participant"))
+    old.recv_until("room_state")
+    new = WsClient(server, participant_a.cookie_value("moyo_participant"))
+    new.recv_until("room_state")
+    time.sleep(1.5)
+
+    log = server.log_tail(300)
+    assert "WebSocketDisconnected" not in log
+    assert "Exception in ASGI application" not in log
+
+    for socket in (old, new):
+        try:
+            socket.close()
+        except Exception:
+            pass
+    participant_a.close()
+    participant_b.close()
+    context.admin.close()

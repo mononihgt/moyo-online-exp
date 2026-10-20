@@ -4,6 +4,7 @@ from sqlalchemy import func, or_, select
 from ..config import get_settings
 from ..constants import (
     ROOM_FULL,
+    ROOM_INSTRUCTIONS,
     ROOM_OPEN,
     ROOM_PLAYING,
     ROOM_QUESTIONNAIRE,
@@ -51,6 +52,11 @@ async def dashboard(admin: AdminDep, db: DbSession):
     pending_questionnaires = await db.execute(
         select(func.count(Room.id)).where(Room.status == ROOM_QUESTIONNAIRE)
     )
+    upcoming_count = await db.execute(
+        select(func.count(Room.id)).where(
+            Room.status.in_((ROOM_OPEN, ROOM_FULL)), Room.starts_at > utcnow()
+        )
+    )
     upcoming = await db.execute(
         select(Room)
         .where(Room.status.in_((ROOM_OPEN, ROOM_FULL)), Room.starts_at > utcnow())
@@ -59,7 +65,11 @@ async def dashboard(admin: AdminDep, db: DbSession):
     )
     attention = await db.execute(
         select(Room)
-        .where(Room.status.in_((ROOM_WAITING, ROOM_PLAYING, ROOM_QUESTIONNAIRE)))
+        .where(
+            Room.status.in_(
+                (ROOM_WAITING, ROOM_INSTRUCTIONS, ROOM_PLAYING, ROOM_QUESTIONNAIRE)
+            )
+        )
         .order_by(Room.starts_at)
         .limit(10)
     )
@@ -69,6 +79,7 @@ async def dashboard(admin: AdminDep, db: DbSession):
         "roomCounts": counts,
         "pendingPayments": pending_payments.scalar_one(),
         "pendingQuestionnaireRooms": pending_questionnaires.scalar_one(),
+        "upcomingCount": upcoming_count.scalar_one(),
         "upcomingRooms": upcoming_items,
         "attentionRooms": attention_items,
         "pendingQuestionnaireCount": counts.get(ROOM_QUESTIONNAIRE, 0),

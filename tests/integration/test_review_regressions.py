@@ -326,11 +326,13 @@ def test_payment_override_note_and_paid_preserved(server):
     assert paid["status"] == "paid"
     assert paid["paidAt"] is not None
 
-    context.admin.json(
+    blocked_absent = context.admin.request(
         "POST",
         f"/admin/api/rooms/{setup.room['id']}/actions",
         json={"action": "mark_absent", "participantId": participant_id},
     )
+    assert blocked_absent.status_code == 409
+    assert _error_detail(blocked_absent) == "参与者已有付款记录，不能改为缺席"
     preserved = next(
         item
         for item in _payments_for_room(context.admin, setup.room["id"])
