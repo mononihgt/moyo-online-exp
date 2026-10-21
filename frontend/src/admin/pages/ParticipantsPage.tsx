@@ -268,7 +268,7 @@ export function ParticipantsPage() {
     }
     const ok = await confirm({
       title: "合并账号",
-      message: `确认把 ${mergeSource.name}（${mergeSource.phoneMasked}）合并到 ${mergeTarget.name}（${mergeTarget.phoneMasked}）？业务记录会迁移到目标账号，来源账号会保留为已合并记录。`,
+      message: `确认把 ${mergeSource.name}（${mergeSource.phoneMasked}）合并到 ${mergeTarget.name}（${mergeTarget.phoneMasked}）？所有信息、实验数据、问卷记录和报酬记录会迁移到目标账号，来源账号会保留为已合并状态。`,
       confirmLabel: "确认合并",
       danger: true,
     });
@@ -613,9 +613,12 @@ export function ParticipantsPage() {
       {mergeOpen ? (
         <Modal title="合并账号" onClose={() => setMergeOpen(false)}>
           <form onSubmit={submitMerge}>
+            <p className="admin-hint" style={{ margin: "0 0 16px", lineHeight: 1.7 }}>
+              当同一名参与者因为更换手机号或姓名登记不一致而出现两个账号时，可以把其中一个账号合并到另一个账号。合并后，两个手机号都能登录，所有信息、实验数据、问卷记录和报酬记录都会归到目标账号，来源账号保留为已合并状态。两个账号存在进行中的预约或同一场实验记录时不能合并。
+            </p>
             <Field
               label="来源账号"
-              hint="业务记录会从来源账号迁移到目标账号；来源账号保留为已合并记录。"
+              hint="所有信息、实验数据、问卷记录和报酬记录会从来源账号迁移到目标账号；来源账号保留为已合并状态。"
             >
               <div className="admin-toolbar">
                 <input
@@ -664,7 +667,7 @@ export function ParticipantsPage() {
 
             <Field
               label="目标账号"
-              hint="保留这个账号作为登录账号和业务记录归属。"
+              hint="保留这个账号作为登录账号，所有信息、实验数据、问卷记录和报酬记录都归到这个账号。"
             >
               <div className="admin-toolbar">
                 <input
@@ -739,7 +742,7 @@ export function ParticipantsPage() {
                 onChange={(event) => setMergeFinalName(event.target.value)}
               />
             </Field>
-            <Field label="合并原因" hint="必填，会写入管理端审计。">
+            <Field label="合并原因" hint="必填，会写入审计日志。">
               <textarea
                 className="admin-textarea"
                 value={mergeReason}
