@@ -7,7 +7,7 @@
 | 内容 | 默认位置 |
 | --- | --- |
 | JATOS 安装目录 | `.review/jatos/jatos_mac_aarch64_java` |
-| JATOS 安装包 | `.review/jatos/jatos_mac_aarch64_java.zip` |
+| JATOS 安装包缓存 | `.cache/jatos/jatos_mac_aarch64_java.zip` |
 | JATOS 日志 | `.review/jatos/jatos_mac_aarch64_java/logs/application.log` |
 | JATOS 临时目录 | `.review/jatos/tmp` |
 | MariaDB 数据目录 | `.review/mariadb-data` |
@@ -15,7 +15,7 @@
 | 数据库密码文件 | `.review/jatos/jatos_db.env` |
 | API token 文件 | `.review/jatos/api_token.env` |
 
-`.review/` 位于独立仓库 `moyo-online-exp/` 之外，不提交到 git。JATOS 端口为 `127.0.0.1:9000`，MariaDB 端口为 `127.0.0.1:3307`。安装包内自带 Temurin Java 11.0.29，使用 MySQL Connector/J 8.0.28，MariaDB 版本为 10.11.19。
+`.review/` 和 `.cache/` 位于独立仓库 `moyo-online-exp/` 之外，不提交到 git。`.review/` 保存本次测试的运行数据，测试结束后删除；`.cache/jatos/` 长期保存 JATOS 安装包，测试结束后保留，后续运行脚本直接复用，不需要重新下载。JATOS 端口为 `127.0.0.1:9000`，MariaDB 端口为 `127.0.0.1:3307`。安装包内自带 Temurin Java 11.0.29，使用 MySQL Connector/J 8.0.28，MariaDB 版本为 10.11.19。
 
 ## 一键启动
 
@@ -29,7 +29,7 @@ cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 1. 检测 `http://127.0.0.1:9000/ping`。返回 `pong` 时复用运行中的实例。
 2. 检测 MariaDB 的 TCP 连接。未运行时使用 `.review/mariadb-data` 初始化并启动 MariaDB。
 3. 创建或更新数据库 `jatos` 与用户 `jatos@127.0.0.1`。数据库密码优先取环境变量 `JATOS_DB_PASSWORD`，其次复用 `.review/jatos/jatos_db.env`；环境变量未设置且文件不存在时随机生成。密码写入权限为 `600` 的文件，不会出现在命令行参数中。
-4. 检测安装包与安装目录。存在且 `VERSION` 为 `3.11.3` 时直接复用；安装包缺失时下载 `jatos_mac_aarch64_java.zip`，支持断点续传，并用 `unzip -t` 校验。
+4. 检测安装包与安装目录。存在且 `VERSION` 为 `3.11.3` 时直接复用；需要解压时优先复用 `.cache/jatos/jatos_mac_aarch64_java.zip`，缓存缺失时才下载，支持断点续传，并用 `unzip -t` 校验。
 5. 写入 `conf/jatos.conf`，设置 HTTP 端口、数据库连接、临时目录和 API token 有效期。
 6. 启动 JATOS 并轮询 `/ping`，最多等待 180 秒。
 7. 用管理员账号登录后生成 API token，写入 `api_token.env`。已有 token 会先用 `GET /jatos/api/v1/admin/token` 验证，失效后自动重建。
@@ -39,7 +39,8 @@ cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `JATOS_ROOT` | `<项目根目录>/.review/jatos` | 安装包、配置、token 的存放目录 |
+| `JATOS_ROOT` | `<项目根目录>/.review/jatos` | 安装目录、配置、token 的存放目录，测试结束后删除 |
+| `JATOS_CACHE_DIR` | `<项目根目录>/.cache/jatos` | 安装包缓存目录，测试结束后保留 |
 | `JATOS_HOME` | `$JATOS_ROOT/jatos_mac_aarch64_java` | 解压后的 JATOS 目录 |
 | `JATOS_PORT` | `9000` | JATOS HTTP 端口 |
 | `JATOS_DB_PORT` | `3307` | MariaDB 端口 |
@@ -54,7 +55,7 @@ cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 | `MARIADB_RUN_DIR` | `<项目根目录>/.review/mariadb-run` | socket 和 pid 文件目录 |
 | `MARIADB_LOG` | `<项目根目录>/.review/mariadb-server.log` | MariaDB 错误日志 |
 
-本机当前 MariaDB 使用团队指定的 `jatos` 用户与密码，实际密码保存在 `.review/jatos/jatos_db.env`，权限为 `600`。MariaDB 只监听 `127.0.0.1:3307`，不使用 3306。
+脚本创建的 MariaDB 使用 `jatos` 用户，实际密码保存在 `.review/jatos/jatos_db.env`，权限为 `600`。MariaDB 只监听 `127.0.0.1:3307`，不使用 3306。
 
 脚本幂等：JATOS 已健康运行时只复用并检查 token。JATOS 进程存在但 `/ping` 不健康时，脚本直接报错并提示先停止进程，不会自动结束进程。
 
@@ -600,15 +601,16 @@ cd /Users/mpxuann/Documents/research/projects/26-Moyo/.review/jatos/jatos_mac_aa
   --protocol=TCP -h 127.0.0.1 -P 3307 -u root shutdown
 ```
 
-确认 9000 和 3307 端口没有监听进程后，删除本地运行目录：
+确认 9000 和 3307 端口没有监听进程后，删除本次测试的运行目录：
 
 ```bash
 cd /Users/mpxuann/Documents/research/projects/26-Moyo
-rm -rf .review/jatos
-rm -rf .review/mariadb-data .review/mariadb-run .review/mariadb-server.log
+rm -rf .review
 ```
 
-`.review/jatos` 包含安装文件、令牌和测试资产，`.review/mariadb-data` 包含测试数据库。两者都在 `moyo-online-exp/` 仓库之外，不提交到 git。重跑 `scripts/jatos_dev_setup.sh` 会重新创建这些内容。
+`.review/` 包含安装文件、令牌、测试资产、平台日志和测试数据库，测试结束后可以整体删除。`.cache/jatos/jatos_mac_aarch64_java.zip` 是约 120 MB 的安装包缓存，测试结束后必须保留；再次运行 `scripts/jatos_dev_setup.sh` 会复用缓存解压，不再下载。只有需要重新下载或升级 JATOS 时才删除缓存。
+
+`.review/` 和 `.cache/` 都在 `moyo-online-exp/` 仓库之外，不提交到 git。
 
 ## JATOS 3.11.3 与 3.12.0 的已知差异
 

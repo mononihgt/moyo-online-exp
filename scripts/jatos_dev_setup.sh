@@ -9,6 +9,7 @@ JATOS_VERSION="3.11.3"
 JATOS_ARCHIVE="jatos_mac_aarch64_java.zip"
 JATOS_DOWNLOAD_URL="https://github.com/JATOS/JATOS/releases/download/v${JATOS_VERSION}/${JATOS_ARCHIVE}"
 JATOS_ROOT="${JATOS_ROOT:-$PROJECT_ROOT/.review/jatos}"
+JATOS_CACHE_DIR="${JATOS_CACHE_DIR:-$PROJECT_ROOT/.cache/jatos}"
 JATOS_HOME="${JATOS_HOME:-$JATOS_ROOT/jatos_mac_aarch64_java}"
 JATOS_PORT="${JATOS_PORT:-9000}"
 JATOS_DB_PORT="${JATOS_DB_PORT:-3307}"
@@ -22,7 +23,7 @@ MARIADB_DATA_DIR="${MARIADB_DATA_DIR:-$PROJECT_ROOT/.review/mariadb-data}"
 MARIADB_RUN_DIR="${MARIADB_RUN_DIR:-$PROJECT_ROOT/.review/mariadb-run}"
 MARIADB_LOG="${MARIADB_LOG:-$PROJECT_ROOT/.review/mariadb-server.log}"
 BASE_URL="http://127.0.0.1:${JATOS_PORT}"
-ZIP_PATH="$JATOS_ROOT/$JATOS_ARCHIVE"
+ZIP_PATH="$JATOS_CACHE_DIR/$JATOS_ARCHIVE"
 DB_ENV_FILE="$JATOS_ROOT/jatos_db.env"
 TOKEN_ENV_FILE="$JATOS_ROOT/api_token.env"
 COOKIE_JAR="$JATOS_ROOT/.admin-cookies.txt"
@@ -127,9 +128,9 @@ download_archive() {
         log "复用已下载的 JATOS 安装包"
         return
     fi
-    mkdir -p "$JATOS_ROOT"
+    mkdir -p "$JATOS_CACHE_DIR"
     [ -f "$ZIP_PATH" ] || : > "$ZIP_PATH"
-    log "下载 JATOS ${JATOS_VERSION}（支持断点续传）"
+    log "下载 JATOS ${JATOS_VERSION} 到缓存目录 $JATOS_CACHE_DIR（支持断点续传）"
     local attempt=0 before after stalled=0
     while [ "$attempt" -lt 40 ]; do
         attempt=$((attempt + 1))
@@ -285,6 +286,7 @@ print_summary() {
     printf 'JATOS_APP_DIR=%s\n' "$JATOS_HOME"
     printf 'JATOS_PID=%s\n' "$jatos_pid"
     printf 'JATOS_LOG=%s\n' "$JATOS_HOME/logs/application.log"
+    printf 'JATOS_CACHE=%s\n' "$ZIP_PATH"
     if [ -n "$listener" ] && [ "$listener" != "$jatos_pid" ]; then
         printf 'LISTENING_PID=%s (端口 %s 上的进程与 RUNNING_PID 不同)\n' "$listener" "$JATOS_PORT"
     fi

@@ -62,7 +62,7 @@ FLUSH PRIVILEGES;
 SQL
 ```
 
-`.review/` 位于仓库之外，是测试过程目录，任务结束后删除。
+`.review/` 位于仓库之外，是测试过程目录，任务结束后删除。JATOS 安装包缓存在 `.cache/jatos/jatos_mac_aarch64_java.zip`（约 120 MB），任务结束后保留，后续测试直接复用，不需要重新下载。
 
 ### 配置
 
@@ -195,7 +195,7 @@ PLAYWRIGHT_CHANNEL（Python 浏览器测试，默认 chrome）
 CHROME_PATH（Node Playwright）
 ```
 
-测试过程文件写入上层目录 `.review/`，任务结束后删除。
+测试过程文件写入上层目录 `.review/`，任务结束后删除。JATOS 安装包缓存在上层目录 `.cache/jatos/`，不随测试数据删除。
 
 ## 数据与导出
 
