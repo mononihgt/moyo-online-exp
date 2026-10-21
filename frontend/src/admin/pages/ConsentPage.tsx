@@ -320,7 +320,6 @@ export function ConsentPage() {
                       <span className="admin-label" style={{ marginBottom: 0 }}>
                         Markdown 正文
                       </span>
-                      <span className="admin-hint">支持标题、列表、表格和图片链接。</span>
                     </div>
                     <textarea
                       className="admin-textarea"
