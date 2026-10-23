@@ -85,6 +85,13 @@ test("参与者在指导语中看到 GIF 动图", async ({
   }));
   expect(dimensions).toEqual({ complete: true, width: 16, height: 16 });
 
+  const renderedFrames = new Set<string>();
+  for (let index = 0; index < 6; index += 1) {
+    renderedFrames.add((await image.screenshot()).toString("base64"));
+    await page.waitForTimeout(50);
+  }
+  expect(renderedFrames.size).toBeGreaterThan(1);
+
   const download = await page.request.get(`${baseURL}/media/${assetId}`);
   expect(download.status()).toBe(200);
   expect(download.headers()["content-type"]).toContain("image/gif");
