@@ -375,7 +375,7 @@ export function InstructionsPage() {
     <div>
       <PageHeader
         title="指导语"
-        subtitle="指导语绑定已发布地图组，名称由组前缀与 A/B 角色自动生成。正文支持 Markdown，可插入已上传的图片资产。"
+        subtitle="指导语绑定已发布地图组，名称由组前缀与 A/B 角色自动生成。正文支持 Markdown，可插入已上传的图片资产，GIF 动图会保留动画。"
         actions={
           <button
             type="button"
@@ -668,7 +668,7 @@ export function InstructionsPage() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
                       hidden
                       onChange={(event) => {
                         const file = event.target.files?.[0];
@@ -704,7 +704,7 @@ export function InstructionsPage() {
                 <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
                   图片资产
                 </h3>
-                <span className="admin-hint">上传或选择图片后插入到光标位置。</span>
+                <span className="admin-hint">上传或选择图片后插入到光标位置，支持 PNG、JPEG、WebP 与 GIF。</span>
               </div>
               {mediaError ? <InlineNotice tone="error">{mediaError}</InlineNotice> : null}
               <div className="admin-media-strip">
@@ -749,7 +749,7 @@ export function InstructionsPage() {
                   </div>
                 ))}
                 {media.length === 0 && !mediaError ? (
-                  <div className="admin-hint">暂无图片资产。上传后可以插入到指导语。</div>
+                  <div className="admin-hint">暂无图片资产。上传 PNG、JPEG、WebP 或 GIF 后可以插入到指导语。</div>
                 ) : null}
               </div>
             </section>

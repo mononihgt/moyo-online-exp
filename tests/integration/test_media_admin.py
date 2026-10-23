@@ -32,6 +32,23 @@ def _image_bytes(fmt, *, size, color=(31, 119, 180), exif_orientation=None):
     return buffer.getvalue()
 
 
+def _animated_gif_bytes(*, size=(8, 8), durations=(40, 80, 120)):
+    frames = [
+        Image.new("RGB", size, (index * 60, 10, 10))
+        for index in range(len(durations))
+    ]
+    buffer = io.BytesIO()
+    frames[0].save(
+        buffer,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=list(durations),
+        loop=0,
+    )
+    return buffer.getvalue()
+
+
 def _upload(admin, data, *, filename, content_type="image/png", kind="map"):
     return admin.request(
         "POST",
@@ -160,13 +177,37 @@ def test_media_upload_formats_exif_and_limits(server):
     empty = _upload(admin, b"", filename="empty.png")
     assert empty.status_code == 400
     assert empty.json()["detail"] == "上传文件为空"
-    gif_data = io.BytesIO()
-    Image.new("RGB", (8, 8), (200, 10, 10)).save(gif_data, format="GIF")
-    gif = _upload(
-        admin, gif_data.getvalue(), filename="anim.gif", content_type="image/gif"
+    gif_data = _animated_gif_bytes()
+    gif = _asset(
+        admin,
+        gif_data,
+        filename="anim.gif",
+        content_type="image/gif",
+        kind="instruction-image",
     )
-    assert gif.status_code == 400
-    assert gif.json()["detail"] == "仅接受 PNG、JPEG、WebP 图片"
+    assert gif["contentType"] == "image/gif"
+    assert (gif["width"], gif["height"]) == (8, 8)
+    assert gif["sizeBytes"] == len(gif_data)
+    gif_download = admin.request("GET", f"/media/{gif['id']}")
+    assert gif_download.status_code == 200
+    assert gif_download.headers["content-type"].startswith("image/gif")
+    assert gif_download.content == gif_data
+    with Image.open(io.BytesIO(gif_download.content)) as stored:
+        assert stored.n_frames == 3
+        assert stored.info.get("loop") == 0
+        frame_durations = []
+        for index in range(stored.n_frames):
+            stored.seek(index)
+            frame_durations.append(stored.info.get("duration"))
+        assert frame_durations == [40, 80, 120]
+    gif_duplicate = _asset(
+        admin,
+        gif_data,
+        filename="copy.gif",
+        content_type="image/gif",
+        kind="instruction-image",
+    )
+    assert gif_duplicate["id"] == gif["id"]
     oversized = _upload(
         admin, b"0" * OVERSIZED_BYTES, filename="huge.png", content_type="image/png"
     )
@@ -174,6 +215,34 @@ def test_media_upload_formats_exif_and_limits(server):
     assert oversized.json()["detail"] == "图片超过大小限制"
 
     participant.close()
+    admin.close()
+
+
+@pytest.mark.integration
+def test_instruction_accepts_gif_and_renders_media_source(server):
+    admin = ApiClient(server.base_url).login_admin()
+    gif = _asset(
+        admin,
+        _animated_gif_bytes(),
+        filename="guide.gif",
+        content_type="image/gif",
+        kind="instruction-image",
+    )
+    profile = create_troop_profile(admin)
+    group = create_map_group(admin, profile["id"])
+    instruction = create_instruction(
+        admin,
+        group["id"],
+        1,
+        f"# 玩家一\n\n![演示动图](asset://{gif['id']})\n",
+        0,
+    )
+    rendered = admin.json("GET", f"/admin/api/instructions/{instruction['id']}")[
+        "instruction"
+    ]
+    assert f'src="/media/{gif["id"]}"' in rendered["contentHtml"]
+    assert "asset://" not in rendered["contentHtml"]
+    assert f"asset://{gif['id']}" in rendered["contentMarkdown"]
     admin.close()
 
 

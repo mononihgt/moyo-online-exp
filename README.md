@@ -218,7 +218,7 @@ CHROME_PATH（Node Playwright）
 - 管理员密码使用 Argon2。
 - 登录 cookie 为 HttpOnly、Secure（HTTPS）和 SameSite=Lax；管理端和参与者写操作校验 CSRF。
 - 登录和问卷接口限流。
-- 媒体文件通过鉴权路由访问；上传仅接受 PNG、JPEG、WebP，服务端重新编码并剥离 EXIF，不接受 SVG。地图单元格只接受 PNG 和 JPEG。
+- 媒体文件通过鉴权路由访问；上传接受 PNG、JPEG、WebP 和 GIF，PNG、JPEG、WebP 由服务端重新编码并剥离 EXIF，GIF 保留原始文件与动画数据，不接受 SVG。地图单元格只接受 PNG 和 JPEG。
 - 支付名单、报销清单和批量付款页面包含个人信息，只允许管理员访问并写入审计日志。
 - JATOS 原始结果可能保留受保护答案，需要单独保护 JATOS 管理权限、数据库和备份。
 - 公开 API 文档关闭。

@@ -15,6 +15,7 @@ _FORMAT_INFO = {
     "PNG": (".png", "image/png"),
     "JPEG": (".jpg", "image/jpeg"),
     "WEBP": (".webp", "image/webp"),
+    "GIF": (".gif", "image/gif"),
 }
 
 
@@ -29,16 +30,26 @@ def _process_image(data: bytes) -> tuple[bytes, str, str, int, int]:
     try:
         with Image.open(io.BytesIO(data)) as probe:
             source_format = probe.format
-            probe.verify()
+            width, height = probe.size
+            if source_format != "GIF":
+                probe.verify()
     except (UnidentifiedImageError, OSError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件不是有效图片") from exc
     if source_format not in _FORMAT_INFO:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅接受 PNG、JPEG、WebP 图片")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅接受 PNG、JPEG、WebP、GIF 图片")
+    if width <= 0 or height <= 0 or width * height > settings.max_image_pixels:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "图片像素尺寸超出限制")
+    if source_format == "GIF":
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+        except (UnidentifiedImageError, OSError) as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件不是有效图片") from exc
+        extension, content_type = _FORMAT_INFO[source_format]
+        return data, extension, content_type, width, height
     with Image.open(io.BytesIO(data)) as image:
         image = ImageOps.exif_transpose(image)
         width, height = image.size
-        if width <= 0 or height <= 0 or width * height > settings.max_image_pixels:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "图片像素尺寸超出限制")
         if image.mode not in ("RGB", "RGBA", "L"):
             image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
         clean = Image.new(image.mode, image.size)
