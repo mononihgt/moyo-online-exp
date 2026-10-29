@@ -20,6 +20,13 @@ import {
   type TrialInfoPlacement,
 } from "./trialInfo";
 
+function sameCells(left: number[], right: number[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 function hudTrialLabel(game: GameState, round: number): string {
   const turnCount = game.turnCount > 0 ? game.turnCount : 0;
   if (game.isPractice === true) {
@@ -41,6 +48,8 @@ export function TurnView({
   socketStatus,
   serverOffsetMs,
   submitted,
+  submittedCells,
+  selectionSyncKey,
   exitPending,
   canExit,
   onSubmit,
@@ -54,13 +63,16 @@ export function TurnView({
   socketStatus: SocketStatus;
   serverOffsetMs: number;
   submitted: boolean;
+  submittedCells: number[] | null;
+  selectionSyncKey: number;
   exitPending: boolean;
   canExit: boolean;
-  onSubmit: (cells: number[]) => void;
+  onSubmit: (cells: number[]) => boolean;
   onExit: () => void;
 }) {
   const now = useNow(250);
-  const [selected, setSelected] = useState<number[]>([]);
+  const [selected, setSelected] = useState<number[]>(() => submittedCells ?? []);
+  const [optimistic, setOptimistic] = useState<number[] | null>(null);
   const [trialInfo, setTrialInfo] = useState<TrialInfoPlacement | null>(null);
   const inHudRef = useRef(false);
   const socketActive = socketStatus === "open";
@@ -68,16 +80,40 @@ export function TurnView({
   const roundKey = `${game.trialIndex}:${game.round}`;
   const roleKey = role === 1 ? "player1" : "player2";
   const lastRemainingRef = useRef(game.turnSeconds);
+  const roundRef = useRef(roundKey);
+  const syncRef = useRef(selectionSyncKey);
 
   useEffect(() => {
-    setSelected([]);
-  }, [roundKey]);
+    if (syncRef.current !== selectionSyncKey) {
+      syncRef.current = selectionSyncKey;
+      roundRef.current = roundKey;
+      setSelected(submittedCells ?? []);
+      setOptimistic(null);
+      return;
+    }
+    if (roundRef.current !== roundKey) {
+      roundRef.current = roundKey;
+      setSelected([]);
+      setOptimistic(null);
+    }
+  }, [roundKey, selectionSyncKey, submittedCells]);
 
   useEffect(() => {
     if (result !== null) {
       setSelected([]);
+      setOptimistic(null);
     }
   }, [result]);
+
+  useEffect(() => {
+    if (
+      optimistic !== null &&
+      submittedCells !== null &&
+      sameCells(optimistic, submittedCells)
+    ) {
+      setOptimistic(null);
+    }
+  }, [optimistic, submittedCells]);
 
   const board: BoardState | null =
     result?.board ?? game.board ?? turn?.board ?? null;
@@ -100,9 +136,24 @@ export function TurnView({
     displayRemaining <= 5 ? "danger" : displayRemaining <= 10 ? "warning" : "normal";
   const partnerText = partner.online ? "另一名玩家在线" : "另一名玩家离线";
   const boardSelected = result !== null ? [] : selected;
-  const submittedView = result !== null || submitted;
   const autoSelectedBySelf =
     result !== null && result.autoSelected[roleKey] === true;
+  const baseline = optimistic ?? submittedCells;
+  const hasSubmitted = submitted || baseline !== null;
+  const dirty =
+    baseline === null
+      ? submitted && selected.length > 0
+      : !sameCells(selected, baseline);
+  const submitButtonLabel =
+    result !== null
+      ? autoSelectedBySelf
+        ? "已自动选择"
+        : "已提交"
+      : !hasSubmitted
+        ? "确认选择"
+        : dirty
+          ? "确认修改"
+          : "修改当前回合操作";
   const handleBoardLayout = useCallback((layout: GameBoardLayout) => {
     const placement = trialInfoPlacement(layout, inHudRef.current);
     inHudRef.current = placement.inHud;
@@ -121,7 +172,7 @@ export function TurnView({
     );
 
   const toggleCell = (index: number) => {
-    if (result !== null || submitted || !socketActive || exitPending) return;
+    if (result !== null || !socketActive || exitPending) return;
     setSelected((current) =>
       current.includes(index)
         ? current.filter((candidate) => candidate !== index)
@@ -132,14 +183,16 @@ export function TurnView({
   const canSubmit =
     selected.length > 0 &&
     result === null &&
-    !submitted &&
     socketActive &&
-    !exitPending;
+    !exitPending &&
+    (!hasSubmitted || dirty);
 
-  const submit = () => {
+  const submit = useCallback(() => {
     if (!canSubmit) return;
-    onSubmit(selected);
-  };
+    if (onSubmit(selected)) {
+      setOptimistic(selected);
+    }
+  }, [canSubmit, onSubmit, selected]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -157,11 +210,29 @@ export function TurnView({
       }
       if (!canSubmit) return;
       event.preventDefault();
-      onSubmit(selected);
+      submit();
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [canSubmit, onSubmit, selected]);
+  }, [canSubmit, submit]);
+
+  const hintText = exitPending
+    ? "正在退出实验，请稍候…"
+    : result !== null
+      ? autoSelectedBySelf
+        ? "已自动选择，等待下一回合。"
+        : "已提交，等待另一名参与者或回合结算。"
+      : !socketActive
+        ? "连接中断，正在重新连接…"
+        : !hasSubmitted
+          ? selected.length === 0
+            ? "至少选择一个格子"
+            : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`
+          : dirty
+            ? selected.length === 0
+              ? "至少选择一个格子"
+              : `已选择 ${selected.length} 个格子 · 空格键确认修改，右键取消选择`
+            : "已提交，可在另一名参与者提交前修改选择。";
 
   return (
     <>
@@ -235,13 +306,13 @@ export function TurnView({
             selected={boardSelected}
             warCells={warCells}
             flashKey={flashKey}
-            disabled={result !== null || submitted || !socketActive || exitPending}
+            disabled={result !== null || !socketActive || exitPending}
             topRightOverlay={
               trialInfo !== null && !trialInfo.inHud ? trialInfoBadge : null
             }
             onToggle={toggleCell}
             onClear={() => {
-              if (result !== null || submitted || !socketActive || exitPending) return;
+              if (result !== null || !socketActive || exitPending) return;
               setSelected([]);
             }}
             onLayout={handleBoardLayout}
@@ -254,24 +325,10 @@ export function TurnView({
               disabled={!canSubmit}
               onClick={submit}
             >
-              {submittedView
-                ? autoSelectedBySelf
-                  ? "已自动选择"
-                  : "已提交"
-                : "确认选择"}
+              {submitButtonLabel}
             </button>
             <p className="exp-hint" role="status">
-              {exitPending
-                ? "正在退出实验，请稍候…"
-                : autoSelectedBySelf
-                  ? "已自动选择，等待下一回合。"
-                  : submittedView
-                    ? "已提交，等待另一名参与者或回合结算。"
-                    : !socketActive
-                      ? "连接中断，正在重新连接…"
-                      : selected.length === 0
-                        ? "至少选择一个格子"
-                        : `已选择 ${selected.length} 个格子 · 空格键提交，右键取消选择`}
+              {hintText}
             </p>
           </div>
         </div>

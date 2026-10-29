@@ -130,6 +130,28 @@ def _save_state(room: Room, state: dict) -> None:
     room.runtime_state = copy.deepcopy(state)
 
 
+def _submission_msg_ids(entry: dict | None) -> list[str]:
+    if not entry:
+        return []
+    ids = entry.get("clientMsgIds")
+    ordered: list[str] = []
+    for item in ids if isinstance(ids, list) else []:
+        value = str(item)
+        if value and value not in ordered:
+            ordered.append(value)
+    latest = entry.get("clientMsgId")
+    if latest and str(latest) not in ordered:
+        ordered.append(str(latest))
+    return ordered
+
+
+def _submitted_cells(state: dict, role_key: str) -> list[int] | None:
+    entry = state["submissions"].get(role_key)
+    if not entry:
+        return None
+    return sorted(entry["cells"])
+
+
 def _board_payload(board) -> dict:
     return {"rows": board.rows, "cols": board.cols, "owners": list(board.owners), "soldiers": list(board.soldiers)}
 
@@ -619,6 +641,45 @@ class RuntimeManager:
         await db.commit()
         await self._notify_archived(db, room)
 
+    async def _upsert_turn_submission(
+        self,
+        db: AsyncSession,
+        trial: GameTrial,
+        row: RoomParticipant,
+        round_number: int,
+        cells: list[int],
+        client_msg_id: str,
+        submitted_at: datetime,
+    ) -> None:
+        existing = (
+            await db.execute(
+                select(TurnSubmission).where(
+                    TurnSubmission.game_trial_id == trial.id,
+                    TurnSubmission.room_participant_id == row.id,
+                    TurnSubmission.round == round_number,
+                    TurnSubmission.accepted.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(
+                TurnSubmission(
+                    game_trial_id=trial.id,
+                    room_participant_id=row.id,
+                    client_msg_id=client_msg_id,
+                    round=round_number,
+                    cells_json=cells,
+                    source=SELECTION_MANUAL,
+                    submitted_at=submitted_at,
+                    accepted=True,
+                )
+            )
+            return
+        existing.client_msg_id = client_msg_id
+        existing.cells_json = cells
+        existing.source = SELECTION_MANUAL
+        existing.submitted_at = submitted_at
+
     async def _handle_submit(self, db: AsyncSession, room: Room, participant, message: dict) -> None:
         if room.status != ROOM_PLAYING:
             await self._send_error(participant.id, room.id, "invalid_state", "当前不在对局中")
@@ -647,32 +708,30 @@ class RuntimeManager:
             return
         client_msg_id = str(message.get("clientMsgId") or secrets.token_hex(8))
         existing = state["submissions"].get(role_key)
-        if existing is not None:
-            if existing.get("clientMsgId") == client_msg_id:
-                await self._send_snapshot(db, room, participant.id)
-                return
-            await self._send_error(participant.id, room.id, "already_submitted", "本回合已提交")
+        applied_ids = _submission_msg_ids(existing)
+        if client_msg_id in applied_ids:
+            await self._send_snapshot(db, room, participant.id)
             return
         trial = await self._current_trial(db, room.id, state["trial_index"])
         if trial is None:
             await self._send_error(participant.id, room.id, "invalid_state", "实验数据异常，请返回首页重新进入")
             return
-        db.add(
-            TurnSubmission(
-                game_trial_id=trial.id,
-                room_participant_id=row.id,
-                client_msg_id=client_msg_id,
-                round=state["round"],
-                cells_json=valid_cells,
-                source=SELECTION_MANUAL,
-                accepted=True,
-            )
+        now = utcnow()
+        await self._upsert_turn_submission(
+            db,
+            trial=trial,
+            row=row,
+            round_number=state["round"],
+            cells=valid_cells,
+            client_msg_id=client_msg_id,
+            submitted_at=now,
         )
         state["submissions"][role_key] = {
             "cells": valid_cells,
             "source": SELECTION_MANUAL,
             "clientMsgId": client_msg_id,
-            "at": isoformat_utc(utcnow()),
+            "clientMsgIds": [*applied_ids, client_msg_id],
+            "at": isoformat_utc(now),
         }
         _save_state(room, state)
         if len(state["submissions"]) == 2:
@@ -1261,6 +1320,7 @@ class RuntimeManager:
                 "cells": cells,
                 "source": SELECTION_TIMEOUT,
                 "clientMsgId": client_msg_id,
+                "clientMsgIds": [client_msg_id],
                 "at": isoformat_utc(utcnow()),
             }
         _save_state(room, state)
@@ -1693,6 +1753,7 @@ class RuntimeManager:
             "turnDeadline": state["turn_deadline"],
             "restDeadline": state["rest_deadline"],
             "submitted": str(role_row.role) in state["submissions"],
+            "submittedCells": _submitted_cells(state, str(role_row.role)),
             "restReady": state["rest_ready"],
             "finalSoldiers": self._final_soldiers(state) if state["phase"] == PHASE_REST else None,
         }
@@ -1735,6 +1796,7 @@ class RuntimeManager:
                 "deadline": state["turn_deadline"],
                 "board": state["board"],
                 "submitted": str(row.role) in state["submissions"],
+                "submittedCells": _submitted_cells(state, str(row.role)),
                 "partnerSubmitted": other_role in state["submissions"],
             }
             if params is not None:
@@ -1787,6 +1849,7 @@ class RuntimeManager:
                     "deadline": state["turn_deadline"],
                     "board": state["board"],
                     "submitted": False,
+                    "submittedCells": None,
                     "partnerSubmitted": False,
                 }
                 if params is not None:

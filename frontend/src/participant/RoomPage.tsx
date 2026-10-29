@@ -104,6 +104,7 @@ function mergeTurn(current: GameState | null, message: TurnMessage): GameState {
     turnDeadline: message.deadline,
     restDeadline: null,
     submitted: message.submitted,
+    submittedCells: message.submittedCells,
     partnerSubmitted: message.partnerSubmitted,
     restReady: {},
     finalSoldiers: null,
@@ -137,6 +138,7 @@ function gameFromTrialStart(
     turnDeadline: null,
     restDeadline: null,
     submitted: false,
+    submittedCells: null,
     partnerSubmitted: false,
     restReady: {},
     finalSoldiers: null,
@@ -170,6 +172,7 @@ export default function RoomPage() {
   const [instructionCompleteSent, setInstructionCompleteSent] = useState(false);
   const [enterRequestedLocal, setEnterRequestedLocal] = useState(false);
   const [submittedLocal, setSubmittedLocal] = useState(false);
+  const [selectionSyncKey, setSelectionSyncKey] = useState(0);
   const [restSelfReadyLocal, setRestSelfReadyLocal] = useState(false);
   const [exitPending, setExitPending] = useState(false);
   const [terminal, setTerminal] = useState(false);
@@ -184,6 +187,7 @@ export default function RoomPage() {
       }
       if (message.type === "error") {
         if (message.code === "room_mismatch") return;
+        if (message.code === "stale_round") return;
         if (message.code === "no_active_room") {
           setRoomMissing(true);
           setTerminal(true);
@@ -247,6 +251,7 @@ export default function RoomPage() {
             setGame(snapshot);
             setTurn(null);
             setSubmittedLocal(snapshot.submitted);
+            setSelectionSyncKey((value) => value + 1);
             if (snapshot.phase === "rest") {
               setRest(deriveRestFromGame(snapshot));
               setRestSelfReadyLocal(false);
@@ -640,8 +645,8 @@ export default function RoomPage() {
     }
   };
 
-  const handleSubmitSelection = (cells: number[]) => {
-    if (game === null || exitPending) return;
+  const handleSubmitSelection = (cells: number[]): boolean => {
+    if (game === null || exitPending) return false;
     const clientMsgId =
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
@@ -654,14 +659,15 @@ export default function RoomPage() {
       cells,
       clientMsgId,
     });
-    if (sent) {
-      setSubmittedLocal(true);
-    } else {
+    if (!sent) {
       setError({
         code: "connection",
         message: "连接中断，正在重新连接。请稍后重试提交。",
       });
+      return false;
     }
+    setSubmittedLocal(true);
+    return true;
   };
 
   const handleRestReady = () => {
@@ -856,6 +862,8 @@ export default function RoomPage() {
           socketStatus={socketStatus}
           serverOffsetMs={serverOffsetMs}
           submitted={submittedLocal || game.submitted}
+          submittedCells={game.submittedCells}
+          selectionSyncKey={selectionSyncKey}
           exitPending={exitPending}
           canExit={canExit}
           onSubmit={handleSubmitSelection}

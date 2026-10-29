@@ -547,6 +547,7 @@ export interface GameState extends TrialParameters {
   turnDeadline: string | null;
   restDeadline: string | null;
   submitted: boolean;
+  submittedCells: number[] | null;
   partnerSubmitted: boolean;
   restReady: Record<string, boolean>;
   finalSoldiers: TrialScores | null;
@@ -599,6 +600,7 @@ export interface TurnMessage {
   deadline: string | null;
   board: BoardState;
   submitted: boolean;
+  submittedCells: number[] | null;
   partnerSubmitted: boolean;
   initialSoldiersA?: number;
   initialSoldiersB?: number;

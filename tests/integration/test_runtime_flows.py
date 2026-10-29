@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 from app.game.trials import generate_trial_plan
+from app.timeutil import isoformat_utc
 
 from conftest import (
     ApiClient,
@@ -556,6 +557,20 @@ def _game_trials(room_id: str) -> list[dict]:
     )
 
 
+def _round_submissions(room_id: str, round_number: int) -> list[dict]:
+    rows = fetch_all(
+        "SELECT ts.client_msg_id, ts.cells_json, ts.submitted_at, ts.source, rp.role "
+        "FROM turn_submissions ts "
+        "JOIN room_participants rp ON rp.id = ts.room_participant_id "
+        "WHERE ts.game_trial_id IN (SELECT id FROM game_trials WHERE room_id = %s) "
+        "AND ts.round = %s ORDER BY rp.role",
+        (room_id, round_number),
+    )
+    for row in rows:
+        row["cells_json"] = _json_value(row["cells_json"])
+    return rows
+
+
 def test_practice_and_formal_turn_settings(server):
     context = Context(server)
     participant_a, participant_b = context.participants()
@@ -679,14 +694,18 @@ def test_dual_submit_flags_and_animation_deadline(server):
         rest_seconds=1,
     )
     game = _start_game(server, setup, participant_a, participant_b)
+    assert game.turn_a["submittedCells"] is None
+    assert game.turn_b["submittedCells"] is None
 
     cells_a = _selection(game.turn_a["board"], game.role_a, False)
     _send_selection(game.ws_a, game.turn_a, cells_a, "partial")
     ack_a = game.ws_a.recv_until("turn")
     ack_b = game.ws_b.recv_until("turn")
     assert ack_a["submitted"] is True
+    assert ack_a["submittedCells"] == sorted(cells_a)
     assert ack_a["partnerSubmitted"] is False
     assert ack_b["submitted"] is False
+    assert ack_b["submittedCells"] is None
     assert ack_b["partnerSubmitted"] is True
     assert ack_a["round"] == 1
 
@@ -794,6 +813,54 @@ def test_timeout_auto_selects_and_resolves(server):
         (1, "timeout", 2),
         (2, "timeout", 2),
     ]
+
+
+def test_timeout_uses_latest_revision(server):
+    context = Context(server)
+    participant_a, participant_b = context.participants()
+    setup = context.make_room(
+        troop_rows=STAY_ROWS,
+        grid=(2, 2),
+        spawns=SPAWNS_2X2,
+        practice_cap=1,
+        practice_seconds=6,
+        formal_cap=1,
+        formal_seconds=6,
+        rest_seconds=1,
+    )
+    game = _start_game(server, setup, participant_a, participant_b)
+
+    cells_a = _selection(game.turn_a["board"], game.role_a, False)
+    _send_selection(game.ws_a, game.turn_a, cells_a, "revision-timeout-1")
+    ack_a = game.ws_a.recv_until("turn")
+    ack_b = game.ws_b.recv_until("turn")
+    assert ack_a["submittedCells"] == sorted(cells_a)
+
+    cells_a2 = sorted({*cells_a, (cells_a[0] + 2) % 4})
+    _send_selection(game.ws_a, ack_a, cells_a2, "revision-timeout-2")
+    revise_a = game.ws_a.recv_until("turn")
+    revise_b = game.ws_b.recv_until("turn")
+    assert revise_a["submittedCells"] == cells_a2
+    assert revise_b["partnerSubmitted"] is True
+
+    result_a = game.ws_a.recv_until("turn_result", timeout=10)
+    result_b = game.ws_b.recv_until("turn_result", timeout=10)
+    assert result_a["round"] == 1
+    assert result_b["round"] == 1
+    assert result_a["trialEnded"] is True
+    assert result_a["selections"][f"player{game.role_a}"] == cells_a2
+    assert result_a["selectionSources"][f"player{game.role_a}"] == "manual"
+    assert result_a["selectionSources"][f"player{game.role_b}"] == "timeout"
+    assert result_a["autoSelected"][f"player{game.role_a}"] is False
+    assert result_a["autoSelected"][f"player{game.role_b}"] is True
+
+    rows = _round_submissions(setup.room["id"], 1)
+    assert len(rows) == 2
+    row_a = next(item for item in rows if item["role"] == game.role_a)
+    row_b = next(item for item in rows if item["role"] == game.role_b)
+    assert row_a["source"] == "manual"
+    assert row_a["cells_json"] == cells_a2
+    assert row_b["source"] == "timeout"
 
 
 def test_annihilation_forces_rounds_in_practice_and_formal(server):
@@ -1316,8 +1383,10 @@ def test_restart_resets_playing_turn_clock(server):
     ack_a = game.ws_a.recv_until("turn")
     ack_b = game.ws_b.recv_until("turn")
     assert ack_a["submitted"] is True
+    assert ack_a["submittedCells"] == sorted(cells_a)
     assert ack_b["partnerSubmitted"] is True
     assert ack_b["submitted"] is False
+    assert ack_b["submittedCells"] is None
     time.sleep(2.0)
     game.ws_a.close()
     game.ws_b.close()
@@ -1329,6 +1398,7 @@ def test_restart_resets_playing_turn_clock(server):
     assert snapshot_a["game"]["phase"] == "turn"
     assert snapshot_a["game"]["round"] == 1
     assert snapshot_a["game"]["submitted"] is True
+    assert snapshot_a["game"]["submittedCells"] == sorted(cells_a)
     assert snapshot_a["game"]["partnerSubmitted"] is False
     assert snapshot_a["game"]["turnDeadline"] is None
 
@@ -1336,28 +1406,44 @@ def test_restart_resets_playing_turn_clock(server):
     assert snapshot_b["status"] == "playing"
     assert snapshot_b["game"]["turnDeadline"] is not None
     assert snapshot_b["game"]["submitted"] is False
+    assert snapshot_b["game"]["submittedCells"] is None
     assert snapshot_b["game"]["partnerSubmitted"] is True
     resumed_a = ws_a.recv_until("turn")
     resumed_b = ws_b.recv_until("turn")
     assert resumed_a["round"] == 1
     assert resumed_a["submitted"] is True
+    assert resumed_a["submittedCells"] == sorted(cells_a)
     assert resumed_a["partnerSubmitted"] is False
     assert resumed_b["submitted"] is False
+    assert resumed_b["submittedCells"] is None
     assert resumed_b["partnerSubmitted"] is True
     assert resumed_a["deadline"] == resumed_b["deadline"]
     assert _seconds_until(resumed_a["deadline"]) >= 5.0
 
-    cells_b = _selection(resumed_b["board"], game.role_b, False)
-    _send_selection(ws_b, resumed_b, cells_b, "after-restart")
+    cells_a2 = sorted({*cells_a, (cells_a[0] + 2) % 4})
+    _send_selection(ws_a, resumed_a, cells_a2, "after-restart-revision")
+    revise_a = ws_a.recv_until("turn")
+    revise_b = ws_b.recv_until("turn")
+    assert revise_a["submittedCells"] == cells_a2
+    assert revise_b["submittedCells"] is None
+    assert revise_b["partnerSubmitted"] is True
+    rows = _round_submissions(setup.room["id"], 1)
+    assert len(rows) == 1
+    assert rows[0]["role"] == game.role_a
+    assert rows[0]["cells_json"] == cells_a2
+
+    cells_b = _selection(revise_b["board"], game.role_b, False)
+    _send_selection(ws_b, revise_b, cells_b, "after-restart")
     result_a = ws_a.recv_until("turn_result")
     result_b = ws_b.recv_until("turn_result")
     assert result_a["round"] == 1
     assert result_a["trialEnded"] is False
-    assert result_a["selections"][f"player{game.role_a}"] == sorted(cells_a)
+    assert result_a["selections"][f"player{game.role_a}"] == cells_a2
     assert result_a["selections"][f"player{game.role_b}"] == sorted(cells_b)
     assert result_b["nextRound"] == 2
     ws_a.recv_until("turn")
     ws_b.recv_until("turn")
+    assert len(_round_submissions(setup.room["id"], 1)) == 2
 
     room = fetch_one("SELECT * FROM rooms WHERE id = %s", (setup.room["id"],))
     runtime_state = _json_value(room["runtime_state"])
@@ -1620,6 +1706,9 @@ def test_idempotent_and_stale_submissions(server):
     ack_a = game.ws_a.recv_until("turn")
     ack_b = game.ws_b.recv_until("turn")
     assert ack_a["submitted"] is True
+    assert ack_a["submittedCells"] == sorted(cells_a)
+    assert ack_b["submitted"] is False
+    assert ack_b["submittedCells"] is None
     assert ack_b["partnerSubmitted"] is True
 
     game.ws_a.send(
@@ -1632,12 +1721,31 @@ def test_idempotent_and_stale_submissions(server):
     )
     duplicate_state = game.ws_a.recv_until("room_state")
     assert duplicate_state["game"]["submitted"] is True
+    assert duplicate_state["game"]["submittedCells"] == sorted(cells_a)
     assert duplicate_state["game"]["partnerSubmitted"] is False
-    assert fetch_one(
-        "SELECT COUNT(*) AS count FROM turn_submissions "
-        "WHERE game_trial_id IN (SELECT id FROM game_trials WHERE room_id = %s) AND round = 1",
-        (setup.room["id"],),
-    )["count"] == 1
+    assert len(_round_submissions(setup.room["id"], 1)) == 1
+
+    cells_a2 = sorted({*cells_a, (cells_a[0] + 2) % 4})
+    game.ws_a.send(
+        "submit_selection",
+        roomId=game.room_id,
+        trialIndex=ack_a["trialIndex"],
+        round=ack_a["round"],
+        cells=cells_a2,
+        clientMsgId="dup-message-2",
+    )
+    modify_a = game.ws_a.recv_until("turn")
+    modify_b = game.ws_b.recv_until("turn")
+    assert modify_a["submitted"] is True
+    assert modify_a["submittedCells"] == cells_a2
+    assert modify_b["submitted"] is False
+    assert modify_b["submittedCells"] is None
+    assert modify_b["partnerSubmitted"] is True
+    rows = _round_submissions(setup.room["id"], 1)
+    assert len(rows) == 1
+    assert rows[0]["role"] == game.role_a
+    assert rows[0]["client_msg_id"] == "dup-message-2"
+    assert rows[0]["cells_json"] == cells_a2
 
     game.ws_a.send(
         "submit_selection",
@@ -1645,25 +1753,41 @@ def test_idempotent_and_stale_submissions(server):
         trialIndex=ack_a["trialIndex"],
         round=ack_a["round"],
         cells=cells_a,
-        clientMsgId="dup-message-2",
+        clientMsgId=message_id,
     )
-    error = _recv_while(
-        game.ws_a, lambda message: message.get("type") == "error", "重复提交错误"
-    )
-    assert error["code"] == "already_submitted"
+    replay_state = game.ws_a.recv_until("room_state")
+    assert replay_state["game"]["submittedCells"] == cells_a2
+    rows = _round_submissions(setup.room["id"], 1)
+    assert len(rows) == 1
+    assert rows[0]["client_msg_id"] == "dup-message-2"
+    assert rows[0]["cells_json"] == cells_a2
 
-    cells_b = _selection(ack_b["board"], game.role_b, False)
-    _send_selection(game.ws_b, ack_b, cells_b, "normal-submit")
+    cells_b = _selection(modify_b["board"], game.role_b, False)
+    _send_selection(game.ws_b, modify_b, cells_b, "normal-submit")
     result_a = game.ws_a.recv_until("turn_result")
     result_b = game.ws_b.recv_until("turn_result")
     assert result_b["round"] == result_a["round"]
-    assert result_a["selections"][f"player{game.role_a}"] == sorted(cells_a)
+    assert result_a["selections"][f"player{game.role_a}"] == cells_a2
     assert result_a["selections"][f"player{game.role_b}"] == sorted(cells_b)
     assert result_a["trialEnded"] is False
     next_turn_a = game.ws_a.recv_until("turn")
     next_turn_b = game.ws_b.recv_until("turn")
     assert next_turn_a["round"] == 2
     assert next_turn_b["round"] == 2
+    assert next_turn_a["submittedCells"] is None
+    assert next_turn_b["submittedCells"] is None
+
+    rows = _round_submissions(setup.room["id"], 1)
+    assert len(rows) == 2
+    row_a = next(item for item in rows if item["role"] == game.role_a)
+    assert row_a["client_msg_id"] == "dup-message-2"
+    assert row_a["cells_json"] == cells_a2
+    exported = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}/export.json")
+    trial = next(item for item in exported["trials"] if item["trialIndex"] == 0)
+    round_one = next(item for item in trial["turns"] if item["round"] == 1)
+    assert round_one["submittedAt"][f"player{game.role_a}"] == isoformat_utc(
+        row_a["submitted_at"]
+    )
 
     game.ws_b.send(
         "submit_selection",
@@ -1677,11 +1801,7 @@ def test_idempotent_and_stale_submissions(server):
         game.ws_b, lambda message: message.get("type") == "error", "过期回合错误"
     )
     assert stale["code"] == "stale_round"
-    assert fetch_one(
-        "SELECT COUNT(*) AS count FROM turn_submissions "
-        "WHERE game_trial_id IN (SELECT id FROM game_trials WHERE room_id = %s) AND round = 1",
-        (setup.room["id"],),
-    )["count"] == 2
+    assert len(_round_submissions(setup.room["id"], 1)) == 2
 
 
 def test_dashboard_attention_includes_instructions(server):

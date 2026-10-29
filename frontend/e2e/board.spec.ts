@@ -314,6 +314,15 @@ async function selectOwnBase(page: Page): Promise<void> {
   );
 }
 
+async function clickBoardAt(
+  page: Page,
+  xRatio: number,
+  yRatio: number,
+): Promise<void> {
+  const box = await canvasBox(page);
+  await page.mouse.click(box.x + box.width * xRatio, box.y + box.height * yRatio);
+}
+
 function parseClock(text: string): number {
   const [minutes, seconds] = text.trim().split(":").map(Number);
   return minutes * 60 + seconds;
@@ -759,7 +768,10 @@ test("练习回合棋盘使用灰色网格、描边棋子与红色交火边框",
   if (beforeBox === null) throw new Error("game canvas has no bounding box");
 
   await pageOne.getByTestId("confirm-selection").click();
-  await expect(pageOne.getByTestId("confirm-selection")).toHaveText("已提交");
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
+    "修改当前回合操作",
+  );
+  await expect(pageOne.getByTestId("confirm-selection")).toBeDisabled();
   const waitingColors = await canvasColors(pageOne);
   expect(waitingColors.selection).toBeGreaterThan(0);
   await expect(pageOne.getByTestId("hud-partner")).toContainText("另一名玩家在线");
@@ -846,6 +858,76 @@ test("练习回合棋盘使用灰色网格、描边棋子与红色交火边框",
   await contextTwo.close();
 });
 
+test("提交后可在搭档提交前修改选择", async ({
+  browser,
+  request,
+  baseURL,
+}) => {
+  test.setTimeout(180_000);
+  if (!baseURL) throw new Error("baseURL missing");
+  const entries = roster(["修改甲", "修改乙"], "1348100");
+  const { contextOne, contextTwo, pageOne, pageTwo } = await startGamePair(
+    browser,
+    request,
+    baseURL,
+    entries,
+    {
+      formalTrials: 1,
+      practiceTurnCap: 2,
+      practiceTurnSeconds: 60,
+      formalTurnCap: 2,
+      formalTurnSeconds: 60,
+      restSeconds: 30,
+    },
+  );
+
+  const buttonOne = pageOne.getByTestId("confirm-selection");
+  const buttonTwo = pageTwo.getByTestId("confirm-selection");
+
+  await Promise.all([selectTopRight(pageOne), selectTopRight(pageTwo)]);
+  await buttonOne.click();
+  await expect(buttonOne).toHaveText("修改当前回合操作");
+  await expect(buttonOne).toBeDisabled();
+  await expect(buttonOne).toHaveCSS("background-color", "rgb(229, 229, 234)");
+  await expect(buttonTwo).toHaveText("确认选择");
+  await expect(buttonTwo).toBeEnabled();
+  expect((await canvasColors(pageOne)).selection).toBeGreaterThan(0);
+
+  await clickBoardAt(pageOne, 0.25, 0.75);
+  await expect(buttonOne).toHaveText("确认修改");
+  await expect(buttonOne).toBeEnabled();
+  await expect(buttonOne).toHaveCSS("background-color", "rgb(0, 122, 255)");
+  await buttonOne.click();
+  await expect(buttonOne).toHaveText("修改当前回合操作");
+  await expect(buttonOne).toBeDisabled();
+
+  await pageOne.reload();
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
+    "修改当前回合操作",
+    { timeout: 30000 },
+  );
+  await expect(pageOne.getByTestId("confirm-selection")).toBeDisabled();
+  expect((await canvasColors(pageOne)).selection).toBeGreaterThan(0);
+
+  await clickBoardAt(pageOne, 0.75, 0.75);
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText("确认修改");
+  await pageOne.keyboard.press("Space");
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
+    "修改当前回合操作",
+  );
+  await expect(pageOne.getByTestId("confirm-selection")).toBeDisabled();
+
+  await pageTwo.getByTestId("confirm-selection").click();
+  await expect(pageOne.locator(".exp-hud-left")).toContainText(
+    PRACTICE_TURN_TWO,
+    { timeout: 3000 },
+  );
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText("确认选择");
+
+  await contextOne.close();
+  await contextTwo.close();
+});
+
 test("没有交火格时直接进入下一回合并开始完整倒计时", async ({
   browser,
   request,
@@ -924,7 +1006,9 @@ test("试次结束的交火回合后进入休息并显示完整休息倒计时",
 
   await Promise.all([selectTopRight(pageOne), selectTopRight(pageTwo)]);
   await pageOne.getByTestId("confirm-selection").click();
-  await expect(pageOne.getByTestId("confirm-selection")).toHaveText("已提交");
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
+    "修改当前回合操作",
+  );
   await pageTwo.getByTestId("confirm-selection").click();
 
   const warOne = pageOne.locator(".exp-war-cell");
@@ -976,7 +1060,9 @@ test("减少动态效果时交火边框保持静态红色", async ({
 
   await Promise.all([selectTopRight(pageOne), selectTopRight(pageTwo)]);
   await pageOne.getByTestId("confirm-selection").click();
-  await expect(pageOne.getByTestId("confirm-selection")).toHaveText("已提交");
+  await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
+    "修改当前回合操作",
+  );
   await pageTwo.getByTestId("confirm-selection").click();
 
   const warCell = pageOne.locator(".exp-war-cell");
