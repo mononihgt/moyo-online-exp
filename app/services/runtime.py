@@ -169,6 +169,10 @@ def _role_map(rows) -> dict[int, RoomParticipant]:
     return {row.role: row for row in rows}
 
 
+def _timeout_cell_index(seed: int, total: int) -> int:
+    return random.Random(seed).choice(range(total))
+
+
 def _trial_parameter_payload(params: dict) -> dict:
     return {
         "initialSoldiersA": params["soldiersA"],
@@ -1290,6 +1294,7 @@ class RuntimeManager:
         trial = await self._current_trial(db, room.id, state["trial_index"])
         rows = await self._room_participant_rows(db, room.id)
         board = _board_from_payload(state["board"])
+        total = len(board.owners)
         for row in rows:
             role_key = str(row.role)
             if role_key in state["submissions"]:
@@ -1300,10 +1305,7 @@ class RuntimeManager:
                 state["round"],
                 state["recovery_count"],
             ) + row.role * 7919
-            candidates = [index for index, owner in enumerate(board.owners) if owner == row.role]
-            if not candidates:
-                candidates = list(range(len(board.owners)))
-            cells = [random.Random(seed).choice(candidates)]
+            cells = [_timeout_cell_index(seed, total)]
             client_msg_id = f"timeout-{row.role}-{state['round']}-{state['turn_generation']}"
             db.add(
                 TurnSubmission(

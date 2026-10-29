@@ -1,5 +1,6 @@
 import io
 import json
+import random
 import time
 import uuid
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from app.game.trials import generate_trial_plan
+from app.game.trials import generate_trial_plan, seed_from_hex, turn_seed
 from app.timeutil import isoformat_utc
 
 from conftest import (
@@ -557,6 +558,15 @@ def _game_trials(room_id: str) -> list[dict]:
     )
 
 
+def _expected_timeout_selection(
+    room_id: str, role: int, trial_index: int, round_number: int, total: int
+) -> list[int]:
+    row = fetch_one("SELECT trial_plan_json FROM rooms WHERE id = %s", (room_id,))
+    plan = _json_value(row["trial_plan_json"])
+    seed = turn_seed(seed_from_hex(plan["seed"]), trial_index, round_number, 0) + role * 7919
+    return [random.Random(seed).choice(range(total))]
+
+
 def _round_submissions(room_id: str, round_number: int) -> list[dict]:
     rows = fetch_all(
         "SELECT ts.client_msg_id, ts.cells_json, ts.submitted_at, ts.source, rp.role "
@@ -766,7 +776,7 @@ def test_timeout_auto_selects_and_resolves(server):
         troop_rows=STAY_ROWS,
         grid=(2, 2),
         spawns=SPAWNS_2X2,
-        practice_cap=2,
+        practice_cap=1,
         practice_seconds=1,
         formal_cap=1,
         formal_seconds=1,
@@ -777,42 +787,36 @@ def test_timeout_auto_selects_and_resolves(server):
     result_a = game.ws_a.recv_until("turn_result", timeout=10)
     result_b = game.ws_b.recv_until("turn_result", timeout=10)
     assert result_a["round"] == 1
+    assert result_a["trialIndex"] == 0
     assert result_a["autoSelected"] == {"player1": True, "player2": True}
     assert result_a["selectionSources"] == {"player1": "timeout", "player2": "timeout"}
-    assert result_a["selections"]["player1"] == [SPAWNS_2X2["A"]]
-    assert result_a["selections"]["player2"] == [SPAWNS_2X2["B"]]
-    assert result_a["warLocation"] == []
-    assert result_a["resultDisplayMs"] == 0
-    assert result_a["nextRound"] == 2
-    assert _seconds_until(result_a["deadline"]) <= 1.6
+    total = setup.rows * setup.cols
+    expected = {
+        f"player{role}": _expected_timeout_selection(setup.room["id"], role, 0, 1, total)
+        for role in (1, 2)
+    }
+    assert result_a["selections"] == expected
+    for cells in result_a["selections"].values():
+        assert len(cells) == 1
+        assert 0 <= cells[0] < total
+    assert result_b["selections"] == expected
     assert result_b["round"] == 1
-
-    turn_a = game.ws_a.recv_until("turn")
-    turn_b = game.ws_b.recv_until("turn")
-    assert turn_a["round"] == 2
-    assert turn_b["round"] == 2
-
-    result_a = game.ws_a.recv_until("turn_result", timeout=10)
-    result_b = game.ws_b.recv_until("turn_result", timeout=10)
-    assert result_a["round"] == 2
     assert result_a["trialEnded"] is True
-    assert result_a["autoSelected"] == {"player1": True, "player2": True}
-    assert result_a["selectionSources"] == {"player1": "timeout", "player2": "timeout"}
+    assert result_a["resultDisplayMs"] == (1000 if result_a["warLocation"] else 0)
+
     state_a, rest_a = _receive_rest(game.ws_a)
     state_b, rest_b = _receive_rest(game.ws_b)
     assert state_a["game"]["phase"] == "rest"
+    assert state_b["game"]["phase"] == "rest"
     assert rest_a["nextTrialIndex"] == 1
+    assert rest_b["nextTrialIndex"] == 1
 
-    submissions = fetch_all(
-        "SELECT round, source, COUNT(*) AS count FROM turn_submissions "
-        "WHERE game_trial_id IN (SELECT id FROM game_trials WHERE room_id = %s) "
-        "GROUP BY round, source ORDER BY round",
-        (setup.room["id"],),
-    )
-    assert [(row["round"], row["source"], row["count"]) for row in submissions] == [
-        (1, "timeout", 2),
-        (2, "timeout", 2),
-    ]
+    submissions = _round_submissions(setup.room["id"], 1)
+    assert len(submissions) == 2
+    assert {row["role"] for row in submissions} == {1, 2}
+    for row in submissions:
+        assert row["source"] == "timeout"
+        assert row["cells_json"] == expected[f"player{row['role']}"]
 
 
 def test_timeout_uses_latest_revision(server):
