@@ -7,10 +7,12 @@ interface SavedMapGroup {
   rows: number;
   cols: number;
   spawns: { A: number; B: number };
+  factors: Record<string, string>;
   maps: {
     slot: string;
     cells: (string | null)[];
     colors: (string | null)[];
+    landmarkCells: number[];
   }[];
 }
 
@@ -79,6 +81,12 @@ test("调整尺寸后出生格与选中格按行列重映射并持久化", async
   await expect(page.getByText("出生格 B · 31", { exact: true })).toBeVisible();
   await expect(page.getByText("选中格 29", { exact: true })).toBeVisible();
 
+  await page.getByTestId("map-group-mark-landmark").click();
+  await expect(page.getByText("地标 1 格", { exact: true })).toBeVisible();
+  await page.getByTestId("map-group-add-factor").click();
+  await page.getByTestId("map-group-factor-key-0").fill("landmark");
+  await page.getByTestId("map-group-factor-value-0").fill("present");
+
   const createdResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith("/admin/api/map-groups") &&
@@ -99,6 +107,8 @@ test("调整尺寸后出生格与选中格按行列重映射并持久化", async
   expect(saved.mapGroup.rows).toBe(4);
   expect(saved.mapGroup.cols).toBe(8);
   expect(saved.mapGroup.spawns).toEqual({ A: 19, B: 31 });
+  expect(saved.mapGroup.factors).toEqual({ landmark: "present" });
+  expect(saved.mapGroup.maps[0].landmarkCells).toEqual([29]);
 });
 
 test("批量选择格子设置颜色、上传图片并恢复白色", async ({

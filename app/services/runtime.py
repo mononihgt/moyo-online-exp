@@ -8,11 +8,10 @@ from datetime import datetime, timedelta
 
 from fastapi import WebSocket
 from sqlalchemy import case, or_, select
-
-from ..config import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketDisconnect
 
+from ..config import get_settings
 from ..constants import (
     ARCHIVE_ABANDONED,
     ARCHIVE_TECHNICAL_ABORT,
@@ -20,15 +19,17 @@ from ..constants import (
     BOOKING_BOOKED,
     END_REASON_ANNIHILATION,
     END_REASON_TURN_LIMIT,
+    ENGINE_MECHANICS,
+    ENGINE_VERSION,
     MAP_MODE_BOTH,
     MAP_SLOT_BOTH,
     MAP_SLOT_BY_ROLE,
+    PAYMENT_SOURCE_COMPUTED,
     PHASE_INSTRUCTIONS,
     PHASE_QUESTIONNAIRE,
     PHASE_REST,
     PHASE_TURN,
     PHASE_WAITING,
-    PAYMENT_SOURCE_COMPUTED,
     QUESTIONNAIRE_COMPLETED,
     QUESTIONNAIRE_IN_PROGRESS,
     QUESTIONNAIRE_NOT_STARTED,
@@ -47,8 +48,8 @@ from ..constants import (
 from ..db import session_scope
 from ..game.engine import (
     Board,
+    annihilation_result,
     initial_board,
-    player_without_territory,
     resolve_forced_turn,
     resolve_turn,
     total_soldiers,
@@ -787,6 +788,8 @@ class RuntimeManager:
                 "sourceIndex": source_index,
             },
             seed=seed_hex,
+            engine_version=str(ENGINE_VERSION),
+            mechanics_json=dict(ENGINE_MECHANICS),
             initial_state_json=_board_payload(board),
             started_at=utcnow(),
         )
@@ -798,6 +801,8 @@ class RuntimeManager:
                 round=0,
                 turn_seed=None,
                 selections_json={"player1": [], "player2": []},
+                pre_combat_policy_json={"player1": [], "player2": []},
+                movements_json={"player1": [], "player2": []},
                 policy_json={"player1": [], "player2": []},
                 board_json=_board_payload(board),
                 war_json={"location": []},
@@ -875,6 +880,14 @@ class RuntimeManager:
                 round=round_number,
                 turn_seed=seed_to_hex(seed),
                 selections_json={"player1": submission_a["cells"], "player2": submission_b["cells"]},
+                pre_combat_policy_json={
+                    "player1": list(resolution.pre_combat_policy_p1),
+                    "player2": list(resolution.pre_combat_policy_p2),
+                },
+                movements_json={
+                    "player1": list(resolution.movements_p1),
+                    "player2": list(resolution.movements_p2),
+                },
                 policy_json={
                     "player1": list(resolution.soldier_policy_p1),
                     "player2": list(resolution.soldier_policy_p2),
@@ -936,15 +949,15 @@ class RuntimeManager:
             "resultDisplayMs": result_animation_ms,
             **_trial_parameter_payload(params),
         }
-        without_territory = player_without_territory(resolution.board)
-        if without_territory is not None:
+        annihilated, annihilation_winner = annihilation_result(resolution.board)
+        if annihilated:
             result["trialEnded"] = True
             await self._finalize_trial(
                 db,
                 room,
                 state,
                 final_board=resolution.board,
-                winner=3 - without_territory,
+                winner=annihilation_winner,
                 end_reason=END_REASON_ANNIHILATION,
                 end_turn=round_number,
                 result_animation_ms=result_animation_ms,
@@ -1021,6 +1034,14 @@ class RuntimeManager:
                         round=round_number,
                         turn_seed=seed_to_hex(seed),
                         selections_json=state["last_real_selections"],
+                        pre_combat_policy_json={
+                            "player1": list(resolution.pre_combat_policy_p1),
+                            "player2": list(resolution.pre_combat_policy_p2),
+                        },
+                        movements_json={
+                            "player1": list(resolution.movements_p1),
+                            "player2": list(resolution.movements_p2),
+                        },
                         policy_json={
                             "player1": list(resolution.soldier_policy_p1),
                             "player2": list(resolution.soldier_policy_p2),

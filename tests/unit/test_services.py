@@ -36,7 +36,7 @@ def test_update_archive_snapshot_reason_preserves_other_fields():
 
     room = Room()
     room.archive_snapshot_json = {
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "createdAt": "2026-10-21T00:00:00Z",
         "room": {
             "archiveReason": "abandoned",
@@ -44,7 +44,7 @@ def test_update_archive_snapshot_reason_preserves_other_fields():
         },
     }
     _update_archive_snapshot_reason(room, "technical_abort")
-    assert room.archive_snapshot_json["schemaVersion"] == 5
+    assert room.archive_snapshot_json["schemaVersion"] == 6
     assert room.archive_snapshot_json["createdAt"] == "2026-10-21T00:00:00Z"
     assert room.archive_snapshot_json["room"]["archiveReason"] == "technical_abort"
     assert room.archive_snapshot_json["room"]["internalLabel"] == "保留字段"
@@ -236,6 +236,54 @@ def test_validate_ab_mode_accepts_matching_prefix():
         "中心争夺-2*2-高收益-B",
     ]
     assert [item["slot"] for item in data["maps"]] == ["A", "B"]
+
+
+def test_validate_map_group_accepts_factors_and_landmark_cells():
+    payload = _both_payload(
+        factors={"landmark": "present", "orientation": "horizontal"}
+    )
+    payload["maps"][0]["landmark_cells"] = [3, 0]
+    data = validate_map_group_payload(payload, {}, 1)
+    assert data["factors"] == {
+        "landmark": "present",
+        "orientation": "horizontal",
+    }
+    assert data["maps"][0]["landmarkCells"] == [0, 3]
+
+
+def test_validate_map_group_rejects_invalid_factors_and_landmarks():
+    payload = _both_payload(factors={" ": "present"})
+    with pytest.raises(MapGroupValidationError, match="分析因素的名称"):
+        validate_map_group_payload(payload, {}, 1)
+
+    payload = _both_payload(factors={"landmark": ""})
+    with pytest.raises(MapGroupValidationError, match="分析因素的取值"):
+        validate_map_group_payload(payload, {}, 1)
+
+    payload = _both_payload()
+    payload["maps"][0]["landmark_cells"] = [0, 0]
+    with pytest.raises(MapGroupValidationError, match="地标格不能重复"):
+        validate_map_group_payload(payload, {}, 1)
+
+    payload = _both_payload()
+    payload["maps"][0]["landmark_cells"] = [4]
+    with pytest.raises(MapGroupValidationError, match="地标格索引越界"):
+        validate_map_group_payload(payload, {}, 1)
+
+
+def test_map_group_content_hash_includes_factors_and_landmarks():
+    payload = _both_payload(factors={"landmark": "present"})
+    payload["maps"][0]["landmark_cells"] = [0, 3]
+    data = validate_map_group_payload(payload, {}, 1)
+    data["troop_profile_version_id"] = "profile-version"
+    base = map_group_content_hash(data)
+
+    changed_factors = dict(data, factors={"landmark": "absent"})
+    assert map_group_content_hash(changed_factors) != base
+
+    changed_landmarks = dict(data)
+    changed_landmarks["maps"] = [dict(data["maps"][0], landmarkCells=[1])]
+    assert map_group_content_hash(changed_landmarks) != base
 
 
 def test_validate_rejects_unknown_mode():

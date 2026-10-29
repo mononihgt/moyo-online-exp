@@ -3,6 +3,7 @@ import pytest
 from app.game import engine
 from app.game.engine import (
     Board,
+    annihilation_result,
     initial_board,
     player_without_territory,
     resolve_forced_turn,
@@ -319,17 +320,46 @@ def test_resolve_forced_turn_handles_both_sides_empty():
 def test_player_without_territory_and_total_soldiers():
     board = Board(rows=2, cols=3, owners=(1, 1, 0, 2, 0, 0), soldiers=(3, 4, 0, 5, 0, 0))
     assert player_without_territory(board) is None
+    assert annihilation_result(board) == (False, None)
     assert total_soldiers(board, 1) == 7
     assert total_soldiers(board, 2) == 5
 
     board = Board(rows=2, cols=3, owners=(0, 1, 0, 0, 0, 0), soldiers=(0, 4, 0, 0, 0, 0))
     assert player_without_territory(board) == 2
+    assert annihilation_result(board) == (True, 1)
 
     board = Board(rows=2, cols=3, owners=(0, 0, 0, 2, 0, 0), soldiers=(0, 0, 0, 6, 0, 0))
     assert player_without_territory(board) == 1
+    assert annihilation_result(board) == (True, 2)
 
     board = Board(rows=2, cols=3, owners=(0, 0, 0, 0, 0, 0), soldiers=(0, 0, 0, 0, 0, 0))
     assert player_without_territory(board) is None
+    assert annihilation_result(board) == (True, None)
+
+
+def test_resolve_turn_records_pre_combat_policy_and_movements():
+    board = initial_board(3, 3, 0, 8, 10, 10)
+    result = resolve_turn(
+        board,
+        [4],
+        [8],
+        seed=7,
+        base_a_index=0,
+        base_b_index=8,
+        reinforcement_a=[0] * 9,
+        reinforcement_b=[0] * 9,
+    )
+    assert len(result.pre_combat_policy_p1) == 9
+    assert len(result.pre_combat_policy_p2) == 9
+    assert sum(result.pre_combat_policy_p1) == 10
+    assert sum(result.pre_combat_policy_p2) == 10
+    assert result.movements_p1
+    assert result.movements_p2
+    for movement in result.movements_p1:
+        assert set(movement) == {"from", "to", "soldiers"}
+        assert movement["soldiers"] > 0
+    assert sum(movement["soldiers"] for movement in result.movements_p1) == 10
+    assert sum(movement["soldiers"] for movement in result.movements_p2) == 10
 
 
 def test_resolve_turn_rejects_invalid_inputs():

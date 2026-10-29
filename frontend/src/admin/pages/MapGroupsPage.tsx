@@ -45,6 +45,12 @@ import { MAP_GROUP_MODE_LABELS, MAP_SLOT_LABELS } from "../labels";
 type Selection = string | "new" | null;
 type SlotCells = Record<MapSlot, (string | null)[]>;
 type SlotColors = Record<MapSlot, (string | null)[]>;
+type SlotFlags = Record<MapSlot, boolean[]>;
+
+interface FactorRow {
+  key: string;
+  value: string;
+}
 
 interface MapGroupFormState {
   mode: MapGroupMode;
@@ -54,8 +60,10 @@ interface MapGroupFormState {
   gridCols: number;
   description: string;
   factorLevel: string;
+  factors: FactorRow[];
   cells: SlotCells;
   colors: SlotColors;
+  landmarks: SlotFlags;
   activeSlot: MapSlot;
   spawnA: number;
   spawnB: number;
@@ -99,6 +107,46 @@ function emptySlotCells(total: number): SlotCells {
     A: emptyCells(total),
     B: emptyCells(total),
   };
+}
+
+function emptyFlags(total: number): boolean[] {
+  return Array.from({ length: total }, () => false);
+}
+
+function emptySlotFlags(total: number): SlotFlags {
+  return {
+    Both: emptyFlags(total),
+    A: emptyFlags(total),
+    B: emptyFlags(total),
+  };
+}
+
+function normalizeFlags(source: number[] | undefined, total: number): boolean[] {
+  const result = emptyFlags(total);
+  if (!source) return result;
+  for (const index of source) {
+    if (Number.isInteger(index) && index >= 0 && index < total) {
+      result[index] = true;
+    }
+  }
+  return result;
+}
+
+function resizeFlags(
+  source: boolean[],
+  oldRows: number,
+  oldCols: number,
+  rows: number,
+  cols: number,
+): boolean[] {
+  const result = emptyFlags(rows * cols);
+  if (oldRows <= 0 || oldCols <= 0) return result;
+  for (let row = 0; row < Math.min(rows, oldRows); row += 1) {
+    for (let col = 0; col < Math.min(cols, oldCols); col += 1) {
+      result[row * cols + col] = source[row * oldCols + col] ?? false;
+    }
+  }
+  return result;
 }
 
 function normalizeCells(source: (string | null)[] | undefined, total: number): (string | null)[] {
@@ -187,8 +235,10 @@ function newFormState(profileVersionId: string, formalTrials: number): MapGroupF
     gridCols: DEFAULT_COLS,
     description: "",
     factorLevel: "",
+    factors: [],
     cells: emptySlotCells(total),
     colors: emptySlotCells(total),
+    landmarks: emptySlotFlags(total),
     activeSlot: "Both",
     spawnA: 0,
     spawnB: total - 1,
@@ -212,9 +262,11 @@ function formFromVersion(version: MapGroupVersion): MapGroupFormState {
   const total = version.rows * version.cols;
   const cells = emptySlotCells(total);
   const colors = emptySlotCells(total);
+  const landmarks = emptySlotFlags(total);
   for (const map of version.maps) {
     cells[map.slot] = normalizeCells(map.cells, total);
     colors[map.slot] = normalizeCells(map.colors, total);
+    landmarks[map.slot] = normalizeFlags(map.landmarkCells, total);
   }
   const firstMap = version.maps[0];
   return {
@@ -225,8 +277,10 @@ function formFromVersion(version: MapGroupVersion): MapGroupFormState {
     gridCols: version.cols,
     description: firstMap?.description ?? "",
     factorLevel: firstMap?.factorLevel ?? "",
+    factors: Object.entries(version.factors ?? {}).map(([key, value]) => ({ key, value })),
     cells,
     colors,
+    landmarks,
     activeSlot: version.mode === "both" ? "Both" : "A",
     spawnA: version.spawns.A,
     spawnB: version.spawns.B,
@@ -397,6 +451,7 @@ export function MapGroupsPage() {
   const totalCells = form.gridRows * form.gridCols;
   const activeCells = form.cells[form.activeSlot] ?? emptyCells(totalCells);
   const activeColors = form.colors[form.activeSlot] ?? emptyCells(totalCells);
+  const activeLandmarks = form.landmarks[form.activeSlot] ?? emptyFlags(totalCells);
   const effectiveSelectedIndices = [...selectedIndices]
     .filter((index) => index >= 0 && index < totalCells)
     .sort((left, right) => left - right);
@@ -514,6 +569,52 @@ export function MapGroupsPage() {
     selectionAnchorRef.current = totalCells > 0 ? totalCells - 1 : null;
   }
 
+  function addFactorRow() {
+    if (readOnly) return;
+    setForm((current) => ({
+      ...current,
+      factors: [...current.factors, { key: "", value: "" }],
+    }));
+  }
+
+  function updateFactorRow(index: number, field: "key" | "value", value: string) {
+    if (readOnly) return;
+    setForm((current) => ({
+      ...current,
+      factors: current.factors.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [field]: value } : row,
+      ),
+    }));
+  }
+
+  function removeFactorRow(index: number) {
+    if (readOnly) return;
+    setForm((current) => ({
+      ...current,
+      factors: current.factors.filter((_, rowIndex) => rowIndex !== index),
+    }));
+  }
+
+  function setSelectedLandmark(landmark: boolean) {
+    if (readOnly || effectiveSelectedIndices.length === 0) return;
+    const slot = form.activeSlot;
+    const selected = new Set(effectiveSelectedIndices);
+    setForm((current) => ({
+      ...current,
+      landmarks: {
+        ...current.landmarks,
+        [slot]: current.landmarks[slot].map((value, index) =>
+          selected.has(index) ? landmark : value,
+        ),
+      },
+    }));
+    notify(
+      landmark
+        ? `已将 ${selected.size} 个格子标记为地标`
+        : `已取消 ${selected.size} 个格子的地标标记`,
+    );
+  }
+
   function changeMode(mode: MapGroupMode) {
     if (readOnly) return;
     editSessionRef.current += 1;
@@ -568,6 +669,17 @@ export function MapGroupsPage() {
         A: resizeCells(current.colors.A, current.gridRows, current.gridCols, rows, cols),
         B: resizeCells(current.colors.B, current.gridRows, current.gridCols, rows, cols),
       };
+      const landmarks: SlotFlags = {
+        Both: resizeFlags(
+          current.landmarks.Both,
+          current.gridRows,
+          current.gridCols,
+          rows,
+          cols,
+        ),
+        A: resizeFlags(current.landmarks.A, current.gridRows, current.gridCols, rows, cols),
+        B: resizeFlags(current.landmarks.B, current.gridRows, current.gridCols, rows, cols),
+      };
       let spawnA = remapCellIndex(
         current.spawnA,
         current.gridRows,
@@ -592,6 +704,7 @@ export function MapGroupsPage() {
         gridCols: cols,
         cells,
         colors,
+        landmarks,
         spawnA,
         spawnB,
       };
@@ -776,6 +889,23 @@ export function MapGroupsPage() {
     if (dimensionsError) errors.push(dimensionsError);
     if (descriptionError) errors.push(descriptionError);
     if (factorLevelError) errors.push(factorLevelError);
+    const factors: Record<string, string> = {};
+    if (form.factors.length > 50) {
+      errors.push("分析因素不能超过 50 项");
+    }
+    form.factors.forEach((row, index) => {
+      const key = row.key.trim();
+      const value = row.value.trim();
+      if (!key || !value) {
+        errors.push(`分析因素第 ${index + 1} 行的名称和取值都不能为空`);
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(factors, key)) {
+        errors.push(`分析因素名称重复：${key}`);
+        return;
+      }
+      factors[key] = value;
+    });
     const total =
       parsedRows !== null && parsedCols !== null ? parsedRows * parsedCols : null;
     if (
@@ -857,6 +987,7 @@ export function MapGroupsPage() {
       formalTurnSeconds: formalTurnSeconds as number,
       restSeconds: restSeconds as number,
       randomizeFormal: form.randomizeFormal,
+      factors,
       payment: {
         basePayCents: basePayCents as number,
         performanceRateCents: performanceRateCents as number,
@@ -870,6 +1001,9 @@ export function MapGroupsPage() {
         factorLevel: factorLevel,
         cells: (form.cells[slot] ?? []).slice(0, totalFromInput ?? 0),
         colors: (form.colors[slot] ?? []).slice(0, totalFromInput ?? 0),
+        landmarkCells: (form.landmarks[slot] ?? [])
+          .slice(0, totalFromInput ?? 0)
+          .flatMap((isLandmark, index) => (isLandmark ? [index] : [])),
       })),
     };
     return { payload, errors: [] };
@@ -1277,6 +1411,72 @@ export function MapGroupsPage() {
                   指导语名称将使用组前缀：{namePrefix}
                 </div>
               </div>
+              <div className="admin-form-section">
+                <div className="admin-condition-toolbar">
+                  <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
+                    分析因素
+                  </h3>
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn-secondary admin-btn-sm"
+                    onClick={addFactorRow}
+                    disabled={readOnly || form.factors.length >= 50}
+                    data-testid="map-group-add-factor"
+                  >
+                    <Plus size={14} />
+                    添加因素
+                  </button>
+                </div>
+                <p className="admin-hint">
+                  可选的结构化条件，会随地图组版本写入导出数据。名称和取值都不能为空，名称不能重复。
+                </p>
+                {form.factors.length === 0 ? (
+                  <p className="admin-hint">未添加分析因素。图表分析和分组可以使用地图组版本或名称。</p>
+                ) : (
+                  <div className="admin-factor-list">
+                    {form.factors.map((row, index) => (
+                      <div className="admin-form-row" key={index}>
+                        <Field label="因素名称" htmlFor={`map-group-factor-key-${index}`}>
+                          <input
+                            id={`map-group-factor-key-${index}`}
+                            className="admin-input"
+                            value={row.key}
+                            onChange={(event) =>
+                              updateFactorRow(index, "key", event.target.value)
+                            }
+                            disabled={readOnly}
+                            placeholder="例如：landmark"
+                            data-testid={`map-group-factor-key-${index}`}
+                          />
+                        </Field>
+                        <Field label="因素取值" htmlFor={`map-group-factor-value-${index}`}>
+                          <input
+                            id={`map-group-factor-value-${index}`}
+                            className="admin-input"
+                            value={row.value}
+                            onChange={(event) =>
+                              updateFactorRow(index, "value", event.target.value)
+                            }
+                            disabled={readOnly}
+                            placeholder="例如：horizontal"
+                            data-testid={`map-group-factor-value-${index}`}
+                          />
+                        </Field>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-secondary admin-btn-sm admin-factor-remove"
+                          onClick={() => removeFactorRow(index)}
+                          disabled={readOnly}
+                          aria-label={`删除分析因素 ${index + 1}`}
+                          data-testid={`map-group-factor-remove-${index}`}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="admin-form-row">
                 <Field
                   label="兵力配置方案"
@@ -1352,6 +1552,7 @@ export function MapGroupsPage() {
                 点击格子选中，按住 Ctrl/Command 或 Shift 点击可多选。选中后可统一上传
                 PNG/JPG 图片、设置背景颜色、清除图片或恢复白色。未设置图片和颜色的格子显示为白色。
                 格子编号、选中格与出生格使用覆盖层显示，不改变画布像素。
+                地标格只写入分析元数据，用于后续计算地标边界和相对位置，不改变棋盘显示。
               </p>
               <div className="admin-map-toolbar">
                 <span className="admin-label" style={{ marginBottom: 0 }}>
@@ -1454,6 +1655,24 @@ export function MapGroupsPage() {
                     >
                       设为出生格 B
                     </button>
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-secondary admin-btn-sm"
+                      onClick={() => setSelectedLandmark(true)}
+                      disabled={effectiveSelectedIndices.length === 0}
+                      data-testid="map-group-mark-landmark"
+                    >
+                      标记地标
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-secondary admin-btn-sm"
+                      onClick={() => setSelectedLandmark(false)}
+                      disabled={effectiveSelectedIndices.length === 0}
+                      data-testid="map-group-unmark-landmark"
+                    >
+                      取消地标
+                    </button>
                   </>
                 ) : null}
               </div>
@@ -1489,6 +1708,9 @@ export function MapGroupsPage() {
                 <span className="admin-hint">{cellPosition(form.spawnA, form.gridCols)}</span>
                 <span className="admin-chip">出生格 B · {form.spawnB}</span>
                 <span className="admin-hint">{cellPosition(form.spawnB, form.gridCols)}</span>
+                <span className="admin-chip">
+                  地标 {activeLandmarks.filter(Boolean).length} 格
+                </span>
               </div>
 
               <div className="admin-map-stage">
@@ -1534,6 +1756,9 @@ export function MapGroupsPage() {
                         ) : null}
                         {form.spawnB === index ? (
                           <span className="admin-map-cell-spawn spawn-b">B</span>
+                        ) : null}
+                        {activeLandmarks[index] ? (
+                          <span className="admin-map-cell-landmark">L</span>
                         ) : null}
                       </button>
                     ))}

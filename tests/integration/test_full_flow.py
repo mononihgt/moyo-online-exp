@@ -277,6 +277,8 @@ def test_full_two_participant_flow_and_exports(server):
         cols=3,
         formal_trials=2,
         assets=cells,
+        factors={"landmark": "present", "orientation": "horizontal"},
+        landmark_cells=[0, 1, 2],
         practice_turn_cap=3,
         practice_turn_seconds=4,
         formal_turn_cap=3,
@@ -295,6 +297,11 @@ def test_full_two_participant_flow_and_exports(server):
     assert map_group["formalTurnCap"] == 3
     assert map_group["formalTurnSeconds"] == 4
     assert map_group["restSeconds"] == 1
+    assert map_group["factors"] == {
+        "landmark": "present",
+        "orientation": "horizontal",
+    }
+    assert map_group["maps"][0]["landmarkCells"] == [0, 1, 2]
     assert map_group["spawns"] == {"A": 0, "B": 8}
     assert map_group["payment"] == {
         "basePayCents": 4500,
@@ -799,13 +806,18 @@ def test_full_two_participant_flow_and_exports(server):
     export_response = admin.request("GET", f"/admin/api/rooms/{room_id}/export.json")
     assert export_response.status_code == 200
     exported = export_response.json()
-    assert exported["schemaVersion"] == 5
+    assert exported["schemaVersion"] == 6
     assert "condition" not in exported
     assert exported["room"]["status"] == "archived"
     assert exported["room"]["archiveReason"] == "completed"
     assert exported["mapGroup"]["name"] == map_group["name"]
+    assert exported["mapGroup"]["factors"] == {
+        "landmark": "present",
+        "orientation": "horizontal",
+    }
     assert [item["slot"] for item in exported["mapGroup"]["maps"]] == ["Both"]
     assert exported["mapGroup"]["maps"][0]["cells"] == cells
+    assert exported["mapGroup"]["maps"][0]["landmarkCells"] == [0, 1, 2]
     assert exported["mapGroup"]["profile"]["rows"] == PROFILE_ROWS
     assert set(exported["questionnaire"]["protectedQuestionIds"]) == PROTECTED_IDS
     assert exported["trialPlan"]["order"][0] == {"trialIndex": 0, "sourceIndex": 0}
@@ -825,7 +837,21 @@ def test_full_two_participant_flow_and_exports(server):
         assert trial["completedRounds"] == 3
         assert trial["forcedRounds"] == 0
         assert trial["endReason"] == "turn_limit"
+        assert trial["engineVersion"] == "1"
+        assert trial["mechanics"]["logistics"] == "none"
+        assert trial["mechanics"]["movement"] == "equalSplit"
         assert len(trial["turns"]) == 4
+        for turn in trial["turns"]:
+            assert set(turn["preCombatPolicies"]) == {"player1", "player2"}
+            assert set(turn["movements"]) == {"player1", "player2"}
+            assert set(turn["submittedAt"]) == {"player1", "player2"}
+            assert len(turn["preCombatPolicies"]["player1"]) in (0, 9)
+        assert any(
+            turn["submittedAt"]["player1"] for turn in trial["turns"] if turn["round"] > 0
+        )
+        assert any(
+            turn["submittedAt"]["player2"] for turn in trial["turns"] if turn["round"] > 0
+        )
         assert trial["initialState"]["rows"] == 3
         assert trial["initialState"]["cols"] == 3
         assert len(trial["initialState"]["owners"]) == 9
@@ -869,6 +895,7 @@ def test_full_two_participant_flow_and_exports(server):
         "room.json",
         "participants.csv",
         "turns.csv",
+        "trials.csv",
         "events.csv",
         "questionnaire.json",
         "payment.csv",
@@ -878,8 +905,42 @@ def test_full_two_participant_flow_and_exports(server):
         "media/manifest.json",
     ):
         assert required in names
+    turns_header = _read_csv(archive.read("turns.csv"))[0]
+    for column in (
+        "preCombatPolicyPlayer1",
+        "preCombatPolicyPlayer2",
+        "movementPlayer1",
+        "movementPlayer2",
+        "submittedAtPlayer1",
+        "submittedAtPlayer2",
+    ):
+        assert column in turns_header
+    trial_rows = _read_csv(archive.read("trials.csv"))
+    assert trial_rows[0] == [
+        "roomId",
+        "trialIndex",
+        "gameNumber",
+        "sourceIndex",
+        "isPractice",
+        "formalTrial",
+        "seed",
+        "engineVersion",
+        "mechanics",
+        "params",
+        "startedAt",
+        "endedAt",
+        "winner",
+        "endReason",
+        "endTurn",
+        "completedRounds",
+        "forcedRounds",
+        "finalSoldiersPlayer1",
+        "finalSoldiersPlayer2",
+    ]
+    assert len(trial_rows) == 4
+    assert trial_rows[1][7] == "1"
     manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["schemaVersion"] == 5
+    assert manifest["schemaVersion"] == 6
     assert manifest["containsPII"] is False
     assert manifest["mediaIncluded"] is True
     assert manifest["rowCounts"] == {
@@ -909,7 +970,7 @@ def test_full_two_participant_flow_and_exports(server):
     assert "sha256:" + hashlib.sha256(media_bytes).hexdigest() == media_entry["sha256"]
 
     room_export = json.loads(archive.read("room.json"))
-    assert room_export["schemaVersion"] == 5
+    assert room_export["schemaVersion"] == 6
     assert "condition" not in room_export
     assert room_export["mapGroup"]["name"] == map_group["name"]
     assert room_export["room"]["archiveReason"] == "completed"

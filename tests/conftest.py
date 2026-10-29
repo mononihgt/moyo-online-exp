@@ -345,6 +345,13 @@ def _asset_cells(assets, slot: str, total: int) -> list:
     return list(cells)
 
 
+def _landmark_indexes(value, slot: str) -> list[int]:
+    if value is None:
+        return []
+    indexes = value.get(slot) if isinstance(value, dict) else value
+    return list(indexes or [])
+
+
 def create_map_group(
     admin: ApiClient,
     troop_profile_version_id: str,
@@ -355,6 +362,8 @@ def create_map_group(
     formal_trials: int = 2,
     assets: list[str | None] | dict[str, list[str | None]] | None = None,
     colors: list[str | None] | dict[str, list[str | None]] | None = None,
+    landmark_cells: list[int] | dict[str, list[int]] | None = None,
+    factors: dict[str, str] | None = None,
     spawns: dict[str, int] | None = None,
     description: str = "测试地图",
     factor_level: str = "标准",
@@ -380,11 +389,13 @@ def create_map_group(
             "factorLevel": factor_level,
             "cells": _asset_cells(assets, slot, total),
             "colors": _asset_cells(colors, slot, total),
+            "landmarkCells": _landmark_indexes(landmark_cells, slot),
         }
         for slot in slots
     ]
     payload = {
         "mode": mode,
+        "factors": factors or {},
         "rows": rows,
         "cols": cols,
         "spawns": spawns or {"A": 0, "B": total - 1},

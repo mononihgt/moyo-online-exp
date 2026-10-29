@@ -1,5 +1,15 @@
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 TIMEZONE = "Asia/Shanghai"
+
+ENGINE_VERSION = 1
+ENGINE_MECHANICS = {
+    "reinforcement": "perCell",
+    "movement": "equalSplit",
+    "frontAllocation": "equal",
+    "logistics": "none",
+    "wealth": "none",
+    "combatSimulations": 100,
+}
 
 PARTICIPANT_ELIGIBLE = "eligible"
 PARTICIPANT_COMPLETED = "completed"

@@ -127,6 +127,7 @@ class MapGroupVersion(Base):
     performance_floor_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=3500)
     performance_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=5500)
     showup_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
+    factors_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     content_hash: Mapped[str | None] = mapped_column(String(80), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -155,6 +156,7 @@ class Map(Base):
     player_suffix: Mapped[str] = mapped_column(String(10), nullable=False)
     cells_json: Mapped[list] = mapped_column(JSON, nullable=False)
     colors_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    landmark_cells_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class ParticipantIdentity(Base):
@@ -391,6 +393,8 @@ class GameTrial(Base):
     formal_trial: Mapped[int] = mapped_column(Integer, nullable=False)
     params_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     seed: Mapped[str] = mapped_column(String(16), nullable=False)
+    engine_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    mechanics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     initial_state_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -413,6 +417,8 @@ class Turn(Base):
     round: Mapped[int] = mapped_column(Integer, nullable=False)
     turn_seed: Mapped[str | None] = mapped_column(String(16), nullable=True)
     selections_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    pre_combat_policy_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    movements_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     policy_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     board_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     war_json: Mapped[dict] = mapped_column(JSON, nullable=False)

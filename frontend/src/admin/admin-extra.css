@@ -1300,6 +1300,20 @@
   background: #ff3b30;
 }
 
+.admin-map-cell-landmark {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #212529;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .admin-map-badge-rail {
   flex: 0 0 auto;
   width: 200px;
@@ -1379,6 +1393,22 @@
   padding: 6px 8px;
   background: #ffffff;
   color: var(--admin-text);
+}
+
+.admin-factor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-factor-list .admin-form-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.admin-factor-remove {
+  align-self: flex-end;
+  margin-bottom: 2px;
 }
 
 @media (max-width: 1100px) {

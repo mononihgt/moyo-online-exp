@@ -23,7 +23,7 @@ const ROOM_SECTIONS = [
 
 const DETAIL_TABS = ["概览", "预约", "监控", "数据", "付款"];
 
-test("管理端 v5 页面、房间分区、地图组预览与问卷受保护字段", async ({
+test("管理端页面、房间分区、地图组预览与问卷受保护字段", async ({
   browser,
   request,
   baseURL,

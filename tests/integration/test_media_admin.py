@@ -411,7 +411,7 @@ def test_room_media_export_and_instruction_asset_rendering(server):
     assert "指导语引用了不存在的图片资产" in missing_instruction.json()["detail"]
 
     export = admin.json("GET", f"/admin/api/rooms/{both_room['id']}/export.json")
-    assert export["schemaVersion"] == 5
+    assert export["schemaVersion"] == 6
     both_entries = _entry_by_id(export)
     assert set(both_entries) == {both_image["id"], instruction_image["id"]}
     both_entry = both_entries[both_image["id"]]

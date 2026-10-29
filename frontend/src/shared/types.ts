@@ -195,6 +195,7 @@ export interface MapInfo {
   playerSuffix: MapSlot;
   cells: (string | null)[];
   colors: (string | null)[];
+  landmarkCells: number[];
 }
 
 export interface MapGroupVersion {
@@ -214,6 +215,7 @@ export interface MapGroupVersion {
   formalTurnSeconds: number;
   restSeconds: number;
   randomizeFormal: boolean;
+  factors: Record<string, string>;
   payment: MapGroupPayment;
   profile: TroopProfileRef;
   maps: MapInfo[];
@@ -233,6 +235,7 @@ export interface MapGroupSummary {
   cols: number;
   practiceTrials: number;
   formalTrials: number;
+  factors: Record<string, string>;
   maps: { slot: MapSlot; name: string; description: string; factorLevel: string }[];
   troopProfile: {
     id: string;

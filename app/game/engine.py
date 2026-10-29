@@ -25,6 +25,10 @@ class Board:
 @dataclass(frozen=True)
 class TurnResolution:
     board: Board
+    pre_combat_policy_p1: tuple[int, ...]
+    pre_combat_policy_p2: tuple[int, ...]
+    movements_p1: tuple[dict, ...]
+    movements_p2: tuple[dict, ...]
     soldier_policy_p1: tuple[int, ...]
     soldier_policy_p2: tuple[int, ...]
     war_location: tuple[int, ...]
@@ -102,6 +106,7 @@ def resolve_turn(
         board.cols, soldiers, index_list_a, direction_list_a
     )
     soldier_policy_a = _move_soldiers(soldiers_move_a, toward_list_a, owners)
+    movements_a = _build_movements(index_list_a, toward_list_a, soldiers_move_a)
 
     index_list_b, direction_list_b, _ = _generate_direction(
         pos_list_b, owners, board.rows, board.cols, 2
@@ -110,6 +115,7 @@ def resolve_turn(
         board.cols, soldiers, index_list_b, direction_list_b
     )
     soldier_policy_b = _move_soldiers(soldiers_move_b, toward_list_b, owners)
+    movements_b = _build_movements(index_list_b, toward_list_b, soldiers_move_b)
 
     rng, np_rng = _make_rngs(seed)
     return _forward_next_step(
@@ -124,6 +130,10 @@ def resolve_turn(
         base_b_index,
         rng,
         np_rng,
+        pre_combat_policy_a=soldier_policy_a,
+        pre_combat_policy_b=soldier_policy_b,
+        movements_a=movements_a,
+        movements_b=movements_b,
     )
 
 
@@ -171,6 +181,10 @@ def resolve_forced_turn(
         base_b_index,
         rng,
         np_rng,
+        pre_combat_policy_a=soldier_policy_a,
+        pre_combat_policy_b=soldier_policy_b,
+        movements_a=(),
+        movements_b=(),
     )
 
 
@@ -181,6 +195,19 @@ def player_without_territory(board):
     if has_p1 == has_p2:
         return None
     return 2 if has_p1 else 1
+
+
+def annihilation_result(board):
+    _validate_board(board)
+    has_p1 = 1 in board.owners
+    has_p2 = 2 in board.owners
+    if has_p1 and has_p2:
+        return False, None
+    if has_p1:
+        return True, 1
+    if has_p2:
+        return True, 2
+    return True, None
 
 
 def total_soldiers(board, player):
@@ -416,6 +443,20 @@ def _move_soldiers(soldiers_move, toward_list, owners):
     return [round(soldier_policy[i]) for i in range(len(owners))]
 
 
+def _build_movements(index_list, toward_list, soldiers_move):
+    grouped: dict[tuple[int, int], int] = {}
+    for source, target, soldiers in zip(index_list, toward_list, soldiers_move):
+        count = int(soldiers)
+        if count <= 0:
+            continue
+        key = (int(source), int(target))
+        grouped[key] = grouped.get(key, 0) + count
+    return tuple(
+        {"from": source, "to": target, "soldiers": grouped[(source, target)]}
+        for source, target in sorted(grouped)
+    )
+
+
 def _is_adjacent(index_a, index_b, cols):
     return _calculate_2d_distance(index_a, index_b, cols) == 1
 
@@ -646,6 +687,11 @@ def _forward_next_step(
     base_b_index,
     rng,
     np_rng,
+    *,
+    pre_combat_policy_a,
+    pre_combat_policy_b,
+    movements_a,
+    movements_b,
 ):
     war_location = [
         i
@@ -705,6 +751,10 @@ def _forward_next_step(
     )
     return TurnResolution(
         board=board,
+        pre_combat_policy_p1=tuple(int(value) for value in pre_combat_policy_a),
+        pre_combat_policy_p2=tuple(int(value) for value in pre_combat_policy_b),
+        movements_p1=tuple(movements_a),
+        movements_p2=tuple(movements_b),
         soldier_policy_p1=tuple(int(value) for value in soldier_policy_a),
         soldier_policy_p2=tuple(int(value) for value in soldier_policy_b),
         war_location=tuple(int(value) for value in war_location),

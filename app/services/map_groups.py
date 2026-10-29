@@ -153,6 +153,51 @@ def _validate_map_colors(colors: Any, total: int) -> list:
     return normalized
 
 
+def _validate_factors(value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise MapGroupValidationError("分析因素必须是键值对象")
+    if len(value) > 50:
+        raise MapGroupValidationError("分析因素不能超过 50 项")
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise MapGroupValidationError("分析因素的名称必须是字符串")
+        name = key.strip()
+        if not name or name != key:
+            raise MapGroupValidationError("分析因素的名称不能为空或包含首尾空白")
+        if len(name) > 100:
+            raise MapGroupValidationError("分析因素名称不能超过 100 个字符")
+        if not isinstance(item, str):
+            raise MapGroupValidationError("分析因素的取值必须是字符串")
+        level = item.strip()
+        if not level or level != item:
+            raise MapGroupValidationError("分析因素的取值不能为空或包含首尾空白")
+        if len(level) > 200:
+            raise MapGroupValidationError("分析因素取值不能超过 200 个字符")
+        normalized[name] = level
+    return normalized
+
+
+def _validate_landmark_cells(value: Any, total: int) -> list[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise MapGroupValidationError("地标格必须是索引列表")
+    result: list[int] = []
+    seen: set[int] = set()
+    for item in value:
+        index = _require_int(item, "地标格")
+        if not 0 <= index < total:
+            raise MapGroupValidationError("地标格索引越界")
+        if index in seen:
+            raise MapGroupValidationError("地标格不能重复")
+        seen.add(index)
+        result.append(index)
+    return sorted(result)
+
+
 def _stored_colors(values: Any, total: int) -> list:
     source = values if isinstance(values, list) else []
     normalized = []
@@ -160,6 +205,17 @@ def _stored_colors(values: Any, total: int) -> list:
         color = source[index] if index < len(source) else None
         normalized.append(color if isinstance(color, str) else None)
     return normalized
+
+
+def _stored_int_list(values: Any, total: int) -> list[int]:
+    source = values if isinstance(values, list) else []
+    return sorted(
+        {
+            int(value)
+            for value in source
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < total
+        }
+    )
 
 
 def _validate_payment(payment: Any) -> dict:
@@ -230,6 +286,9 @@ def validate_map_group_payload(
         built = build_map_name(description, rows, cols, factor_level, slot)
         cells = _validate_map_cells(item.get("cells"), total, asset_types)
         colors = _validate_map_colors(item.get("colors"), total)
+        landmark_cells = _validate_landmark_cells(
+            item.get("landmark_cells", item.get("landmarkCells")), total
+        )
         normalized_maps.append(
             {
                 "slot": slot,
@@ -240,6 +299,7 @@ def validate_map_group_payload(
                 "playerSuffix": built["playerSuffix"],
                 "cells": cells,
                 "colors": colors,
+                "landmarkCells": landmark_cells,
                 "prefix": built["prefix"],
             }
         )
@@ -259,6 +319,7 @@ def validate_map_group_payload(
 
     timing = _validate_timing(payload)
     payment = _validate_payment(payload.get("payment"))
+    factors = _validate_factors(payload.get("factors"))
     randomize_formal = payload.get("randomize_formal")
     if not isinstance(randomize_formal, bool):
         raise MapGroupValidationError("randomize_formal 必须是布尔值")
@@ -266,6 +327,7 @@ def validate_map_group_payload(
     first = normalized_maps[0]
     return {
         "mode": mode,
+        "factors": factors,
         "rows": rows,
         "cols": cols,
         "spawn_a_index": spawn_a,
@@ -296,6 +358,7 @@ def map_group_content_hash(data: dict) -> str:
         "formalTurnSeconds": data["formal_turn_seconds"],
         "restSeconds": data["rest_seconds"],
         "randomizeFormal": data["randomize_formal"],
+        "factors": data["factors"],
         "payment": {camel: data["payment"][field] for field, camel in PAYMENT_FIELDS},
         "maps": [
             {
@@ -307,6 +370,7 @@ def map_group_content_hash(data: dict) -> str:
                 "playerSuffix": item["playerSuffix"],
                 "cells": item["cells"],
                 "colors": item["colors"],
+                "landmarkCells": item["landmarkCells"],
             }
             for item in data["maps"]
         ],
@@ -342,6 +406,7 @@ def serialize_map(version: MapGroupVersion) -> list[dict]:
             "playerSuffix": item.player_suffix,
             "cells": item.cells_json,
             "colors": _stored_colors(item.colors_json, total),
+            "landmarkCells": _stored_int_list(item.landmark_cells_json, total),
         }
         for item in _sorted_maps(version)
     ]
@@ -367,6 +432,7 @@ def serialize_map_group_version(version: MapGroupVersion) -> dict:
         "formalTurnSeconds": version.formal_turn_seconds,
         "restSeconds": version.rest_seconds,
         "randomizeFormal": version.randomize_formal,
+        "factors": version.factors_json or {},
         "payment": map_group_payment(version),
         "profile": {
             "profileId": profile.id,
@@ -458,6 +524,7 @@ def _version_payload(version: MapGroupVersion) -> dict:
         "formal_turn_seconds": version.formal_turn_seconds,
         "rest_seconds": version.rest_seconds,
         "randomize_formal": version.randomize_formal,
+        "factors": version.factors_json or {},
         "payment": {
             "base_pay_cents": version.base_pay_cents,
             "performance_rate_cents": version.performance_rate_cents,
@@ -472,6 +539,9 @@ def _version_payload(version: MapGroupVersion) -> dict:
                 "factor_level": item.factor_level,
                 "cells": item.cells_json,
                 "colors": _stored_colors(item.colors_json, version.rows * version.cols),
+                "landmark_cells": _stored_int_list(
+                    item.landmark_cells_json, version.rows * version.cols
+                ),
             }
             for item in _sorted_maps(version)
         ],
@@ -493,6 +563,7 @@ def _apply_validated(version: MapGroupVersion, data: dict) -> None:
     version.formal_turn_seconds = data["formal_turn_seconds"]
     version.rest_seconds = data["rest_seconds"]
     version.randomize_formal = data["randomize_formal"]
+    version.factors_json = data["factors"]
     version.base_pay_cents = data["payment"]["base_pay_cents"]
     version.performance_rate_cents = data["payment"]["performance_rate_cents"]
     version.performance_floor_cents = data["payment"]["performance_floor_cents"]
@@ -518,6 +589,7 @@ def _replace_maps(version: MapGroupVersion, maps: list[dict]) -> None:
                     player_suffix=item["playerSuffix"],
                     cells_json=item["cells"],
                     colors_json=item["colors"],
+                    landmark_cells_json=item["landmarkCells"],
                 )
             )
             continue
@@ -528,6 +600,7 @@ def _replace_maps(version: MapGroupVersion, maps: list[dict]) -> None:
         row.player_suffix = item["playerSuffix"]
         row.cells_json = item["cells"]
         row.colors_json = item["colors"]
+        row.landmark_cells_json = item["landmarkCells"]
     for slot, row in existing.items():
         if slot not in kept_slots:
             version.maps.remove(row)

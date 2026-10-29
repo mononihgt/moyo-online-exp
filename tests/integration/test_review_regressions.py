@@ -450,7 +450,7 @@ def test_analysis_export_and_audit_without_pii(server):
     ]
 
     export = context.admin.json("GET", f"/admin/api/rooms/{setup.room['id']}/export.json")
-    assert export["schemaVersion"] == 5
+    assert export["schemaVersion"] == 6
     assert len(export["participants"]) == 2
     participant_keys = {
         "analysisCode",
@@ -497,9 +497,17 @@ def test_analysis_export_and_audit_without_pii(server):
     assert zip_response.status_code == 200
     archive = zipfile.ZipFile(io.BytesIO(zip_response.content))
     names = set(archive.namelist())
-    assert {"room.json", "participants.csv", "turns.csv", "payment.csv", "questionnaire.json", "manifest.json"} <= names
+    assert {
+        "room.json",
+        "participants.csv",
+        "turns.csv",
+        "trials.csv",
+        "payment.csv",
+        "questionnaire.json",
+        "manifest.json",
+    } <= names
     manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-    assert manifest["schemaVersion"] == 5
+    assert manifest["schemaVersion"] == 6
     assert manifest["containsPII"] is False
     assert manifest["rowCounts"]["participants"] == 2
     assert manifest["rowCounts"]["payments"] == 2

@@ -867,6 +867,7 @@ async def room_summary(db: AsyncSession, room: Room) -> dict:
             "cols": map_group.cols,
             "practiceTrials": map_group.practice_trials,
             "formalTrials": map_group.formal_trials,
+            "factors": map_group.factors_json or {},
             "maps": [
                 {
                     "slot": item["slot"],

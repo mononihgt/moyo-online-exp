@@ -24,6 +24,7 @@ from ..models import (
     RoomEvent,
     RoomParticipant,
     Turn,
+    TurnSubmission,
 )
 from ..timeutil import isoformat_utc, utcnow
 from .map_groups import serialize_map_group_snapshot
@@ -98,12 +99,16 @@ def _csv_cell(value) -> str:
     return str(value)
 
 
-def _turn_payload(turn: Turn) -> dict:
+def _turn_payload(turn: Turn, submitted_at: dict[int, str | None] | None = None) -> dict:
+    times = submitted_at or {}
     return {
         "round": turn.round,
         "selections": turn.selections_json,
         "selectionSources": turn.selection_sources_json,
         "autoSelected": turn.auto_selected_json,
+        "preCombatPolicies": turn.pre_combat_policy_json
+        or {"player1": [], "player2": []},
+        "movements": turn.movements_json or {"player1": [], "player2": []},
         "soldierPolicies": turn.policy_json,
         "warLocation": turn.war_json.get("location", []),
         "warLost": turn.losses_json,
@@ -112,6 +117,10 @@ def _turn_payload(turn: Turn) -> dict:
         "turnSeed": turn.turn_seed,
         "board": turn.board_json,
         "forced": turn.forced,
+        "submittedAt": {
+            "player1": times.get(1),
+            "player2": times.get(2),
+        },
         "recordedAt": isoformat_utc(turn.created_at),
     }
 
@@ -211,9 +220,26 @@ async def _room_questionnaire(db: AsyncSession, room: Room) -> dict:
     }
 
 
+def _normalize_map_group_payload(map_group: dict) -> dict:
+    if not isinstance(map_group, dict):
+        return map_group
+    normalized = dict(map_group)
+    normalized.setdefault("factors", {})
+    maps = normalized.get("maps")
+    normalized["maps"] = [
+        {
+            **item,
+            "landmarkCells": item.get("landmarkCells") or [],
+        }
+        for item in (maps if isinstance(maps, list) else [])
+        if isinstance(item, dict)
+    ]
+    return normalized
+
+
 async def _room_map_group(db: AsyncSession, room: Room) -> dict:
     if room.config_snapshot and room.config_snapshot.get("mapGroup"):
-        return room.config_snapshot["mapGroup"]
+        return _normalize_map_group_payload(room.config_snapshot["mapGroup"])
     map_group = await db.get(MapGroupVersion, room.map_group_version_id)
     return serialize_map_group_snapshot(map_group)
 
@@ -251,7 +277,9 @@ async def build_archive_snapshot(db: AsyncSession, room: Room) -> dict:
 
 async def build_room_export(db: AsyncSession, room: Room) -> dict:
     snapshot = room.archive_snapshot_json if isinstance(room.archive_snapshot_json, dict) else {}
-    map_group = snapshot.get("mapGroup") or await _room_map_group(db, room)
+    map_group = _normalize_map_group_payload(
+        snapshot.get("mapGroup") or await _room_map_group(db, room)
+    )
     instructions = snapshot.get("instructions") or await _room_instructions(db, room)
     questionnaire = snapshot.get("questionnaire") or await _room_questionnaire(db, room)
     protected_ids = set(questionnaire.get("protectedQuestionIds") or [])
@@ -367,12 +395,36 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
         select(GameTrial).where(GameTrial.room_id == room.id).order_by(GameTrial.trial_index)
     )
     trials = list(trials_query.scalars().all())
+    role_by_room_participant = {row.id: row.role for row in room_participants}
+    submission_times: dict[tuple[str, int, int], str] = {}
+    if trials:
+        submissions_query = await db.execute(
+            select(TurnSubmission)
+            .where(TurnSubmission.game_trial_id.in_([trial.id for trial in trials]))
+            .where(TurnSubmission.accepted.is_(True))
+            .order_by(TurnSubmission.submitted_at)
+        )
+        for submission in submissions_query.scalars().all():
+            role = role_by_room_participant.get(submission.room_participant_id)
+            if role in (1, 2):
+                submission_times[(submission.game_trial_id, submission.round, role)] = (
+                    isoformat_utc(submission.submitted_at)
+                )
     trial_payloads = []
     for trial in trials:
         turns_query = await db.execute(
             select(Turn).where(Turn.game_trial_id == trial.id).order_by(Turn.round)
         )
-        turns = [_turn_payload(turn) for turn in turns_query.scalars().all()]
+        turns = [
+            _turn_payload(
+                turn,
+                {
+                    role: submission_times.get((trial.id, turn.round, role))
+                    for role in (1, 2)
+                },
+            )
+            for turn in turns_query.scalars().all()
+        ]
         trial_payloads.append(
             {
                 "trialIndex": trial.trial_index,
@@ -382,6 +434,8 @@ async def build_room_export(db: AsyncSession, room: Room) -> dict:
                 "formalTrial": trial.formal_trial,
                 "params": _trial_params(trial.params_json),
                 "seed": trial.seed,
+                "engineVersion": trial.engine_version,
+                "mechanics": trial.mechanics_json or {},
                 "startedAt": isoformat_utc(trial.started_at),
                 "endedAt": isoformat_utc(trial.ended_at),
                 "winner": trial.winner,
@@ -548,6 +602,12 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
                     turn["selectionSources"].get("player2"),
                     turn["autoSelected"].get("player1", False),
                     turn["autoSelected"].get("player2", False),
+                    turn["preCombatPolicies"].get("player1", []),
+                    turn["preCombatPolicies"].get("player2", []),
+                    turn["movements"].get("player1", []),
+                    turn["movements"].get("player2", []),
+                    turn["submittedAt"].get("player1"),
+                    turn["submittedAt"].get("player2"),
                     turn["soldierPolicies"].get("player1", []),
                     turn["soldierPolicies"].get("player2", []),
                     turn["board"].get("owners", []),
@@ -577,6 +637,12 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
             "sourcePlayer2",
             "autoSelectedPlayer1",
             "autoSelectedPlayer2",
+            "preCombatPolicyPlayer1",
+            "preCombatPolicyPlayer2",
+            "movementPlayer1",
+            "movementPlayer2",
+            "submittedAtPlayer1",
+            "submittedAtPlayer2",
             "soldierPolicyPlayer1",
             "soldierPolicyPlayer2",
             "owners",
@@ -591,6 +657,58 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
             "recordedAt",
         ],
         turn_rows,
+    )
+
+    trial_rows = []
+    for trial in export["trials"]:
+        summary = trial.get("summary") or {}
+        final_soldiers = summary.get("finalSoldiers") or {}
+        trial_rows.append(
+            [
+                room.id,
+                trial["trialIndex"],
+                trial["gameNumber"],
+                trial["sourceIndex"],
+                trial["isPractice"],
+                trial["formalTrial"],
+                trial["seed"],
+                trial["engineVersion"],
+                trial["mechanics"],
+                trial["params"],
+                trial["startedAt"],
+                trial["endedAt"],
+                trial["winner"],
+                trial["endReason"],
+                trial["endTurn"],
+                trial["completedRounds"],
+                trial["forcedRounds"],
+                final_soldiers.get("player1"),
+                final_soldiers.get("player2"),
+            ]
+        )
+    trials_csv = _csv_bytes(
+        [
+            "roomId",
+            "trialIndex",
+            "gameNumber",
+            "sourceIndex",
+            "isPractice",
+            "formalTrial",
+            "seed",
+            "engineVersion",
+            "mechanics",
+            "params",
+            "startedAt",
+            "endedAt",
+            "winner",
+            "endReason",
+            "endTurn",
+            "completedRounds",
+            "forcedRounds",
+            "finalSoldiersPlayer1",
+            "finalSoldiersPlayer2",
+        ],
+        trial_rows,
     )
 
     events_csv = _csv_bytes(
@@ -655,6 +773,7 @@ async def build_analysis_zip(db: AsyncSession, room: Room) -> bytes:
     files["room.json"] = json.dumps(export, ensure_ascii=False, indent=2).encode("utf-8")
     files["participants.csv"] = participants_csv
     files["turns.csv"] = turns_csv
+    files["trials.csv"] = trials_csv
     files["events.csv"] = events_csv
     files["questionnaire.json"] = json.dumps(questionnaire_payload, ensure_ascii=False, indent=2).encode("utf-8")
     files["payment.csv"] = payment_csv

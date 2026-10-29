@@ -102,6 +102,8 @@ v5 迁移 `5b8e2f4c9a71` 是破坏性迁移，执行 `uv run alembic upgrade hea
 
 部署前备份 MariaDB 的 `moyo` 数据库、`data/media` 和 JATOS 数据卷。备份不得包含 `IDENTITY_ENCRYPTION_KEY`；密钥单独保存于凭据管理系统或离线介质，并保留异地副本。该密钥丢失后，已保存的真实姓名、支付宝手机号和证件号码无法解密。
 
+v6 迁移 `a1c3e5f7b9d2` 只增加分析字段，不删除数据：地图组 `factors_json`、地图 `landmark_cells_json`、trial `engine_version` 和 `mechanics_json`、回合 `pre_combat_policy_json` 和 `movements_json`。历史数据这些字段为空，导出时按空对象或空数组处理。
+
 ### 启动
 
 ```bash
@@ -199,9 +201,10 @@ CHROME_PATH（Node Playwright）
 
 ## 数据与导出
 
-- 统一 `schemaVersion = 5`。
+- 统一 `schemaVersion = 6`。
 - 完整 Room JSON：`GET /admin/api/rooms/{id}/export.json`。
-- 分析 ZIP：`GET /admin/api/rooms/{id}/analysis.zip`，包含 manifest、room、participants、trials、turns、questionnaire、events、payment 和媒体快照。`payment.csv` 保留全部 Payment 记录。
+- 分析 ZIP：`GET /admin/api/rooms/{id}/analysis.zip`，包含 manifest、room、participants、trials、turns、trials.csv、questionnaire、events、payment 和媒体快照。`payment.csv` 保留全部 Payment 记录。
+- 地图组导出包含 `factors` 和每张地图的 `landmarkCells`；回合导出包含 `preCombatPolicies`、`movements` 和 `submittedAt`；trial 导出包含 `engineVersion` 和 `mechanics`。
 - 支付名单：`GET /admin/api/payments/export-payment-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、待支付的记录，包含技术中止到场费，包含姓名和支付宝手机号，仅管理员可下载，并写入审计日志。
 - 报销清单：`GET /admin/api/payments/export-reimbursement-list.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`，只包含问卷完成、已支付的记录，包含技术中止到场费，包含姓名、手机号和证件号码，仅管理员可下载，并写入审计日志。
 - 两类清单要求问卷完成且存在身份记录。历史技术中止 Payment 如果没有问卷提交或身份记录，不进入清单，需要主试单独审计。

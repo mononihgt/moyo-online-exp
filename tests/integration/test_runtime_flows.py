@@ -1499,7 +1499,7 @@ def test_random_formal_order_parameters_and_reproducibility(server):
     export = context.admin.json(
         "GET", f"/admin/api/rooms/{setup.room['id']}/export.json"
     )
-    assert export["schemaVersion"] == 5
+    assert export["schemaVersion"] == 6
     plan_order = [entry["sourceIndex"] for entry in export["trialPlan"]["order"]]
     assert plan_order == [0] + formal_sources
     assert export["trialPlan"]["seed"]

@@ -107,6 +107,7 @@ export interface MapGroupMapPayload {
   factorLevel: string;
   cells: (string | null)[];
   colors: (string | null)[];
+  landmarkCells: number[];
 }
 
 export interface MapGroupDraftPayload {
@@ -123,6 +124,7 @@ export interface MapGroupDraftPayload {
   formalTurnSeconds: number;
   restSeconds: number;
   randomizeFormal: boolean;
+  factors: Record<string, string>;
   payment: MapGroupPayment;
   maps: MapGroupMapPayload[];
 }
