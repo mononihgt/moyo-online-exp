@@ -124,7 +124,9 @@ chmod 600 .env
 | `ADMIN_USERNAME` | 管理端用户名 |
 | `ADMIN_INITIAL_PASSWORD` | 管理员初始密码 |
 | `JATOS_STUDY_CODE` | JATOS study code，JATOS 配置完成后填写 |
-| `JATOS_API_TOKEN` | JATOS API token，JATOS 配置完成后填写 |
+| `JATOS_STUDY_ID` | JATOS study ID 或 UUID，自动同步使用；部署脚本输出 |
+| `JATOS_API_TOKEN` | JATOS API token，有效期必须覆盖整个实验 |
+| `JATOS_SYNC_INTERVAL_SECONDS` | 自动同步间隔，默认 `60`，通常不需要修改 |
 | `JATOS_SECRET` | JATOS 登录状态密钥，首次启动后不要更换 |
 | `COOKIE_SECURE` | 正式环境保持 `true` |
 | `LOG_LEVEL` | 默认 `INFO` |
@@ -209,7 +211,7 @@ JATOS 默认管理员是 `admin / admin`。首次启动后立即登录并修改�
 配置步骤：
 
 1. 登录 JATOS 管理端，修改默认管理员密码。
-2. 点击右上角用户名，进入 My API tokens，新建一个管理员 token。token 只显示一次。
+2. 点击右上角用户名，进入 My API tokens，新建一个管理员 token。token 只显示一次。token 的有效期必须覆盖整个实验周期；短期 token 到期后自动同步会返回 401，管理端设置页会显示错误。
 3. 在 `.env` 中填写 `JATOS_BASE_URL` 和 `JATOS_API_TOKEN`，启动数据库与应用容器：
 
    ```bash
@@ -225,7 +227,7 @@ JATOS 默认管理员是 `admin / admin`。首次启动后立即登录并修改�
 
    输出中的 `studyCode` 就是平台需要的 study code。脚本不打印 API token。若已有 study，可加 `--study <studyIdOrUuid>` 复用；重复运行会创建新的组件和 code。
 
-5. 把 study code 填入 `.env` 的 `JATOS_STUDY_CODE`，或登录平台管理端在设置页填写。数据库设置优先于环境变量。然后重建应用：
+5. 把 study code 填入 `.env` 的 `JATOS_STUDY_CODE`，把脚本输出的 `studyId` 填入 `JATOS_STUDY_ID`；也可以登录平台管理端在设置页填写。数据库设置优先于环境变量。然后重建应用：
 
    ```bash
    docker compose up -d --force-recreate app
@@ -237,6 +239,7 @@ JATOS 默认管理员是 `admin / admin`。首次启动后立即登录并修改�
    - 平台收到的 `rt`、`pid` 与 JATOS `urlQueryParameters` 一致。
    - 提交后 JATOS 结果和平台问卷记录同时存在。
    - 完成后跳转平台 `/complete` 页面。
+   - 测试一次平台漏收：阻断平台问卷提交请求后关闭页面，等待自动同步，确认管理端设置页的自动同步状态更新，参与者问卷和 Payment 补齐。平时只需确认设置页显示最近运行和最近成功时间。
 
 `JATOS_API_TOKEN` 只保存在服务器 `.env` 中，不能写入前端代码或浏览器可见的位置。问卷组件的平台地址在镜像构建时由 `PUBLIC_BASE_URL` 注入，修改平台域名后需要重新构建镜像。
 
@@ -462,6 +465,7 @@ docker system df
 - 磁盘空间。JATOS 结果上传和平台媒体会持续增长。
 - 服务器时间同步。登录状态过期和签名校验依赖准确的系统时间。
 - 管理端仪表盘的“技术中止待问卷”数量和房间列表。到场费在问卷提交后才生成，未提交的参与者不会出现在付款表中，但已经锁定。
+- 管理端设置页的自动同步状态、最近成功时间和最近错误。自动同步失败不会影响正常问卷提交。
 - 两类付款清单都包含问卷完成的技术中止到场费。Payment 截止日期按问卷提交时间计算，导出日期窗口仍按 Room 开始日期筛选。
 - 历史技术中止 Payment 如果没有问卷提交或身份记录，不进入两类清单。升级后第一次导出前检查这部分记录，必要时人工补录或单独处理。
 
@@ -483,5 +487,6 @@ docker compose logs --tail=200 caddy
 - 异地备份需要部署者自行配置并定期验证。
 - JATOS 组件和平台问卷的兼容性需要在部署后用一个真实 Room 验证。
 - 技术中止待问卷不会自动解除。未提交问卷的参与者一直锁定且没有 Payment；主试只能联系参与者提交，或通过重发问卷提供入口。管理端不能标记完成或标记缺席来解除。
-- 所有 Payment 的截止日期随问卷提交时间计算。延迟提交会顺延截止日期；管理端事后导入 JATOS 结果时按导入时间计算。
+- 所有 Payment 的截止日期随问卷提交时间计算。延迟提交会顺延截止日期；自动同步使用 JATOS 结果时间，管理端手工导入按导入时间计算。
+- 自动同步依赖有效的 JATOS API token、study ID 和应用到 JATOS 的网络连通性。设置页显示同步状态；没有有效签名问卷 token 的旧结果不会自动导入，使用管理端手工导入。
 - 无操作计时和页面可见性保存在单 worker 内存中，服务重启后重新计时。双方页面都隐藏时计时暂停，房间可能停留在指导语或对局阶段，需要主试在管理端归档。

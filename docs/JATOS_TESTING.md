@@ -441,32 +441,59 @@ curl -sS -X POST \
   "http://127.0.0.1:9000/jatos/api/v1/results/metadata?download=false&studyResultId=15"
 ```
 
-响应是包含 `data` 数组的对象，studyResult 在 `data[].studyResults[]` 中。本次实际查询结果的关键字段：
+响应是包含 `data` 数组的对象，studyResult 在 `data[].studyResults[]` 中。3.11.3 实际响应的关键字段：
 
 ```json
-[
-  {
-    "id": 15,
-    "uuid": "030ffefb-34b4-4a48-bf92-69febdaa31ed",
-    "studyCode": "MupxWYgmuL7",
-    "workerId": 6,
-    "workerType": "PersonalMultiple",
-    "batchId": 2,
-    "studyState": "STARTED",
-    "componentResults": [
-      {
-        "id": 12,
-        "componentUuid": "3be1b711-c32f-47b2-8bde-b4415f37d600",
-        "componentState": "STARTED",
-        "path": "/study_result_15/comp-result_12",
-        "data": {"size": 27, "sizeHumanReadable": "27 B"}
-      }
-    ]
-  }
-]
+{
+  "apiVersion": "1.1.0",
+  "data": [
+    {
+      "studyId": 2,
+      "studyUuid": "bc20f8ed-b510-47f7-944c-c120abce3fee",
+      "studyTitle": "Moyo Test eb8b351852",
+      "studyResults": [
+        {
+          "id": 2,
+          "uuid": "f94dd982-9336-49f0-8699-2a21a8a71248",
+          "studyCode": "O78Ut3tjMNk",
+          "startDate": 1793502730000,
+          "endDate": null,
+          "lastSeenDate": 1793502731000,
+          "studyState": "DATA_RETRIEVED",
+          "urlQueryParameters": {"rt": "<signed rt>", "pid": "P-probe"},
+          "workerId": 3,
+          "workerType": "GeneralMultiple",
+          "batchId": 2,
+          "componentResults": [
+            {
+              "id": 1,
+              "componentId": 2,
+              "componentUuid": "1ebfa794-65a4-446f-815e-dd5ef6310ec9",
+              "componentState": "DATA_RETRIEVED",
+              "path": "/study_result_2/comp-result_1",
+              "data": {"size": 245, "sizeHumanReadable": "245 B"}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
-响应还包含 `studyId`、`studyUuid`、`studyTitle`、`startDate`、`lastSeenDate`、`batchUuid`、`batchTitle`、`endDate`、`duration`、`isQuotaReached`，以及 componentResult 的 `componentId`、`startDate`、`endDate`、`duration`、`files`。`data[].studyResults[].id` 可用于后续查询。
+`startDate`、`endDate` 和 `lastSeenDate` 是 epoch 毫秒。`urlQueryParameters` 是对象，平台问卷链接中的 `rt` 和 `pid` 会出现在这里。`data[].studyResults[].id` 可用于后续查询。
+
+按 `componentResultId` 读取原始答案：
+
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer $JATOS_API_TOKEN" \
+  "http://127.0.0.1:9000/jatos/api/v1/results/data?componentResultId=1" \
+  -o result.zip
+unzip -p result.zip '*/data.txt'
+```
+
+返回 ZIP，`data.txt` 是问卷组件提交给 `jatos.submitResultData` 的 JSON 对象。未结束的 `STARTED`/`DATA_RETRIEVED` 结果同样可以读取。平台自动同步使用同一组 metadata/data 接口，只处理 `data.size > 0` 且带有效签名 `rt` 的结果。
 
 ### 直接提交结果数据
 
@@ -577,6 +604,10 @@ http://127.0.0.1:9000/publix/<studyCode>?rt=<token>&pid=<analysisCode>&base=http
 - 用 Playwright 打开真实 JATOS 链接，提交问卷并等待跳回平台。
 - 校验 JATOS result 中的答案与平台响应中的 `jatosStudyResultId`、`jatosComponentResultId` 完全对应。
 - 校验平台 Room 归档为 `completed`，付款记录生成。
+- 阻断平台的问卷完成请求，让 JATOS 保留 `STARTED`/`DATA_RETRIEVED` 结果；再通过管理端设置 study ID 启用自动同步，校验平台补录、身份加密、付款截止日期、幂等和同步状态。
+- 在技术中止房间中重复上述自动同步路径，校验只生成到场费 Payment，归档原因保持 `technical_abort`。
+
+自动同步测试启动 uvicorn 时使用 `JATOS_STUDY_ID=""` 和 `JATOS_SYNC_INTERVAL_SECONDS=1`。测试先不配置 study ID，等 JATOS 结果产生后通过 `PATCH /admin/api/settings` 写入 `jatosStudyId`，从而验证数据库设置优先和自动轮询。
 
 运行：
 
@@ -585,7 +616,7 @@ cd /Users/mpxuann/Documents/research/projects/26-Moyo/moyo-online-exp
 uv run pytest tests/integration/test_jatos.py -q
 ```
 
-测试读取 `TEST_JATOS_API_TOKEN`，或 `.review/jatos/api_token.env`。需要在 PATH 中存在 Google Chrome；Playwright 使用 `PLAYWRIGHT_CHANNEL`（默认 `chrome`）。
+测试读取 `TEST_JATOS_API_TOKEN`，或 `.review/jatos/api_token.env`。本地 token 默认 1 天有效，过期后重新运行 `scripts/jatos_dev_setup.sh` 生成新 token。需要在 PATH 中存在 Google Chrome；Playwright 使用 `PLAYWRIGHT_CHANNEL`（默认 `chrome`）。
 
 ## 清理
 
@@ -636,6 +667,9 @@ rm -rf .review
 - 管理员初始密码为默认的 `admin`，日志中没有随机初始密码。
 - `PUT .../resultData` 必须使用 `text/plain`，并且组件结果必须处于可写状态。
 - 真实问卷构建产物、平台后端 CORS 和浏览器中的 `window.jatos` 字段已经由 `tests/integration/test_jatos.py` 验证。JATOS 3.12.0 安装和 slim 构建未在本机验证。
+- `POST /jatos/api/v1/results/metadata?studyId=...` 会按 study 展开全部 component result，不按 `studyState` 或 `componentState` 过滤。自动同步依赖这一行为读取平台漏收时仍未结束的结果。
+- 自动同步只处理带有效签名 `rt` token 的结果。token 过期或结果没有 `rt` 时不会自动导入，需要使用管理端手工导入。
+- 自动同步需要有效的 JATOS API token、study ID 和应用到 JATOS 的网络连通性。部署保持单 worker，避免多个进程重复轮询。
 - `scripts/jatos_dev_setup.sh` 管理的是端口 3307、数据目录 `.review/mariadb-data` 的本地 MariaDB 实例，不会修改 Homebrew 服务或其他端口上的 MariaDB。
 
 ## 参考

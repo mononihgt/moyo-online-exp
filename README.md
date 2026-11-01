@@ -79,7 +79,9 @@ ADMIN_USERNAME=admin
 ADMIN_INITIAL_PASSWORD=<至少 12 位密码>
 JATOS_BASE_URL=http://127.0.0.1:9000
 JATOS_STUDY_CODE=<JATOS study code>
+JATOS_STUDY_ID=<JATOS study ID 或 UUID>
 JATOS_API_TOKEN=<JATOS API token>
+JATOS_SYNC_INTERVAL_SECONDS=60
 COOKIE_SECURE=false
 INACTIVITY_TIMEOUT_SECONDS=600
 INACTIVITY_WARNING_SECONDS=60
@@ -142,9 +144,13 @@ JATOS study 的批次必须允许 `GeneralMultiple`。API 创建的 study 默认
 
 问卷组件支持草稿、重新进入、平台双写和按 JATOS result ID 幂等。管理端可以重新签发问卷链接，并手动补齐 JATOS 结果。
 
+平台在配置 `JATOS_STUDY_ID` 和 API token 后自动轮询 JATOS 结果，默认 60 秒一次。自动同步只读取带有效签名 `rt` token 且存在 data.txt 的结果，包括尚未结束的 `STARTED` 结果；它使用问卷中的 Room 和参与者标识导入答案，走与正常提交相同的身份加密、付款和归档路径。完成时间取 JATOS 结果时间，付款截止日期据此计算。没有有效 `rt` 的旧结果保留给管理端手工导入。管理端设置页显示最近运行、最近成功、导入数量和最近错误。
+
+JATOS API token 的有效期必须覆盖整个实验周期。自动同步只支持单 worker 部署。
+
 问卷必须包含真实姓名、支付宝手机号和身份证明三个受保护题型。平台在草稿、上下文回显和导出中移除这些字段，提交时使用 `IDENTITY_ENCRYPTION_KEY` 加密保存到平台身份记录。JATOS 自身仍可能保存组件提交的原始答案，包括受保护字段；JATOS 管理权限、数据库和备份必须按同样的个人信息标准保护。
 
-技术中止归档后，已到场且到场费参数大于 0 的参与者仍可填写并提交后测问卷。提交后生成只含到场费的 Payment，不产生基础费与绩效费，不标记为完成，也不改变归档原因。管理端可以从房间详情重发问卷或导入 JATOS 结果。
+技术中止归档后，已到场且到场费参数大于 0 的参与者仍可填写并提交后测问卷。提交后生成只含到场费的 Payment，不产生基础费与绩效费，不标记为完成，也不改变归档原因。自动同步可以补录 JATOS 中已有的结果；管理端也可以从房间详情重发问卷或导入 JATOS 结果。
 
 ## 运行时规则
 

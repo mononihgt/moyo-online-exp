@@ -4,6 +4,7 @@ import mimetypes
 import os
 import shutil
 import subprocess
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -134,6 +135,15 @@ class JatosClient:
         archive = zipfile.ZipFile(io.BytesIO(response.content))
         return json.loads(archive.read("metadata.json"))
 
+    def results_metadata_v1(self, study_id: int) -> dict:
+        self.client.cookies.clear()
+        response = self.client.post(
+            "/jatos/api/v1/results/metadata",
+            params={"download": "false", "studyId": study_id},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def results_data(self, study_id: int) -> list[dict]:
         self.client.cookies.clear()
         response = self.client.get("/jatos/api/v1/results", params={"studyId": study_id})
@@ -146,6 +156,46 @@ class JatosClient:
                 if content:
                     data_entries.append(json.loads(content))
         return data_entries
+
+    def results_data_v1(self, component_result_id: int | str) -> dict:
+        self.client.cookies.clear()
+        response = self.client.post(
+            "/jatos/api/v1/results/data",
+            params={"componentResultId": component_result_id},
+        )
+        response.raise_for_status()
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        names = [
+            name
+            for name in archive.namelist()
+            if name == "data.txt" or name.endswith("/data.txt")
+        ]
+        if len(names) != 1:
+            raise RuntimeError(f"JATOS data.txt 数量异常: {names}")
+        return json.loads(archive.read(names[0]).decode("utf-8"))
+
+    def wait_for_component_data(
+        self, study_id: int, analysis_code: str, timeout: float = 30
+    ) -> tuple[dict, dict]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            metadata = self.results_metadata_v1(study_id)
+            for group in metadata.get("data", []):
+                for study_result in group.get("studyResults", []):
+                    query = study_result.get("urlQueryParameters")
+                    if isinstance(query, str):
+                        try:
+                            query = json.loads(query)
+                        except json.JSONDecodeError:
+                            query = {}
+                    if not isinstance(query, dict) or query.get("pid") != analysis_code:
+                        continue
+                    for component_result in study_result.get("componentResults", []):
+                        data_info = component_result.get("data") or {}
+                        if int(data_info.get("size") or 0) > 0:
+                            return study_result, component_result
+            time.sleep(0.2)
+        raise AssertionError(f"JATOS 结果未出现: {analysis_code}")
 
     def close(self) -> None:
         self.client.close()

@@ -460,13 +460,27 @@ export interface AuditEntry {
   createdAt: string;
 }
 
+export interface JatosSyncStatus {
+  configured: boolean;
+  intervalSeconds: number;
+  status: "ok" | "error" | "disabled" | null;
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  lastImported: number;
+  lastSkipped: number;
+}
+
 export interface AdminSettings {
   jatosBaseUrl: string;
   jatosStudyCode: string;
+  jatosStudyId: string;
   contactInfo: string | null;
   timezone: string;
   hasJatosToken: boolean;
   publicBaseUrl: string;
+  jatosSync: JatosSyncStatus;
 }
 
 export interface QuestionnaireContext {

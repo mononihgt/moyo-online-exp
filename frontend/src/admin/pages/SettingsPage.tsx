@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, Save, ShieldCheck } from "lucide-react";
+import { KeyRound, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { formatDateTime } from "../../shared/format";
 import type { AdminSettings } from "../../shared/types";
 import { adminApi, errorMessage } from "../api";
 import {
@@ -15,6 +16,7 @@ import {
 interface SettingsFormState {
   jatosBaseUrl: string;
   jatosStudyCode: string;
+  jatosStudyId: string;
   contactInfo: string;
   timezone: string;
 }
@@ -23,6 +25,7 @@ function formFromSettings(settings: AdminSettings): SettingsFormState {
   return {
     jatosBaseUrl: settings.jatosBaseUrl,
     jatosStudyCode: settings.jatosStudyCode,
+    jatosStudyId: settings.jatosStudyId,
     contactInfo: settings.contactInfo ?? "",
     timezone: settings.timezone,
   };
@@ -34,6 +37,7 @@ export function SettingsPage() {
   const [form, setForm] = useState<SettingsFormState>({
     jatosBaseUrl: "",
     jatosStudyCode: "",
+    jatosStudyId: "",
     contactInfo: "",
     timezone: "",
   });
@@ -65,6 +69,7 @@ export function SettingsPage() {
     settings !== null &&
     (form.jatosBaseUrl !== settings.jatosBaseUrl ||
       form.jatosStudyCode !== settings.jatosStudyCode ||
+      form.jatosStudyId !== settings.jatosStudyId ||
       form.contactInfo !== (settings.contactInfo ?? "") ||
       form.timezone !== settings.timezone);
 
@@ -73,6 +78,10 @@ export function SettingsPage() {
     const baseUrl = form.jatosBaseUrl.trim();
     if (baseUrl && !/^https?:\/\/\S+$/i.test(baseUrl)) {
       errors.jatosBaseUrl = "JATOS 地址必须以 http:// 或 https:// 开头";
+    }
+    const studyId = form.jatosStudyId.trim();
+    if (studyId && !/^\d+$/.test(studyId) && studyId.length !== 36) {
+      errors.jatosStudyId = "JATOS study ID 必须是数字或 UUID";
     }
     if (!form.timezone.trim()) {
       errors.timezone = "请填写时区";
@@ -89,6 +98,7 @@ export function SettingsPage() {
       await adminApi.patch("/settings", {
         jatosBaseUrl: form.jatosBaseUrl.trim(),
         jatosStudyCode: form.jatosStudyCode.trim(),
+        jatosStudyId: form.jatosStudyId.trim(),
         contactInfo: form.contactInfo.trim(),
         timezone: form.timezone.trim(),
       });
@@ -160,6 +170,24 @@ export function SettingsPage() {
                 />
               </Field>
             </div>
+            <div className="admin-form-row">
+              <Field
+                label="JATOS study ID"
+                htmlFor="settings-jatos-study-id"
+                error={formErrors.jatosStudyId}
+                hint="部署脚本输出的 studyId 或 studyUuid。自动同步使用该 study 的问卷结果。"
+              >
+                <input
+                  id="settings-jatos-study-id"
+                  className="admin-input"
+                  value={form.jatosStudyId}
+                  onChange={(event) =>
+                    setForm({ ...form, jatosStudyId: event.target.value })
+                  }
+                  data-testid="settings-jatos-study-id"
+                />
+              </Field>
+            </div>
             <div className="admin-settings-status" style={{ marginTop: "4px" }}>
               <KeyRound size={16} aria-hidden="true" />
               <span>JATOS API Token</span>
@@ -171,6 +199,42 @@ export function SettingsPage() {
                 )}
               </span>
             </div>
+            <div className="admin-settings-status" style={{ marginTop: "4px" }}>
+              <RefreshCw size={16} aria-hidden="true" />
+              <span>自动同步</span>
+              <span data-testid="settings-sync-status">
+                {settings?.jatosSync.configured ? (
+                  settings.jatosSync.status === "error" ? (
+                    <StatusChip tone="error">异常</StatusChip>
+                  ) : settings.jatosSync.status === "ok" ? (
+                    settings.jatosSync.lastError ? (
+                      <StatusChip tone="warning">有错误</StatusChip>
+                    ) : (
+                      <StatusChip tone="success">正常</StatusChip>
+                    )
+                  ) : (
+                    <StatusChip tone="neutral">等待运行</StatusChip>
+                  )
+                ) : (
+                  <StatusChip tone="warning">未启用</StatusChip>
+                )}
+              </span>
+            </div>
+            <p className="admin-hint" data-testid="settings-sync-last-run">
+              {settings?.jatosSync.lastRunAt
+                ? `最近运行 ${formatDateTime(settings.jatosSync.lastRunAt)}`
+                : "尚未运行"}
+              {settings?.jatosSync.lastSuccessAt
+                ? `，最近成功 ${formatDateTime(settings.jatosSync.lastSuccessAt)}`
+                : ""}
+              {settings ? `，上次导入 ${settings.jatosSync.lastImported} 条` : ""}
+            </p>
+            {settings && !settings.jatosSync.configured ? (
+              <p className="admin-hint">需要 JATOS study ID 和 API token 才会自动同步。</p>
+            ) : null}
+            {settings?.jatosSync.configured && settings.jatosSync.lastError ? (
+              <InlineNotice tone="warning">{settings.jatosSync.lastError}</InlineNotice>
+            ) : null}
             <p className="admin-hint">
               Token 仅在服务端通过环境变量配置，不会返回或显示明文。修改 token 需要重启服务实例。
             </p>

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -235,6 +236,7 @@ async def complete_questionnaire(
     jatos_study_result_id: str,
     jatos_component_result_id: str,
     source: str,
+    completed_at: datetime | None = None,
 ) -> dict:
     if room.status not in (ROOM_QUESTIONNAIRE, ROOM_ARCHIVED):
         raise HTTPException(status.HTTP_409_CONFLICT, "当前实验尚未进入问卷阶段")
@@ -245,6 +247,9 @@ async def complete_questionnaire(
     technical_abort = (
         room.status == ROOM_ARCHIVED and room.archive_reason == "technical_abort"
     )
+    completion_time = completed_at or utcnow()
+    if completion_time.tzinfo is not None:
+        completion_time = completion_time.astimezone(timezone.utc).replace(tzinfo=None)
     existing_attempt_query = await db.execute(
         select(QuestionnaireResponse).where(
             QuestionnaireResponse.room_id == room.id,
@@ -263,7 +268,12 @@ async def complete_questionnaire(
 
     if existing_attempt is not None:
         redirect = f"{get_settings().public_base_url.rstrip('/')}/complete?room={room.id}"
-        return {"saved": True, "canonical": existing_attempt.canonical, "redirectUrl": redirect}
+        return {
+            "saved": True,
+            "canonical": existing_attempt.canonical,
+            "inserted": False,
+            "redirectUrl": redirect,
+        }
 
     canonical = await _canonical_response(db, room.id, room_participant.participant_id)
     response = QuestionnaireResponse(
@@ -276,7 +286,7 @@ async def complete_questionnaire(
         answers_json=sanitized_answers,
         canonical=canonical is None,
         source=source,
-        completed_at=utcnow(),
+        completed_at=completion_time,
     )
     db.add(response)
     await db.flush()
@@ -293,7 +303,7 @@ async def complete_questionnaire(
     if canonical is None:
         await _upsert_identity(db, room, room_participant, identity)
         room_participant.questionnaire_status = QUESTIONNAIRE_COMPLETED
-        room_participant.completed_at = utcnow()
+        room_participant.completed_at = completion_time
         add_event(
             db,
             room,
@@ -328,7 +338,7 @@ async def complete_questionnaire(
         await _upsert_identity(db, room, room_participant, identity)
         room_participant.questionnaire_status = QUESTIONNAIRE_COMPLETED
         room_participant.completed_at = (
-            room_participant.completed_at or canonical.completed_at or utcnow()
+            room_participant.completed_at or canonical.completed_at or completion_time
         )
         payment = await upsert_payment(
             db, room, room_participant.participant_id, room_participant=room_participant
@@ -340,7 +350,12 @@ async def complete_questionnaire(
             )
     await db.commit()
     redirect = f"{get_settings().public_base_url.rstrip('/')}/complete?room={room.id}"
-    return {"saved": True, "canonical": canonical is None, "redirectUrl": redirect}
+    return {
+        "saved": True,
+        "canonical": canonical is None,
+        "inserted": True,
+        "redirectUrl": redirect,
+    }
 
 
 async def complete_with_token(db: AsyncSession, token: str, payload: dict) -> dict:

@@ -19,6 +19,7 @@ from .db import dispose_engine, get_session_factory, init_engine
 from .logging_config import configure_logging
 from .models import AdminUser
 from .security import CSRF_COOKIE, hash_password, new_csrf_token
+from .services.jatos_sync import jatos_sync_manager
 from .services.runtime import runtime_manager
 from .services.troop_profiles import seed_built_in_troop_profile
 
@@ -53,9 +54,11 @@ async def lifespan(app: FastAPI):
     await _seed_admin()
     await _seed_data()
     await runtime_manager.start()
+    await jatos_sync_manager.start()
     try:
         yield
     finally:
+        await jatos_sync_manager.stop()
         await runtime_manager.stop()
         await dispose_engine()
 

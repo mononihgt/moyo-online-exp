@@ -4,11 +4,13 @@ import os
 import time
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
 from playwright.sync_api import sync_playwright
 
+from app.timeutil import week_deadline_utc
 from conftest import (
     ID_CARD_SAMPLE,
     PASSPORT_SAMPLE,
@@ -25,7 +27,7 @@ from conftest import (
     reset_database,
     wait_until,
 )
-from jatos_support import JatosClient, create_test_study, jatos_base_url
+from jatos_support import JatosClient, create_test_study, jatos_api_token, jatos_base_url
 
 LOGIN_A = ("JATOS甲", "13500000001")
 LOGIN_B = ("JATOS乙", "13500000002")
@@ -91,6 +93,31 @@ def _submit_questionnaire(browser, url: str, option_index: int, identity: dict) 
     frame.locator("#q-question-4-input").fill(identity["number"])
     frame.locator('[data-testid="questionnaire-submit"]').click()
     _wait_redirect(page)
+    context.close()
+
+
+def _submit_questionnaire_blocked(
+    browser, url: str, option_index: int, identity: dict
+) -> None:
+    context = browser.new_context()
+    context.route(
+        "**/api/jatos/questionnaire/complete",
+        lambda route: route.abort("failed"),
+    )
+    page = context.new_page()
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    frame = _frame_with_title(page)
+    assert "后测问卷" in frame.locator('[data-testid="questionnaire-title"]').inner_text()
+    frame.locator(f"#q-question-0-option-{option_index}").check()
+    frame.locator("#q-question-1-input").fill("体验顺畅")
+    frame.locator("#q-question-2-input").fill(identity["real_name"])
+    frame.locator("#q-question-3-input").fill(identity["alipay_phone"])
+    frame.locator("#q-question-4-type").select_option(identity["document_type"])
+    frame.locator("#q-question-4-input").fill(identity["number"])
+    frame.locator('[data-testid="questionnaire-submit"]').click()
+    frame.locator('[data-testid="questionnaire-retry"]').wait_for(
+        state="visible", timeout=30000
+    )
     context.close()
 
 
@@ -580,6 +607,358 @@ def test_real_jatos_protected_answers_and_manual_import():
         )
         assert len(payment_rows) == 4
         assert all(row["status"] == "pending" for row in payment_rows)
+    finally:
+        if server is not None:
+            server.stop()
+        jatos.close()
+
+
+@pytest.mark.jatos
+@pytest.mark.integration
+def test_real_jatos_auto_sync_started_result():
+    jatos = JatosClient()
+    study = create_test_study(jatos)
+    server = None
+    try:
+        reset_database()
+        server = ServerHandle(
+            env_overrides={
+                "JATOS_BASE_URL": jatos_base_url(),
+                "JATOS_STUDY_CODE": study["code"],
+                "JATOS_STUDY_ID": "",
+                "JATOS_API_TOKEN": jatos_api_token(),
+                "JATOS_SYNC_INTERVAL_SECONDS": "1",
+            }
+        )
+        server.start()
+        admin = ApiClient(server.base_url).login_admin()
+        create_consent(admin)
+        profile = create_troop_profile(admin, PROFILE_ROWS)
+        map_group = create_map_group(
+            admin,
+            profile["id"],
+            rows=3,
+            cols=3,
+            formal_trials=FORMAL_TRIALS,
+            practice_turn_cap=TURN_CAP,
+            practice_turn_seconds=3,
+            formal_turn_cap=TURN_CAP,
+            formal_turn_seconds=3,
+            rest_seconds=1,
+        )
+        instruction_a = create_instruction(admin, map_group["id"], 1, "# 玩家1", 0)
+        instruction_b = create_instruction(admin, map_group["id"], 2, "# 玩家2", 0)
+        questionnaire = create_questionnaire(admin)
+        room = create_room(
+            admin,
+            map_group["id"],
+            instruction_a["id"],
+            instruction_b["id"],
+            questionnaire["id"],
+            starts_in_seconds=10,
+            wait_window_seconds=600,
+            reconnect_window_seconds=10,
+        )
+        participant_a = ApiClient(server.base_url).login_participant(*LOGIN_A)
+        participant_b = ApiClient(server.base_url).login_participant(*LOGIN_B)
+        for participant in (participant_a, participant_b):
+            participant.consent()
+        participant_a.json("POST", f"/api/rooms/{room['id']}/book")
+        participant_b.json("POST", f"/api/rooms/{room['id']}/book")
+
+        url_a, url_b = _advance_to_questionnaire(
+            server, admin, room, participant_a, participant_b
+        )
+        analysis_code_b = parse_qs(urlparse(url_b).query)["pid"][0]
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True, channel=os.environ.get("PLAYWRIGHT_CHANNEL", "chrome")
+            )
+            _submit_questionnaire(
+                browser, _component_url(url_a, server.base_url), 0, IDENTITY_A
+            )
+            _submit_questionnaire_blocked(
+                browser, _component_url(url_b, server.base_url), 1, IDENTITY_B
+            )
+            browser.close()
+
+        study_result_b, component_result_b = jatos.wait_for_component_data(
+            study["study_id"], analysis_code_b
+        )
+        assert study_result_b["studyState"] != "FINISHED"
+        assert study_result_b["urlQueryParameters"]["pid"] == analysis_code_b
+        assert "rt" in study_result_b["urlQueryParameters"]
+        raw_b = jatos.results_data_v1(component_result_b["id"])
+        assert raw_b["analysisCode"] == analysis_code_b
+        assert PROTECTED_IDS <= set(raw_b["answers"])
+
+        pids = _room_participant_ids(admin, room["id"])
+        b_pid = pids[LOGIN_B[0]]
+        assert (
+            fetch_all(
+                "SELECT id FROM questionnaire_responses WHERE room_id = %s AND participant_id = %s",
+                (room["id"], b_pid),
+            )
+            == []
+        )
+        assert len(
+            fetch_all(
+                "SELECT id FROM questionnaire_responses WHERE room_id = %s",
+                (room["id"],),
+            )
+        ) == 1
+        settings_before = admin.json("GET", "/admin/api/settings")
+        assert settings_before["jatosSync"]["configured"] is False
+        assert settings_before["jatosSync"]["status"] == "disabled"
+
+        before_enable = datetime.now(timezone.utc).replace(tzinfo=None)
+        admin.json(
+            "PATCH",
+            "/admin/api/settings",
+            json={"jatosStudyId": str(study["study_id"])},
+        )
+        wait_until(
+            lambda: admin.json("GET", f"/admin/api/rooms/{room['id']}")["room"]["status"]
+            == "archived",
+            timeout=30,
+        )
+        detail = admin.json("GET", f"/admin/api/rooms/{room['id']}")
+        assert detail["room"]["archiveReason"] == "completed"
+        assert all(
+            item["questionnaireStatus"] == "completed" for item in detail["participants"]
+        )
+        assert len(detail["payments"]) == 2
+        assert all(item["status"] == "pending" for item in detail["payments"])
+
+        _assert_canonical_answers(room["id"], b_pid, "jatos_sync")
+        _assert_canonical_answers(room["id"], pids[LOGIN_A[0]], "jatos")
+        response_ids = fetch_all(
+            "SELECT jatos_study_result_id, jatos_component_result_id "
+            "FROM questionnaire_responses WHERE room_id = %s AND participant_id = %s",
+            (room["id"], b_pid),
+        )
+        assert response_ids == [
+            {
+                "jatos_study_result_id": str(study_result_b["id"]),
+                "jatos_component_result_id": str(component_result_b["id"]),
+            }
+        ]
+        completed_row = fetch_all(
+            "SELECT completed_at FROM room_participants WHERE room_id = %s AND participant_id = %s",
+            (room["id"], b_pid),
+        )[0]
+        assert completed_row["completed_at"] < before_enable
+        payment_row = fetch_all(
+            "SELECT deadline_at FROM payments WHERE room_id = %s AND participant_id = %s",
+            (room["id"], b_pid),
+        )[0]
+        assert payment_row["deadline_at"] == week_deadline_utc(
+            completed_row["completed_at"], "Asia/Shanghai"
+        )
+        _assert_identity_encrypted(room["id"])
+        _assert_export_boundary(
+            admin,
+            room["id"],
+            [
+                IDENTITY_A["real_name"],
+                IDENTITY_A["alipay_phone"],
+                IDENTITY_A["number"],
+                IDENTITY_B["real_name"],
+                IDENTITY_B["alipay_phone"],
+                IDENTITY_B["number"],
+            ],
+        )
+        wait_until(
+            lambda: (admin.json("GET", "/admin/api/settings")["jatosSync"] or {}).get(
+                "status"
+            )
+            == "ok",
+            timeout=30,
+        )
+        settings_after = admin.json("GET", "/admin/api/settings")
+        assert settings_after["jatosSync"]["configured"] is True
+        assert settings_after["jatosSync"]["lastSuccessAt"] is not None
+
+        time.sleep(2.5)
+        assert len(
+            fetch_all(
+                "SELECT id FROM questionnaire_responses WHERE room_id = %s",
+                (room["id"],),
+            )
+        ) == 2
+        assert len(
+            fetch_all("SELECT id FROM payments WHERE room_id = %s", (room["id"],))
+        ) == 2
+    finally:
+        if server is not None:
+            server.stop()
+        jatos.close()
+
+
+@pytest.mark.jatos
+@pytest.mark.integration
+def test_real_jatos_auto_sync_technical_abort():
+    jatos = JatosClient()
+    study = create_test_study(jatos)
+    server = None
+    try:
+        reset_database()
+        server = ServerHandle(
+            env_overrides={
+                "JATOS_BASE_URL": jatos_base_url(),
+                "JATOS_STUDY_CODE": study["code"],
+                "JATOS_STUDY_ID": "",
+                "JATOS_API_TOKEN": jatos_api_token(),
+                "JATOS_SYNC_INTERVAL_SECONDS": "1",
+            }
+        )
+        server.start()
+        admin = ApiClient(server.base_url).login_admin()
+        create_consent(admin)
+        profile = create_troop_profile(admin, PROFILE_ROWS)
+        map_group = create_map_group(
+            admin,
+            profile["id"],
+            rows=3,
+            cols=3,
+            formal_trials=FORMAL_TRIALS,
+            practice_turn_cap=TURN_CAP,
+            practice_turn_seconds=3,
+            formal_turn_cap=TURN_CAP,
+            formal_turn_seconds=3,
+            rest_seconds=1,
+        )
+        instruction_a = create_instruction(admin, map_group["id"], 1, "# 玩家1", 0)
+        instruction_b = create_instruction(admin, map_group["id"], 2, "# 玩家2", 0)
+        questionnaire = create_questionnaire(admin)
+        room = create_room(
+            admin,
+            map_group["id"],
+            instruction_a["id"],
+            instruction_b["id"],
+            questionnaire["id"],
+            starts_in_seconds=10,
+            wait_window_seconds=600,
+            reconnect_window_seconds=2,
+        )
+        participant_a = ApiClient(server.base_url).login_participant(*LOGIN_A)
+        participant_b = ApiClient(server.base_url).login_participant(*LOGIN_B)
+        for participant in (participant_a, participant_b):
+            participant.consent()
+        participant_a.json("POST", f"/api/rooms/{room['id']}/book")
+        participant_b.json("POST", f"/api/rooms/{room['id']}/book")
+        for participant in (participant_a, participant_b):
+            wait_until(
+                lambda participant=participant: (
+                    participant.json("GET", "/api/my-room")["room"] or {}
+                ).get("status")
+                == "waiting",
+                timeout=20,
+            )
+        ws_a = WsClient(server, participant_a.cookie_value("moyo_participant"))
+        ws_b = WsClient(server, participant_b.cookie_value("moyo_participant"))
+        ws_a.send("enter_room", roomId=room["id"])
+        ws_b.send("enter_room", roomId=room["id"])
+        ws_a.recv_until("room_state")
+        ws_b.recv_until("room_state")
+        wait_until(
+            lambda: all(
+                booking["attendedAt"] is not None
+                for booking in admin.json("GET", f"/admin/api/rooms/{room['id']}")["bookings"]
+            ),
+            timeout=10,
+        )
+        ws_a.send("start_matching", roomId=room["id"])
+        ws_b.send("start_matching", roomId=room["id"])
+        ws_a.recv_until("instruction_state")
+        ws_b.recv_until("instruction_state")
+        ws_b.close()
+        archived = ws_a.recv_until("room_archived", timeout=20)
+        assert archived["reason"] == "technical_abort"
+        ws_a.close()
+
+        me_a = participant_a.json("GET", "/api/me")["me"]
+        me_b = participant_b.json("GET", "/api/me")["me"]
+        resend = admin.json(
+            "POST",
+            f"/admin/api/rooms/{room['id']}/actions",
+            json={"action": "resend_questionnaire"},
+        )
+        links = {link["participantId"]: link["url"] for link in resend["links"]}
+        assert set(links) == {me_a["id"], me_b["id"]}
+        analysis_code_b = parse_qs(urlparse(links[me_b["id"]]).query)["pid"][0]
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                headless=True, channel=os.environ.get("PLAYWRIGHT_CHANNEL", "chrome")
+            )
+            _submit_questionnaire(
+                browser, _component_url(links[me_a["id"]], server.base_url), 0, IDENTITY_A
+            )
+            _submit_questionnaire_blocked(
+                browser, _component_url(links[me_b["id"]], server.base_url), 1, IDENTITY_B
+            )
+            browser.close()
+
+        wait_for_b = jatos.wait_for_component_data(
+            study["study_id"], analysis_code_b
+        )
+        assert wait_for_b[0]["studyState"] != "FINISHED"
+        assert (
+            fetch_all(
+                "SELECT id FROM questionnaire_responses WHERE room_id = %s AND participant_id = %s",
+                (room["id"], me_b["id"]),
+            )
+            == []
+        )
+
+        before_enable = datetime.now(timezone.utc).replace(tzinfo=None)
+        admin.json(
+            "PATCH",
+            "/admin/api/settings",
+            json={"jatosStudyId": str(study["study_id"])},
+        )
+        wait_until(
+            lambda: len(
+                fetch_all(
+                    "SELECT id FROM payments WHERE room_id = %s AND participant_id = %s",
+                    (room["id"], me_b["id"]),
+                )
+            )
+            == 1,
+            timeout=30,
+        )
+        detail = admin.json("GET", f"/admin/api/rooms/{room['id']}")
+        assert detail["room"]["archiveReason"] == "technical_abort"
+        assert len(detail["payments"]) == 2
+        payment_b = next(
+            item for item in detail["payments"] if item["participantId"] == me_b["id"]
+        )
+        assert payment_b["showupPayCents"] == 1000
+        assert payment_b["basePayCents"] == 0
+        assert payment_b["performancePayCents"] == 0
+        assert payment_b["totalCents"] == 1000
+        assert payment_b["status"] == "pending"
+        _assert_canonical_answers(room["id"], me_b["id"], "jatos_sync")
+        _assert_identity_encrypted(room["id"])
+        completed_row = fetch_all(
+            "SELECT completed_at FROM room_participants WHERE room_id = %s AND participant_id = %s",
+            (room["id"], me_b["id"]),
+        )[0]
+        assert completed_row["completed_at"] < before_enable
+        payment_row = fetch_all(
+            "SELECT deadline_at FROM payments WHERE room_id = %s AND participant_id = %s",
+            (room["id"], me_b["id"]),
+        )[0]
+        assert payment_row["deadline_at"] == week_deadline_utc(
+            completed_row["completed_at"], "Asia/Shanghai"
+        )
+        me_b_after = participant_b.json("GET", "/api/me")["me"]
+        assert me_b_after["status"] == "eligible"
+        assert me_b_after["isCompleted"] is False
+        assert me_b_after["hasPayment"] is True
+        assert me_b_after["canBook"] is False
     finally:
         if server is not None:
             server.stop()

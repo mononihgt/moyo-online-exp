@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     admin_initial_password: str = "admin-initial-password"
     jatos_base_url: str = "http://127.0.0.1:9000"
     jatos_study_code: str = ""
+    jatos_study_id: str = ""
     jatos_api_token: str = ""
+    jatos_sync_interval_seconds: int = 60
     timezone: str = "Asia/Shanghai"
     media_dir: str = str(PROJECT_DIR / "data" / "media")
     cookie_secure: bool | None = None
@@ -45,6 +47,12 @@ class Settings(BaseSettings):
             raise ValueError("INACTIVITY_TIMEOUT_SECONDS and INACTIVITY_WARNING_SECONDS must be positive")
         if self.inactivity_warning_seconds >= self.inactivity_timeout_seconds:
             raise ValueError("INACTIVITY_WARNING_SECONDS must be less than INACTIVITY_TIMEOUT_SECONDS")
+        return self
+
+    @model_validator(mode="after")
+    def validate_jatos_sync(self) -> "Settings":
+        if self.jatos_sync_interval_seconds <= 0:
+            raise ValueError("JATOS_SYNC_INTERVAL_SECONDS must be positive")
         return self
 
     @property

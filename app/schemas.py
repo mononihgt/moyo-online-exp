@@ -243,6 +243,7 @@ class PaymentPatch(ApiModel):
 class SettingsPatch(ApiModel):
     jatos_base_url: str | None = None
     jatos_study_code: str | None = None
+    jatos_study_id: str | None = Field(default=None, max_length=64)
     contact_info: str | None = None
     timezone: str | None = None
 

@@ -145,7 +145,7 @@ def main() -> int:
                 "componentId": component["id"],
                 "componentUuid": component["uuid"],
                 "studyCode": code,
-                "next": "把 studyCode 填入平台的 JATOS_STUDY_CODE 或管理端设置，然后重启应用。",
+                "next": "把 studyCode 填入平台的 JATOS_STUDY_CODE，把 studyId 填入 JATOS_STUDY_ID；也可以登录管理端设置页填写。修改环境变量后重启应用。",
             },
             ensure_ascii=False,
             indent=2,

@@ -301,5 +301,11 @@ test("管理端页面、房间分区、地图组预览与问卷受保护字段",
   await expect(page.getByTestId("bulk-range-to")).toBeVisible();
   await expect(page.getByTestId("bulk-mark-paid")).toBeDisabled();
 
+  await page.getByTestId("nav-settings").click();
+  await expect(page.locator("h1.admin-page-title")).toHaveText("设置");
+  await expect(page.getByTestId("settings-jatos-study-id")).toBeVisible();
+  await expect(page.getByTestId("settings-sync-status")).toContainText("未启用");
+  await expect(page.getByTestId("settings-sync-last-run")).toBeVisible();
+
   await context.close();
 });

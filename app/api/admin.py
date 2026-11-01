@@ -451,13 +451,30 @@ async def get_settings_api(admin: AdminDep, db: DbSession):
         row.key: (row.value_json or {}).get("value") if isinstance(row.value_json, dict) else None
         for row in rows.scalars().all()
     }
+    base_url = str(values.get("jatos_base_url") or settings.jatos_base_url).strip()
+    study_id = str(values.get("jatos_study_id") or settings.jatos_study_id).strip()
+    sync_state = values.get("jatos_sync_state")
+    if not isinstance(sync_state, dict):
+        sync_state = {}
     return {
-        "jatosBaseUrl": values.get("jatos_base_url") or settings.jatos_base_url,
+        "jatosBaseUrl": base_url,
         "jatosStudyCode": values.get("jatos_study_code") or settings.jatos_study_code,
+        "jatosStudyId": study_id,
         "contactInfo": values.get("contact_info"),
         "timezone": values.get("timezone") or settings.timezone,
         "hasJatosToken": bool(settings.jatos_api_token),
         "publicBaseUrl": settings.public_base_url,
+        "jatosSync": {
+            "configured": bool(base_url and study_id and settings.jatos_api_token),
+            "intervalSeconds": settings.jatos_sync_interval_seconds,
+            "status": sync_state.get("status"),
+            "lastRunAt": sync_state.get("lastRunAt"),
+            "lastSuccessAt": sync_state.get("lastSuccessAt"),
+            "lastError": sync_state.get("lastError"),
+            "lastErrorAt": sync_state.get("lastErrorAt"),
+            "lastImported": int(sync_state.get("lastImported") or 0),
+            "lastSkipped": int(sync_state.get("lastSkipped") or 0),
+        },
     }
 
 
@@ -465,9 +482,13 @@ async def get_settings_api(admin: AdminDep, db: DbSession):
 async def patch_settings(payload: SettingsPatch, admin: AdminDep, db: DbSession):
     if payload.timezone is not None and payload.timezone != "Asia/Shanghai":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "时区固定为 Asia/Shanghai")
+    study_id = payload.jatos_study_id.strip() if payload.jatos_study_id is not None else None
+    if study_id and not (study_id.isdigit() or len(study_id) == 36):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "JATOS study ID 必须是数字或 UUID")
     mapping = {
         "jatos_base_url": payload.jatos_base_url,
         "jatos_study_code": payload.jatos_study_code,
+        "jatos_study_id": study_id,
         "contact_info": payload.contact_info,
         "timezone": payload.timezone,
     }
