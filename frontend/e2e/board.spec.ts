@@ -346,7 +346,7 @@ async function canvasColors(page: Page) {
       const green = data[index + 1];
       const blue = data[index + 2];
       if (red === 184 && green === 184 && blue === 184) grid += 1;
-      else if (red === 80 && green === 80 && blue === 80) selection += 1;
+      else if (red === 0 && green === 0 && blue === 0) selection += 1;
       else if (red === 28 && green === 28 && blue === 30) ink += 1;
       else if (red === 52 && green === 199 && blue === 89) legacyGreen += 1;
       else if (red === 255 && green === 255 && blue === 255) background += 1;
@@ -518,8 +518,8 @@ async function installWarInstrumentation(page: Page): Promise<void> {
           data.byteLength / 4,
         );
         for (let index = 0; index < pixels.length; index += 1) {
-          // 小端序下不透明 #505050 为 0xFF505050。
-          if (pixels[index] === 0xff505050) {
+          // 小端序下不透明 #000000 为 0xFF000000。
+          if (pixels[index] === 0xff000000) {
             sample.selectionFrames += 1;
             break;
           }
@@ -841,7 +841,7 @@ test("练习回合棋盘使用灰色网格、描边棋子与红色交火边框",
     };
   });
   expect(warStyle.borderColor).toBe("rgb(255, 59, 48)");
-  expect(warStyle.borderWidth).toBe("2px");
+  expect(warStyle.borderWidth).toBe("4px");
   expect(warStyle.animationDuration).toBe("1s");
   expect(warStyle.keyframes).toEqual(
     expect.arrayContaining([
@@ -1081,7 +1081,7 @@ test("试次结束的交火回合后进入休息并显示完整休息倒计时",
   await expect(warOne).toHaveCount(1, { timeout: 1500 });
   await expect(warTwo).toHaveCount(1, { timeout: 1500 });
   await expect(warOne.first()).toHaveCSS("border-top-color", "rgb(255, 59, 48)");
-  await expect(warOne.first()).toHaveCSS("border-top-width", "2px");
+  await expect(warOne.first()).toHaveCSS("border-top-width", "4px");
   await expect(pageOne.getByTestId("rest-view")).toHaveCount(0);
 
   await expect(pageOne.getByTestId("rest-view")).toBeVisible({ timeout: 5000 });
@@ -1144,7 +1144,7 @@ test("减少动态效果时交火边框保持静态红色", async ({
   });
   expect(style).toEqual({
     borderColor: "rgb(255, 59, 48)",
-    borderWidth: "2px",
+    borderWidth: "4px",
     animationName: "none",
     animations: 0,
   });

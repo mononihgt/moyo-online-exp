@@ -8,7 +8,7 @@ export interface BoardImageEntry {
 }
 
 export const BOARD_GRID_COLOR = "#B8B8B8";
-export const BOARD_SELECTION_COLOR = "#505050";
+export const BOARD_SELECTION_COLOR = "#000000";
 export const BOARD_HOVER_COLOR = "#AEAEB2";
 export const BOARD_PIECE_INK_DARK = "#1C1C1E";
 export const BOARD_PIECE_INK_WHITE = "#ffffff";
@@ -256,9 +256,9 @@ export function drawBoard(context: CanvasRenderingContext2D, options: DrawBoardO
       const x = col * cellWidth;
       const y = row * cellHeight;
       if (selectedSet.has(index)) {
-        context.lineWidth = 2;
+        context.lineWidth = 4;
         context.strokeStyle = BOARD_SELECTION_COLOR;
-        context.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+        context.strokeRect(x + 2, y + 2, cellWidth - 4, cellHeight - 4);
       } else if (!disabled && hovered === index) {
         context.lineWidth = 1;
         context.strokeStyle = BOARD_HOVER_COLOR;
