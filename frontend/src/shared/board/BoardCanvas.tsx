@@ -7,7 +7,7 @@ import {
 } from "react";
 import type { CSSProperties } from "react";
 
-import type { BoardState, ConditionVisual } from "../types";
+import type { BoardState, ConditionVisual, PieceInkMode } from "../types";
 import {
   boardImagesReady,
   drawBoard,
@@ -28,6 +28,7 @@ export interface BoardCanvasProps {
   disabled?: boolean;
   drawPieces?: boolean;
   drawInteraction?: boolean;
+  pieceInk?: PieceInkMode;
   className?: string;
   style?: CSSProperties;
   ariaLabel?: string;
@@ -46,6 +47,7 @@ export function BoardCanvas({
   disabled = false,
   drawPieces = true,
   drawInteraction = true,
+  pieceInk,
   className,
   style,
   ariaLabel,
@@ -99,6 +101,7 @@ export function BoardCanvas({
       disabled,
       drawPieces,
       drawInteraction,
+      pieceInk,
     });
   }, [
     board,
@@ -108,6 +111,7 @@ export function BoardCanvas({
     drawPieces,
     height,
     hovered,
+    pieceInk,
     selected,
     version,
     visuals,

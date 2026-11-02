@@ -118,6 +118,7 @@ class MapGroupCreate(ApiModel):
     formal_turn_seconds: int = 30
     rest_seconds: int = 60
     randomize_formal: bool = True
+    piece_ink: Literal["white", "dark", "auto"] = "white"
     factors: dict[str, str] | None = None
     payment: MapPaymentInput = Field(default_factory=MapPaymentInput)
     maps: list[MapDefinition]
@@ -137,6 +138,7 @@ class MapGroupPatch(ApiModel):
     formal_turn_seconds: int | None = None
     rest_seconds: int | None = None
     randomize_formal: bool | None = None
+    piece_ink: Literal["white", "dark", "auto"] | None = None
     factors: dict[str, str] | None = None
     payment: MapPaymentInput | None = None
     maps: list[MapDefinition] | None = None

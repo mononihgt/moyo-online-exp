@@ -177,6 +177,22 @@ def test_validate_requires_non_positive_payment_rejected():
         validate_map_group_payload(payload, {}, 1)
 
 
+def test_validate_piece_ink_defaults_to_white():
+    result = validate_map_group_payload(_both_payload(), {}, 1)
+    assert result["piece_ink"] == "white"
+
+
+@pytest.mark.parametrize("value", ["white", "dark", "auto"])
+def test_validate_accepts_piece_ink_modes(value):
+    result = validate_map_group_payload(_both_payload(piece_ink=value), {}, 1)
+    assert result["piece_ink"] == value
+
+
+def test_validate_rejects_unknown_piece_ink():
+    with pytest.raises(MapGroupValidationError, match="棋子颜色"):
+        validate_map_group_payload(_both_payload(piece_ink="red"), {}, 1)
+
+
 def test_troop_profile_rows_require_practice_and_formal():
     with pytest.raises(TroopProfileValidationError, match="1 行练习和至少 1 行正式"):
         validate_troop_profile_rows([{"soldiersA": 7, "soldiersB": 7}])

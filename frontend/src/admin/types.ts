@@ -6,6 +6,7 @@ import type {
   MapGroupVersion,
   MapSlot,
   MediaAsset,
+  PieceInkMode,
   QuestionnaireVersion,
   RoomSection,
   RoomSummary,
@@ -124,6 +125,7 @@ export interface MapGroupDraftPayload {
   formalTurnSeconds: number;
   restSeconds: number;
   randomizeFormal: boolean;
+  pieceInk: PieceInkMode;
   factors: Record<string, string>;
   payment: MapGroupPayment;
   maps: MapGroupMapPayload[];

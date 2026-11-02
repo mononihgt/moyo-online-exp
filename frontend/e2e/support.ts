@@ -41,6 +41,9 @@ export interface MapGroupConfig {
   factorLevel?: string;
   images?: (string | null)[];
   imagesBySlot?: { a?: (string | null)[]; b?: (string | null)[] };
+  colors?: (string | null)[];
+  colorsBySlot?: { a?: (string | null)[]; b?: (string | null)[] };
+  pieceInk?: "white" | "dark" | "auto";
   spawns?: { A: number; B: number };
   practiceTurnCap?: number;
   practiceTurnSeconds?: number;
@@ -254,35 +257,41 @@ async function createMapGroup(
       slot === "B"
         ? mapCells(config.imagesBySlot?.b ?? config.images, total)
         : mapCells(config.imagesBySlot?.a ?? config.images, total),
+    colors:
+      slot === "B"
+        ? mapCells(config.colorsBySlot?.b ?? config.colors, total)
+        : mapCells(config.colorsBySlot?.a ?? config.colors, total),
   }));
+  const payload = {
+    mode,
+    rows,
+    cols,
+    spawns: config.spawns ?? { A: 0, B: total - 1 },
+    troopProfileVersionId: profileVersionId,
+    practiceTrials: 1,
+    formalTrials,
+    practiceTurnCap: config.practiceTurnCap ?? 2,
+    practiceTurnSeconds: config.practiceTurnSeconds ?? 30,
+    formalTurnCap: config.formalTurnCap ?? 2,
+    formalTurnSeconds: config.formalTurnSeconds ?? 30,
+    restSeconds: config.restSeconds ?? 1,
+    randomizeFormal: config.randomizeFormal ?? false,
+    payment: {
+      basePayCents: config.basePayCents ?? 4500,
+      performanceRateCents: config.performanceRateCents ?? 1,
+      performanceFloorCents: config.performanceFloorCents ?? 0,
+      performanceCapCents: config.performanceCapCents ?? 2000,
+      showupPayCents: config.showupPayCents ?? 1000,
+    },
+    maps,
+    ...(config.pieceInk ? { pieceInk: config.pieceInk } : {}),
+  };
   const created = await adminApi<{ mapGroup: { id: string; name: string } }>(
     request,
     baseURL,
     "POST",
     "/admin/api/map-groups",
-    {
-      mode,
-      rows,
-      cols,
-      spawns: config.spawns ?? { A: 0, B: total - 1 },
-      troopProfileVersionId: profileVersionId,
-      practiceTrials: 1,
-      formalTrials,
-      practiceTurnCap: config.practiceTurnCap ?? 2,
-      practiceTurnSeconds: config.practiceTurnSeconds ?? 30,
-      formalTurnCap: config.formalTurnCap ?? 2,
-      formalTurnSeconds: config.formalTurnSeconds ?? 30,
-      restSeconds: config.restSeconds ?? 1,
-      randomizeFormal: config.randomizeFormal ?? false,
-      payment: {
-        basePayCents: config.basePayCents ?? 4500,
-        performanceRateCents: config.performanceRateCents ?? 1,
-        performanceFloorCents: config.performanceFloorCents ?? 0,
-        performanceCapCents: config.performanceCapCents ?? 2000,
-        showupPayCents: config.showupPayCents ?? 1000,
-      },
-      maps,
-    },
+    payload,
   );
   const published = await adminApi<{ mapGroup: { id: string; name: string } }>(
     request,

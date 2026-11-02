@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models import Room
+from app.services.export import _normalize_map_group_payload
 from app.services.instructions import instruction_name, validate_instruction
 from app.services.map_groups import (
     MapGroupValidationError,
@@ -284,6 +285,18 @@ def test_map_group_content_hash_includes_factors_and_landmarks():
     changed_landmarks = dict(data)
     changed_landmarks["maps"] = [dict(data["maps"][0], landmarkCells=[1])]
     assert map_group_content_hash(changed_landmarks) != base
+
+
+def test_map_group_content_hash_includes_piece_ink():
+    data = validate_map_group_payload(_both_payload(), {}, 1)
+    data["troop_profile_version_id"] = "profile-version"
+    base = map_group_content_hash(data)
+    assert map_group_content_hash(dict(data, piece_ink="dark")) != base
+
+
+def test_normalize_map_group_payload_defaults_piece_ink():
+    normalized = _normalize_map_group_payload({"maps": []})
+    assert normalized["pieceInk"] == "white"
 
 
 def test_validate_rejects_unknown_mode():

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import (
+    DEFAULT_PIECE_INK,
     MAP_MODE_AB,
     MAP_MODE_BOTH,
     MAP_MODES,
@@ -16,6 +17,7 @@ from ..constants import (
     MAP_SLOT_BOTH,
     MAP_SLOT_BY_ROLE,
     MAP_SLOTS,
+    PIECE_INK_MODES,
     VERSION_ARCHIVED,
     VERSION_DRAFT,
     VERSION_PUBLISHED,
@@ -180,6 +182,14 @@ def _validate_factors(value: Any) -> dict[str, str]:
     return normalized
 
 
+def _validate_piece_ink(value: Any) -> str:
+    if value is None:
+        return DEFAULT_PIECE_INK
+    if value not in PIECE_INK_MODES:
+        raise MapGroupValidationError("棋子颜色必须为 white、dark 或 auto")
+    return value
+
+
 def _validate_landmark_cells(value: Any, total: int) -> list[int]:
     if value is None:
         return []
@@ -323,6 +333,7 @@ def validate_map_group_payload(
     randomize_formal = payload.get("randomize_formal")
     if not isinstance(randomize_formal, bool):
         raise MapGroupValidationError("randomize_formal 必须是布尔值")
+    piece_ink = _validate_piece_ink(payload.get("piece_ink"))
 
     first = normalized_maps[0]
     return {
@@ -335,6 +346,7 @@ def validate_map_group_payload(
         "practice_trials": 1,
         "formal_trials": formal_trials,
         "randomize_formal": randomize_formal,
+        "piece_ink": piece_ink,
         "name": first["prefix"],
         "maps": normalized_maps,
         "payment": payment,
@@ -358,6 +370,7 @@ def map_group_content_hash(data: dict) -> str:
         "formalTurnSeconds": data["formal_turn_seconds"],
         "restSeconds": data["rest_seconds"],
         "randomizeFormal": data["randomize_formal"],
+        "pieceInk": data["piece_ink"],
         "factors": data["factors"],
         "payment": {camel: data["payment"][field] for field, camel in PAYMENT_FIELDS},
         "maps": [
@@ -432,6 +445,7 @@ def serialize_map_group_version(version: MapGroupVersion) -> dict:
         "formalTurnSeconds": version.formal_turn_seconds,
         "restSeconds": version.rest_seconds,
         "randomizeFormal": version.randomize_formal,
+        "pieceInk": version.piece_ink,
         "factors": version.factors_json or {},
         "payment": map_group_payment(version),
         "profile": {
@@ -524,6 +538,7 @@ def _version_payload(version: MapGroupVersion) -> dict:
         "formal_turn_seconds": version.formal_turn_seconds,
         "rest_seconds": version.rest_seconds,
         "randomize_formal": version.randomize_formal,
+        "piece_ink": version.piece_ink,
         "factors": version.factors_json or {},
         "payment": {
             "base_pay_cents": version.base_pay_cents,
@@ -563,6 +578,7 @@ def _apply_validated(version: MapGroupVersion, data: dict) -> None:
     version.formal_turn_seconds = data["formal_turn_seconds"]
     version.rest_seconds = data["rest_seconds"]
     version.randomize_formal = data["randomize_formal"]
+    version.piece_ink = data["piece_ink"]
     version.factors_json = data["factors"]
     version.base_pay_cents = data["payment"]["base_pay_cents"]
     version.performance_rate_cents = data["payment"]["performance_rate_cents"]

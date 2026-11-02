@@ -79,6 +79,8 @@ interface WarConfig {
   formalTurnCap: number;
   formalTurnSeconds: number;
   restSeconds: number;
+  pieceInk?: "white" | "dark" | "auto";
+  colors?: (string | null)[];
 }
 
 async function generateCoverImages(
@@ -370,6 +372,27 @@ async function canvasColors(page: Page) {
   });
 }
 
+async function canvasInkPixels(page: Page) {
+  return page.getByTestId("game-canvas").evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("canvas context missing");
+    const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let bright = 0;
+    let darkInk = 0;
+    let grid = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      if (red > 240 && green > 240 && blue > 240) bright += 1;
+      else if (red === 28 && green === 28 && blue === 30) darkInk += 1;
+      else if (red === 184 && green === 184 && blue === 184) grid += 1;
+    }
+    return { bright, darkInk, grid, total: canvas.width * canvas.height };
+  });
+}
+
 interface WarTiming {
   warVisibleAt: number | null;
   nextRoundAt: number | null;
@@ -411,6 +434,8 @@ async function startGamePair(
       formalTurnSeconds: config.formalTurnSeconds,
       restSeconds: config.restSeconds,
       randomizeFormal: false,
+      pieceInk: config.pieceInk,
+      colors: config.colors,
     },
   });
 
@@ -587,6 +612,7 @@ test("地图编辑预览与参与者画布的地图背景逐像素一致", async
       practiceTurnSeconds: 60,
       formalTurnCap: 1,
       formalTurnSeconds: 60,
+      pieceInk: "auto",
     },
   });
   expect(world.rows).toBe(BOARD_ROWS);
@@ -742,6 +768,7 @@ test("练习回合棋盘使用灰色网格、描边棋子与红色交火边框",
       formalTurnCap: 2,
       formalTurnSeconds: 60,
       restSeconds: 30,
+      pieceInk: "auto",
     },
   );
 
@@ -853,6 +880,44 @@ test("练习回合棋盘使用灰色网格、描边棋子与红色交火边框",
   const sample = await readWarSample(pageOne);
   expect(sample.overlayFrames).toBeGreaterThan(0);
   expect(sample.selectionFrames).toBe(0);
+
+  await contextOne.close();
+  await contextTwo.close();
+});
+
+test("地图组未设置棋子颜色时默认使用白色", async ({
+  browser,
+  request,
+  baseURL,
+}) => {
+  test.setTimeout(180_000);
+  if (!baseURL) throw new Error("baseURL missing");
+  const entries = roster(["默认白甲", "默认白乙"], "1349500");
+  const { contextOne, contextTwo, pageOne, pageTwo } = await startGamePair(
+    browser,
+    request,
+    baseURL,
+    entries,
+    {
+      formalTrials: 1,
+      practiceTurnCap: 1,
+      practiceTurnSeconds: 60,
+      formalTurnCap: 1,
+      formalTurnSeconds: 60,
+      restSeconds: 30,
+      colors: Array.from({ length: WAR_ROWS * WAR_COLS }, () => "#000000"),
+    },
+  );
+
+  await expect(pageOne.getByTestId("game-countdown")).toBeVisible({
+    timeout: 30000,
+  });
+  await expect
+    .poll(async () => (await canvasInkPixels(pageOne)).bright, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  const colors = await canvasInkPixels(pageOne);
+  expect(colors.grid).toBeGreaterThan(0);
+  expect(colors.darkInk).toBe(0);
 
   await contextOne.close();
   await contextTwo.close();

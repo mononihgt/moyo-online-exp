@@ -122,6 +122,7 @@ class MapGroupVersion(Base):
     formal_turn_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     rest_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     randomize_formal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    piece_ink: Mapped[str] = mapped_column(String(10), nullable=False, default="white")
     base_pay_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     performance_rate_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     performance_floor_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=3500)

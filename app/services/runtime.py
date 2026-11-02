@@ -17,6 +17,7 @@ from ..constants import (
     ARCHIVE_TECHNICAL_ABORT,
     BOOKING_ATTENDED,
     BOOKING_BOOKED,
+    DEFAULT_PIECE_INK,
     END_REASON_ANNIHILATION,
     END_REASON_TURN_LIMIT,
     ENGINE_MECHANICS,
@@ -1752,6 +1753,7 @@ class RuntimeManager:
             "restSeconds": map_group["restSeconds"],
             "board": state["board"],
             "visuals": _role_visuals(map_group, role_row.role),
+            "pieceInk": map_group.get("pieceInk", DEFAULT_PIECE_INK),
             "turnDeadline": state["turn_deadline"],
             "restDeadline": state["rest_deadline"],
             "submitted": str(role_row.role) in state["submissions"],
@@ -1939,6 +1941,7 @@ class RuntimeManager:
                     "turnSeconds": turn_seconds,
                     "board": state["board"],
                     "visuals": _role_visuals(map_group, row.role),
+                    "pieceInk": map_group.get("pieceInk", DEFAULT_PIECE_INK),
                     **_trial_parameter_payload(params),
                 },
             )

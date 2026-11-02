@@ -8,7 +8,7 @@ import {
 
 import { BoardCanvas } from "../shared/board/BoardCanvas";
 import { cellIndexFromPoint } from "../shared/board/renderBoard";
-import type { BoardState, ConditionVisual } from "../shared/types";
+import type { BoardState, ConditionVisual, PieceInkMode } from "../shared/types";
 
 export interface GameBoardLayout {
   boardWidth: number;
@@ -20,6 +20,7 @@ export interface GameBoardLayout {
 export function GameBoard({
   board,
   visuals,
+  pieceInk,
   selected,
   warCells,
   flashKey,
@@ -31,6 +32,7 @@ export function GameBoard({
 }: {
   board: BoardState;
   visuals: ConditionVisual[];
+  pieceInk: PieceInkMode;
   selected: number[];
   warCells: number[];
   flashKey: string | number;
@@ -140,6 +142,7 @@ export function GameBoard({
           rows={rows}
           cols={cols}
           visuals={visuals}
+          pieceInk={pieceInk}
           board={board}
           selected={selected}
           hovered={hovered}

@@ -815,6 +815,7 @@ def test_full_two_participant_flow_and_exports(server):
         "landmark": "present",
         "orientation": "horizontal",
     }
+    assert exported["mapGroup"]["pieceInk"] == "white"
     assert [item["slot"] for item in exported["mapGroup"]["maps"]] == ["Both"]
     assert exported["mapGroup"]["maps"][0]["cells"] == cells
     assert exported["mapGroup"]["maps"][0]["landmarkCells"] == [0, 1, 2]

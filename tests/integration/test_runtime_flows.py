@@ -126,6 +126,7 @@ class Context:
         formal_seconds=3,
         rest_seconds=1,
         randomize=True,
+        piece_ink=None,
         base_pay=4500,
         rate=1,
         performance_floor=0,
@@ -160,6 +161,7 @@ class Context:
             formal_turn_seconds=formal_seconds,
             rest_seconds=rest_seconds,
             randomize_formal=randomize,
+            piece_ink=piece_ink,
             base_pay_cents=base_pay,
             performance_rate_cents=rate,
             performance_floor_cents=performance_floor,
@@ -1627,6 +1629,7 @@ def test_visuals_both_mode(server):
         mode="both",
         assets=assets,
         colors=["#112233", None, None, None],
+        piece_ink="dark",
     )
     game = _start_game(server, setup, participant_a, participant_b)
     assert game.start_a["visuals"] == game.start_b["visuals"]
@@ -1634,8 +1637,12 @@ def test_visuals_both_mode(server):
     assert game.start_a["visuals"][0]["backgroundAssetId"] == asset["id"]
     assert game.start_a["visuals"][0]["color"] == "#112233"
     assert game.start_a["visuals"][1]["backgroundAssetId"] is None
+    assert game.start_a["pieceInk"] == "dark"
+    assert game.start_b["pieceInk"] == "dark"
     assert game.state_a["game"]["visuals"] == game.start_a["visuals"]
     assert game.state_b["game"]["visuals"] == game.start_a["visuals"]
+    assert game.state_a["game"]["pieceInk"] == "dark"
+    assert game.state_b["game"]["pieceInk"] == "dark"
 
 
 def test_visuals_ab_mode(server):

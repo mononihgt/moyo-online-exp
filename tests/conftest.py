@@ -375,6 +375,7 @@ def create_map_group(
     formal_turn_seconds: int = 3,
     rest_seconds: int = 1,
     randomize_formal: bool = True,
+    piece_ink: str | None = None,
     base_pay_cents: int = 4500,
     performance_rate_cents: int = 1,
     performance_floor_cents: int = 0,
@@ -419,6 +420,8 @@ def create_map_group(
         },
         "maps": maps,
     }
+    if piece_ink is not None:
+        payload["pieceInk"] = piece_ink
     created = admin.json("POST", "/admin/api/map-groups", json=payload)
     version = created["mapGroup"]
     if publish:

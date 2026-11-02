@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..constants import BOOKING_CANCELED, SCHEMA_VERSION, TIMEZONE
+from ..constants import BOOKING_CANCELED, DEFAULT_PIECE_INK, SCHEMA_VERSION, TIMEZONE
 from ..models import (
     Booking,
     GameTrial,
@@ -225,6 +225,7 @@ def _normalize_map_group_payload(map_group: dict) -> dict:
         return map_group
     normalized = dict(map_group)
     normalized.setdefault("factors", {})
+    normalized.setdefault("pieceInk", DEFAULT_PIECE_INK)
     maps = normalized.get("maps")
     normalized["maps"] = [
         {

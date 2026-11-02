@@ -32,6 +32,7 @@ export type VersionStatus = "draft" | "published" | "archived";
 export type PaymentStatus = "pending" | "paid";
 export type MapGroupMode = "both" | "ab";
 export type MapSlot = "Both" | "A" | "B";
+export type PieceInkMode = "white" | "dark" | "auto";
 export type DocumentType = "id_card" | "passport";
 export type Role = 1 | 2;
 
@@ -215,6 +216,7 @@ export interface MapGroupVersion {
   formalTurnSeconds: number;
   restSeconds: number;
   randomizeFormal: boolean;
+  pieceInk: PieceInkMode;
   factors: Record<string, string>;
   payment: MapGroupPayment;
   profile: TroopProfileRef;
@@ -558,6 +560,7 @@ export interface GameState extends TrialParameters {
   restSeconds: number;
   board: BoardState | null;
   visuals: ConditionVisual[];
+  pieceInk: PieceInkMode;
   turnDeadline: string | null;
   restDeadline: string | null;
   submitted: boolean;
@@ -679,6 +682,7 @@ export interface TrialStartMessage extends TrialParameters {
   turnSeconds: number;
   board: BoardState;
   visuals: ConditionVisual[];
+  pieceInk: PieceInkMode;
 }
 
 export type ServerMessage =

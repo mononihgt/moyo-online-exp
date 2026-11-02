@@ -8,6 +8,7 @@ interface SavedMapGroup {
   cols: number;
   spawns: { A: number; B: number };
   factors: Record<string, string>;
+  pieceInk: string;
   maps: {
     slot: string;
     cells: (string | null)[];
@@ -86,6 +87,7 @@ test("调整尺寸后出生格与选中格按行列重映射并持久化", async
   await page.getByTestId("map-group-add-factor").click();
   await page.getByTestId("map-group-factor-key-0").fill("landmark");
   await page.getByTestId("map-group-factor-value-0").fill("present");
+  await page.getByTestId("map-group-piece-ink").selectOption("dark");
 
   const createdResponse = page.waitForResponse(
     (response) =>
@@ -108,6 +110,7 @@ test("调整尺寸后出生格与选中格按行列重映射并持久化", async
   expect(saved.mapGroup.cols).toBe(8);
   expect(saved.mapGroup.spawns).toEqual({ A: 19, B: 31 });
   expect(saved.mapGroup.factors).toEqual({ landmark: "present" });
+  expect(saved.mapGroup.pieceInk).toBe("dark");
   expect(saved.mapGroup.maps[0].landmarkCells).toEqual([29]);
 });
 

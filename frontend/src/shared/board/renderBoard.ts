@@ -1,4 +1,4 @@
-import type { BoardState, ConditionVisual } from "../types";
+import type { BoardState, ConditionVisual, PieceInkMode } from "../types";
 
 export interface BoardImageEntry {
   image: HTMLImageElement;
@@ -10,8 +10,9 @@ export interface BoardImageEntry {
 export const BOARD_GRID_COLOR = "#B8B8B8";
 export const BOARD_SELECTION_COLOR = "#505050";
 export const BOARD_HOVER_COLOR = "#AEAEB2";
-export const BOARD_PIECE_INK_LIGHT = "#1C1C1E";
-export const BOARD_PIECE_INK_DARK = "#ffffff";
+export const BOARD_PIECE_INK_DARK = "#1C1C1E";
+export const BOARD_PIECE_INK_WHITE = "#ffffff";
+export const DEFAULT_PIECE_INK: PieceInkMode = "white";
 
 const NUMBER_FONT =
   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
@@ -123,6 +124,7 @@ export interface DrawBoardOptions {
   disabled?: boolean;
   drawPieces?: boolean;
   drawInteraction?: boolean;
+  pieceInk?: PieceInkMode;
 }
 
 export function drawBoard(context: CanvasRenderingContext2D, options: DrawBoardOptions): void {
@@ -138,6 +140,7 @@ export function drawBoard(context: CanvasRenderingContext2D, options: DrawBoardO
     disabled = false,
     drawPieces = true,
     drawInteraction = true,
+    pieceInk = DEFAULT_PIECE_INK,
   } = options;
   if (width <= 0 || height <= 0) return;
 
@@ -195,7 +198,14 @@ export function drawBoard(context: CanvasRenderingContext2D, options: DrawBoardO
       const soldiers = board.soldiers[index] ?? 0;
       if (owner === 0) continue;
 
-      const ink = dark ? BOARD_PIECE_INK_DARK : BOARD_PIECE_INK_LIGHT;
+      const ink =
+        pieceInk === "auto"
+          ? dark
+            ? BOARD_PIECE_INK_WHITE
+            : BOARD_PIECE_INK_DARK
+          : pieceInk === "dark"
+            ? BOARD_PIECE_INK_DARK
+            : BOARD_PIECE_INK_WHITE;
       const centerX = x + cellWidth / 2;
       const centerY = y + cellHeight / 2;
       const radius = Math.min(cellWidth, cellHeight) * 0.31;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
+import { DEFAULT_PIECE_INK } from "../shared/board/renderBoard";
 import type {
   ArchiveReason,
   ExitReason,
@@ -101,6 +102,7 @@ function mergeTurn(current: GameState | null, message: TurnMessage): GameState {
     sourceIndex: message.sourceIndex ?? current?.sourceIndex ?? null,
     board: message.board,
     visuals: current?.visuals ?? [],
+    pieceInk: current?.pieceInk ?? DEFAULT_PIECE_INK,
     turnDeadline: message.deadline,
     restDeadline: null,
     submitted: message.submitted,
@@ -135,6 +137,7 @@ function gameFromTrialStart(
     sourceIndex: message.sourceIndex,
     board: message.board,
     visuals: message.visuals,
+    pieceInk: message.pieceInk,
     turnDeadline: null,
     restDeadline: null,
     submitted: false,

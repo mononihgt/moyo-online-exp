@@ -13,6 +13,7 @@ import type {
   MapGroupMode,
   MapGroupVersion,
   MapSlot,
+  PieceInkMode,
   TroopProfile,
   TroopProfileVersion,
 } from "../../shared/types";
@@ -77,6 +78,7 @@ interface MapGroupFormState {
   formalTurnSeconds: string;
   restSeconds: string;
   randomizeFormal: boolean;
+  pieceInk: PieceInkMode;
   basePayYuan: string;
   performanceRateYuan: string;
   performanceFloorYuan: string;
@@ -252,6 +254,7 @@ function newFormState(profileVersionId: string, formalTrials: number): MapGroupF
     formalTurnSeconds: "30",
     restSeconds: "60",
     randomizeFormal: true,
+    pieceInk: "white",
     basePayYuan: yuanFromCents(DEFAULT_PAYMENT.basePayCents),
     performanceRateYuan: yuanFromCents(DEFAULT_PAYMENT.performanceRateCents),
     performanceFloorYuan: yuanFromCents(DEFAULT_PAYMENT.performanceFloorCents),
@@ -294,6 +297,7 @@ function formFromVersion(version: MapGroupVersion): MapGroupFormState {
     formalTurnSeconds: String(version.formalTurnSeconds),
     restSeconds: String(version.restSeconds),
     randomizeFormal: version.randomizeFormal,
+    pieceInk: version.pieceInk ?? "white",
     basePayYuan: yuanFromCents(version.payment.basePayCents),
     performanceRateYuan: yuanFromCents(version.payment.performanceRateCents),
     performanceFloorYuan: yuanFromCents(version.payment.performanceFloorCents),
@@ -989,6 +993,7 @@ export function MapGroupsPage() {
       formalTurnSeconds: formalTurnSeconds as number,
       restSeconds: restSeconds as number,
       randomizeFormal: form.randomizeFormal,
+      pieceInk: form.pieceInk,
       factors,
       payment: {
         basePayCents: basePayCents as number,
@@ -1874,6 +1879,22 @@ export function MapGroupsPage() {
                     />
                     <span>随机化正式对局顺序</span>
                   </label>
+                </Field>
+                <Field className="admin-col-4" label="棋子颜色" htmlFor="map-group-piece-ink">
+                  <select
+                    id="map-group-piece-ink"
+                    className="admin-select"
+                    value={form.pieceInk}
+                    onChange={(event) =>
+                      patchForm({ pieceInk: event.target.value as PieceInkMode })
+                    }
+                    disabled={readOnly}
+                    data-testid="map-group-piece-ink"
+                  >
+                    <option value="white">白色</option>
+                    <option value="dark">深色</option>
+                    <option value="auto">自适应背景</option>
+                  </select>
                 </Field>
               </div>
             </div>

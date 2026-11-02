@@ -303,6 +303,7 @@ export function TurnView({
           <GameBoard
             board={board}
             visuals={game.visuals}
+            pieceInk={game.pieceInk}
             selected={boardSelected}
             warCells={warCells}
             flashKey={flashKey}
