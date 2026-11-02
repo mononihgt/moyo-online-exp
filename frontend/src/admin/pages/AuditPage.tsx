@@ -63,30 +63,25 @@ export function AuditPage() {
 
   return (
     <div>
-      <PageHeader
-        title="审计日志"
-        subtitle="管理操作按时间倒序记录。页面每页加载 100 条，展开条目可查看完整 JSON 载荷。"
-      />
+      <PageHeader title="审计日志" />
 
       {error ? <ErrorNotice message={error} onRetry={() => void load(offset)} /> : null}
 
       <div className="admin-toolbar">
-        <div className="admin-inline-form" style={{ margin: 0 }}>
-          <Field label="搜索当前页" htmlFor="audit-search">
-            <div className="admin-input-with-icon">
-              <Search size={15} aria-hidden="true" />
-              <input
-                id="audit-search"
-                className="admin-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="动作、对象、管理员或 JSON 内容"
-                data-testid="audit-search"
-              />
-            </div>
-          </Field>
-        </div>
-        <span className="admin-hint">
+        <Field label="搜索当前页" htmlFor="audit-search" className="admin-filter-grow" hideLabel>
+          <div className="admin-input-with-icon">
+            <Search size={15} aria-hidden="true" />
+            <input
+              id="audit-search"
+              className="admin-input"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索动作、对象、管理员或 JSON 内容"
+              data-testid="audit-search"
+            />
+          </div>
+        </Field>
+        <span className="admin-toolbar-meta">
           共 {total} 条，当前页 {entries.length} 条
         </span>
       </div>
@@ -94,17 +89,9 @@ export function AuditPage() {
       {loading ? (
         <LoadingBlock rows={8} label="正在加载审计日志" />
       ) : total === 0 ? (
-        <EmptyState
-          icon={ScrollText}
-          title="暂无审计日志"
-          description="管理端的创建、更新、发布、审核和导出操作会记录在这里。"
-        />
+        <EmptyState icon={ScrollText} compact title="暂无审计日志" />
       ) : visibleEntries.length === 0 ? (
-        <EmptyState
-          icon={Search}
-          title="当前页没有匹配记录"
-          description="调整关键词，或翻页查找其他记录。"
-        />
+        <EmptyState icon={Search} compact title="当前页没有匹配记录" />
       ) : (
         <div className="admin-table-wrap">
           <table className="admin-table">

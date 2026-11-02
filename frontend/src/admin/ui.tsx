@@ -86,7 +86,17 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const notify = useCallback((message: string, kind: ToastKind = "success") => {
     const id = nextId.current;
     nextId.current += 1;
-    setToasts((current) => [...current, { id, message, kind }]);
+    setToasts((current) => {
+      const existing = current.find(
+        (item) => item.message === message && item.kind === kind,
+      );
+      if (existing) {
+        return current.map((item) =>
+          item.id === existing.id ? { id, message, kind } : item,
+        );
+      }
+      return [...current, { id, message, kind }];
+    });
     window.setTimeout(() => {
       setToasts((current) => current.filter((item) => item.id !== id));
     }, 4200);
@@ -137,6 +147,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
       {pending ? (
         <Modal
           title={pending.options.title}
+          danger={pending.options.danger}
           onClose={() => settle(false)}
           footer={
             <>
@@ -166,20 +177,70 @@ export function Modal({
   onClose,
   footer,
   wide = false,
+  danger = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   footer?: ReactNode;
   wide?: boolean;
+  danger?: boolean;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const dialog = dialogRef.current;
+    const focusables = () => {
+      if (dialog === null) return [];
+      return Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null);
+    };
+    const firstField = dialog?.querySelector<HTMLElement>(
+      'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled])',
+    );
+    const initial = firstField ?? focusables()[0] ?? dialog;
+    initial?.focus();
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, []);
 
   return createPortal(
     <div
@@ -189,7 +250,9 @@ export function Modal({
       }}
     >
       <div
-        className={`admin-modal${wide ? " admin-modal-wide" : ""}`}
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`admin-modal${wide ? " admin-modal-wide" : ""}${danger ? " admin-modal--danger" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -211,19 +274,70 @@ export function Modal({
 export function PageHeader({
   title,
   subtitle,
+  meta,
   actions,
 }: {
   title: string;
   subtitle?: string;
+  meta?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
     <div className="admin-page-head">
-      <div>
+      <div className="admin-page-head-main">
         <h1 className="admin-page-title">{title}</h1>
+        {meta ? <div className="admin-page-meta">{meta}</div> : null}
         {subtitle ? <p className="admin-page-subtitle">{subtitle}</p> : null}
       </div>
-      {actions ? <div className="admin-btn-row">{actions}</div> : null}
+      {actions ? <div className="admin-page-actions">{actions}</div> : null}
+    </div>
+  );
+}
+
+export function CardHeader({
+  title,
+  meta,
+  actions,
+  id,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  id?: string;
+}) {
+  return (
+    <div className="admin-card-head">
+      <div className="admin-card-head-main">
+        <div className="admin-card-title-row">
+          <h2 className="admin-card-title" id={id}>
+            {title}
+          </h2>
+        </div>
+        {meta ? <div className="admin-card-meta">{meta}</div> : null}
+      </div>
+      {actions ? <div className="admin-card-actions">{actions}</div> : null}
+    </div>
+  );
+}
+
+export function SectionHeader({
+  title,
+  meta,
+  actions,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="admin-subsection-head">
+      <h3 className="admin-subsection-title">{title}</h3>
+      {meta || actions ? (
+        <div className="admin-subsection-head-meta">
+          {meta}
+          {actions}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -307,14 +421,16 @@ export function EmptyState({
   title,
   description,
   action,
+  compact = false,
 }: {
   icon?: LucideIcon;
   title: string;
   description?: string;
   action?: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="admin-empty">
+    <div className={`admin-empty${compact ? " admin-empty--compact" : ""}`}>
       <Icon size={28} aria-hidden="true" />
       <div className="admin-empty-title">{title}</div>
       {description ? <p className="admin-empty-description">{description}</p> : null}
@@ -329,20 +445,30 @@ export function Field({
   hint,
   error,
   children,
+  className,
+  hideLabel = false,
 }: {
   label: string;
   htmlFor?: string;
   hint?: string;
   error?: string | null;
   children: ReactNode;
+  className?: string;
+  hideLabel?: boolean;
 }) {
   return (
-    <div className="admin-field">
-      <label className="admin-label" htmlFor={htmlFor}>
+    <div
+      className={`admin-field${error ? " admin-field--invalid" : ""}${className ? ` ${className}` : ""}`}
+    >
+      <label className={`admin-label${hideLabel ? " admin-sr-only" : ""}`} htmlFor={htmlFor}>
         {label}
       </label>
       {children}
-      {error ? <div className="admin-error">{error}</div> : null}
+      {error ? (
+        <div className="admin-error" role="alert">
+          {error}
+        </div>
+      ) : null}
       {hint ? <div className="admin-hint">{hint}</div> : null}
     </div>
   );

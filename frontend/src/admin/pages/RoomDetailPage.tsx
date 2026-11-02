@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   Activity,
@@ -49,6 +49,7 @@ import type {
 } from "../types";
 import {
   BookingStatusChip,
+  CardHeader,
   EmptyState,
   ErrorNotice,
   Field,
@@ -61,6 +62,7 @@ import {
   PaymentStatusChip,
   QuestionnaireStatusChip,
   RoomStatusChip,
+  SectionHeader,
   centsFromYuan,
   useNow,
   useUi,
@@ -73,6 +75,7 @@ import {
   PAYMENT_STATUS_LABELS,
   archiveReasonOptionsForStatus,
   defaultArchiveReasonForStatus,
+  paymentSourceLabel,
   phaseLabel,
 } from "../labels";
 import {
@@ -103,13 +106,6 @@ function findParticipantForBooking(
       item.name === booking.name && item.phoneMasked === booking.phoneMasked,
   );
 }
-
-const PAYMENT_SOURCE_LABELS: Record<string, string> = {
-  computed: "自动",
-  manual_showup: "手工到场费",
-  manual_completion: "手工完成补偿",
-  manual_compensation: "手工补偿",
-};
 
 function canMarkAbsent(detail: RoomDetail, booking: AdminBooking): boolean {
   if (!["booked", "attended"].includes(booking.status)) return false;
@@ -158,6 +154,16 @@ export function RoomDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [tab, setTab] = useState<TabKey>("overview");
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  function onTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const nextIndex = (index + step + TABS.length) % TABS.length;
+    setTab(TABS[nextIndex].key);
+    tabRefs.current[nextIndex]?.focus();
+  }
 
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState<RoomFormState | null>(null);
@@ -1041,7 +1047,7 @@ export function RoomDetailPage() {
   if (loading && !detail) {
     return (
       <div>
-        <PageHeader title="房间详情" subtitle="加载房间配置与运行状态。" />
+        <PageHeader title="房间详情" />
         <LoadingBlock rows={8} label="正在加载房间详情" />
       </div>
     );
@@ -1081,10 +1087,25 @@ export function RoomDetailPage() {
   return (
     <div>
       <PageHeader
-        title={room.internalLabel}
-        subtitle={`房间 ${room.id}`}
+        title="房间详情"
+        meta={
+          <>
+            <strong>{room.internalLabel}</strong>
+            <span className="admin-page-meta-item admin-mono">房间 {room.id}</span>
+            <span className="admin-page-meta-item">
+              <RoomStatusChip status={room.status} />
+              {room.archiveReason ? (
+                <span>{ARCHIVE_REASON_LABELS[room.archiveReason] ?? room.archiveReason}</span>
+              ) : null}
+            </span>
+            <span className="admin-page-meta-item">开始 {formatDateTime(room.startsAt)}</span>
+            <span className="admin-page-meta-item">
+              报名 {room.bookedCount}/{room.capacity}
+            </span>
+          </>
+        }
         actions={
-          <div className="admin-btn-row">
+          <>
             <Link className="admin-btn admin-btn-secondary" to="/admin/rooms">
               返回列表
             </Link>
@@ -1097,38 +1118,28 @@ export function RoomDetailPage() {
               <Activity size={16} />
               打开监控
             </button>
-          </div>
+          </>
         }
       />
 
-      <div className="admin-card admin-card-flat" style={{ padding: "14px 20px" }}>
-        <div className="admin-stat-row">
-          <div className="admin-chip-list">
-            <RoomStatusChip status={room.status} />
-            <span className="admin-hint">开始 {formatDateTime(room.startsAt)}</span>
-            <span className="admin-hint">
-              报名 {room.bookedCount}/{room.capacity}
-            </span>
-            <span className="admin-hint">
-              地图组 {room.mapGroup.name} v{room.mapGroup.version}
-            </span>
-            {room.configLockedAt ? (
-              <span className="admin-hint">配置锁定 {formatDateTime(room.configLockedAt)}</span>
-            ) : null}
-          </div>
-          {error ? <span className="admin-error">{error}</span> : null}
-        </div>
-      </div>
+      {error ? <InlineNotice tone="error">{error}</InlineNotice> : null}
 
       <div className="admin-tabs" role="tablist" aria-label="房间详情分区">
-        {TABS.map((entry) => (
+        {TABS.map((entry, index) => (
           <button
             key={entry.key}
+            ref={(node) => {
+              tabRefs.current[index] = node;
+            }}
+            id={`room-tab-${entry.key}`}
             type="button"
             role="tab"
             aria-selected={tab === entry.key}
+            aria-controls={`room-panel-${entry.key}`}
+            tabIndex={tab === entry.key ? 0 : -1}
             className={tab === entry.key ? "active" : undefined}
             onClick={() => setTab(entry.key)}
+            onKeyDown={(event) => onTabKeyDown(event, index)}
             data-testid={`room-tab-${entry.key}`}
           >
             {entry.label}
@@ -1137,23 +1148,28 @@ export function RoomDetailPage() {
       </div>
 
       {tab === "overview" ? (
-        <div className="admin-stack">
+        <div
+          className="admin-stack"
+          role="tabpanel"
+          id="room-panel-overview"
+          aria-labelledby="room-tab-overview"
+        >
           <section className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                配置概览
-              </h2>
-              {canEdit && !editing ? (
-                <button
-                  type="button"
-                  className="admin-btn admin-btn-secondary admin-btn-sm"
-                  onClick={beginEdit}
-                  data-testid="room-edit"
-                >
-                  编辑配置
-                </button>
-              ) : null}
-            </div>
+            <CardHeader
+              title="配置概览"
+              actions={
+                canEdit && !editing ? (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn-secondary admin-btn-sm"
+                    onClick={beginEdit}
+                    data-testid="room-edit"
+                  >
+                    编辑配置
+                  </button>
+                ) : undefined
+              }
+            />
 
             {editing && editForm ? (
               <form onSubmit={saveEdit}>
@@ -1191,128 +1207,128 @@ export function RoomDetailPage() {
                 </div>
               </form>
             ) : (
-              <dl className="admin-detail-list">
-                <div>
-                  <dt>状态</dt>
-                  <dd>
-                    <RoomStatusChip status={room.status} />
-                    {room.archiveReason ? (
-                      <span className="admin-hint" style={{ marginLeft: "8px" }}>
-                        {ARCHIVE_REASON_LABELS[room.archiveReason] ?? room.archiveReason}
-                      </span>
-                    ) : null}
-                  </dd>
-                </div>
-                <div>
-                  <dt>开始时间</dt>
-                  <dd>{formatDateTime(room.startsAt)}</dd>
-                </div>
-                <div>
-                  <dt>地图组</dt>
-                  <dd>
-                    {room.mapGroup.name} v{room.mapGroup.version}（
-                    {room.mapGroup.mode === "both" ? "Both 模式" : "A/B 模式"}）
-                  </dd>
-                </div>
-                <div>
-                  <dt>地图</dt>
-                  <dd>
-                    {room.mapGroup.maps.map((map) => (
-                      <div key={map.slot}>
-                        {map.slot}：{map.name}
-                      </div>
-                    ))}
-                  </dd>
-                </div>
-                <div>
-                  <dt>兵力方案</dt>
-                  <dd>
-                    {room.mapGroup.troopProfile.name} v{room.mapGroup.troopProfile.version}
-                  </dd>
-                </div>
-                <div>
-                  <dt>地图尺寸</dt>
-                  <dd>
-                    {room.mapGroup.rows} × {room.mapGroup.cols}
-                  </dd>
-                </div>
-                <div>
-                  <dt>玩家 1 指导语</dt>
-                  <dd>
-                    {room.instructions.player1.name} v{room.instructions.player1.version}
-                  </dd>
-                </div>
-                <div>
-                  <dt>玩家 2 指导语</dt>
-                  <dd>
-                    {room.instructions.player2.name} v{room.instructions.player2.version}
-                  </dd>
-                </div>
-                <div>
-                  <dt>问卷</dt>
-                  <dd>
-                    {room.questionnaire.name} v{room.questionnaire.version}
-                  </dd>
-                </div>
-                <div>
-                  <dt>容量</dt>
-                  <dd>{room.capacity}（固定）</dd>
-                </div>
-                <div>
-                  <dt>基础费（继承自地图组）</dt>
-                  <dd>{formatMoney(room.mapGroup.payment.basePayCents)}</dd>
-                </div>
-                <div>
-                  <dt>绩效单价（继承自地图组）</dt>
-                  <dd>{formatMoney(room.mapGroup.payment.performanceRateCents)} / 士兵</dd>
-                </div>
-                <div>
-                  <dt>绩效保底（继承自地图组）</dt>
-                  <dd>{formatMoney(room.mapGroup.payment.performanceFloorCents)}</dd>
-                </div>
-                <div>
-                  <dt>绩效上限（继承自地图组）</dt>
-                  <dd>{formatMoney(room.mapGroup.payment.performanceCapCents)}</dd>
-                </div>
-                <div>
-                  <dt>到场费（继承自地图组）</dt>
-                  <dd>{formatMoney(room.mapGroup.payment.showupPayCents)}</dd>
-                </div>
-                <div>
-                  <dt>等待窗口</dt>
-                  <dd>{formatDuration(room.waitWindowSeconds)}</dd>
-                </div>
-                <div>
-                  <dt>重连窗口</dt>
-                  <dd>{formatDuration(room.reconnectWindowSeconds)}</dd>
-                </div>
-                <div>
-                  <dt>报名人数</dt>
-                  <dd>
-                    {room.bookedCount}/{room.capacity}
-                  </dd>
-                </div>
-                <div>
-                  <dt>发布时间</dt>
-                  <dd>{formatDateTime(room.publishedAt)}</dd>
-                </div>
-                <div>
-                  <dt>创建时间</dt>
-                  <dd>{formatDateTime(room.createdAt)}</dd>
-                </div>
-              </dl>
+              <div className="admin-detail-groups">
+                <section className="admin-detail-group">
+                  <h3 className="admin-detail-group-title">地图与兵力</h3>
+                  <dl className="admin-detail-list">
+                    <div>
+                      <dt>地图组</dt>
+                      <dd>
+                        {room.mapGroup.name} v{room.mapGroup.version}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>模式</dt>
+                      <dd>{room.mapGroup.mode === "both" ? "Both 单图" : "A/B 双图"}</dd>
+                    </div>
+                    <div>
+                      <dt>尺寸</dt>
+                      <dd className="admin-mono">
+                        {room.mapGroup.rows} × {room.mapGroup.cols}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>地图</dt>
+                      <dd>
+                        {room.mapGroup.maps.map((map) => (
+                          <div key={map.slot}>
+                            {map.slot}：{map.name}
+                          </div>
+                        ))}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>兵力方案</dt>
+                      <dd>
+                        {room.mapGroup.troopProfile.name} v{room.mapGroup.troopProfile.version}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="admin-detail-group">
+                  <h3 className="admin-detail-group-title">材料</h3>
+                  <dl className="admin-detail-list">
+                    <div>
+                      <dt>玩家 1 指导语</dt>
+                      <dd>
+                        {room.instructions.player1.name} v{room.instructions.player1.version}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>玩家 2 指导语</dt>
+                      <dd>
+                        {room.instructions.player2.name} v{room.instructions.player2.version}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>问卷</dt>
+                      <dd>
+                        {room.questionnaire.name} v{room.questionnaire.version}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="admin-detail-group">
+                  <h3 className="admin-detail-group-title">报酬（继承自地图组）</h3>
+                  <dl className="admin-detail-list">
+                    <div>
+                      <dt>基础费</dt>
+                      <dd className="admin-mono">{formatMoney(room.mapGroup.payment.basePayCents)}</dd>
+                    </div>
+                    <div>
+                      <dt>绩效单价</dt>
+                      <dd className="admin-mono">
+                        {formatMoney(room.mapGroup.payment.performanceRateCents)} / 士兵
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>绩效保底</dt>
+                      <dd className="admin-mono">{formatMoney(room.mapGroup.payment.performanceFloorCents)}</dd>
+                    </div>
+                    <div>
+                      <dt>绩效上限</dt>
+                      <dd className="admin-mono">{formatMoney(room.mapGroup.payment.performanceCapCents)}</dd>
+                    </div>
+                    <div>
+                      <dt>到场费</dt>
+                      <dd className="admin-mono">{formatMoney(room.mapGroup.payment.showupPayCents)}</dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="admin-detail-group">
+                  <h3 className="admin-detail-group-title">窗口与记录</h3>
+                  <dl className="admin-detail-list">
+                    <div>
+                      <dt>等待窗口</dt>
+                      <dd>{formatDuration(room.waitWindowSeconds)}</dd>
+                    </div>
+                    <div>
+                      <dt>重连窗口</dt>
+                      <dd>{formatDuration(room.reconnectWindowSeconds)}</dd>
+                    </div>
+                    <div>
+                      <dt>配置锁定</dt>
+                      <dd>{room.configLockedAt ? formatDateTime(room.configLockedAt) : "未锁定"}</dd>
+                    </div>
+                    <div>
+                      <dt>发布时间</dt>
+                      <dd>{formatDateTime(room.publishedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>创建时间</dt>
+                      <dd>{formatDateTime(room.createdAt)}</dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
             )}
           </section>
 
           <section className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                地图预览
-              </h2>
-              <span className="admin-hint">
-                只读预览，不显示归属、兵力与收益
-              </span>
-            </div>
+            <CardHeader title="地图预览" meta={<span>只读预览</span>} />
             <RoomMapPreview
               mapGroup={previewMapGroup}
               loading={optionsLoading || previewLoading}
@@ -1321,7 +1337,11 @@ export function RoomDetailPage() {
           </section>
 
           <section className="admin-card">
-            <h2 className="admin-section-title">配置变更历史</h2>
+            <CardHeader
+              title="配置记录"
+              meta={<span>共 {detail.configRevisions.length} 次变更</span>}
+            />
+            <SectionHeader title="变更历史" />
             {detail.configRevisions.length === 0 ? (
               <p className="admin-hint">暂无配置变更记录。</p>
             ) : (
@@ -1348,23 +1368,30 @@ export function RoomDetailPage() {
                 </table>
               </div>
             )}
-          </section>
-
-          <section className="admin-card">
-            <h2 className="admin-section-title">配置快照</h2>
-            {detail.configSnapshot ? (
-              <JsonDetails value={detail.configSnapshot} label="查看最终配置快照" />
-            ) : (
-              <p className="admin-hint">房间尚未锁定配置。进入指导语阶段时会生成配置快照。</p>
-            )}
+            <div className="admin-form-section">
+              <SectionHeader
+                title="配置快照"
+                meta={detail.configSnapshot ? <span>已锁定</span> : <span>未锁定</span>}
+              />
+              {detail.configSnapshot ? (
+                <JsonDetails value={detail.configSnapshot} label="查看最终配置快照" />
+              ) : (
+                <p className="admin-hint">房间尚未锁定配置。进入指导语阶段时会生成配置快照。</p>
+              )}
+            </div>
           </section>
         </div>
       ) : null}
 
       {tab === "bookings" ? (
-        <div className="admin-stack">
+        <div
+          className="admin-stack"
+          role="tabpanel"
+          id="room-panel-bookings"
+          aria-labelledby="room-tab-bookings"
+        >
           <section className="admin-card">
-            <h2 className="admin-section-title">添加预约</h2>
+            <CardHeader title="添加预约" />
             {!["open", "full"].includes(room.status) ? (
               <InlineNotice tone="warning">
                 只有可报名或已满状态的房间可以添加预约。当前状态：{room.status}。
@@ -1423,14 +1450,12 @@ export function RoomDetailPage() {
           </section>
 
           <section className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                预约名单
-              </h2>
-              <span className="admin-hint">共 {detail.bookings.length} 条记录</span>
-            </div>
+            <CardHeader
+              title="预约名单"
+              meta={<span>共 {detail.bookings.length} 条记录</span>}
+            />
             {detail.bookings.length === 0 ? (
-              <EmptyState title="暂无预约" description="参与者报名或主试添加后会显示在这里。" />
+              <EmptyState compact title="暂无预约" />
             ) : (
               <div className="admin-table-wrap">
                 <table className="admin-table">
@@ -1529,18 +1554,21 @@ export function RoomDetailPage() {
       ) : null}
 
       {tab === "monitor" ? (
-        <div className="admin-stack">
+        <div
+          className="admin-stack"
+          role="tabpanel"
+          id="room-panel-monitor"
+          aria-labelledby="room-tab-monitor"
+        >
           {monitorError ? <ErrorNotice message={monitorError} onRetry={() => void loadMonitor()} /> : null}
           {monitorLoading && !monitor ? <LoadingBlock rows={5} label="正在加载监控" /> : null}
           {monitor ? (
             <>
               <section className="admin-card">
-                <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-                  <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                    运行状态
-                  </h2>
-                  <span className="admin-hint">每 3 秒刷新</span>
-                </div>
+                <CardHeader
+                  title="运行状态"
+                  meta={<span>自动刷新 3 秒</span>}
+                />
                 <div className="admin-monitor-panel">
                   <div className="admin-monitor-stat">
                     <div className="admin-monitor-stat-label">阶段</div>
@@ -1576,9 +1604,12 @@ export function RoomDetailPage() {
               </section>
 
               <section className="admin-card">
-                <h2 className="admin-section-title">参与者</h2>
+                <CardHeader
+                  title="参与者"
+                  meta={<span>{monitor.participants.length} 人</span>}
+                />
                 {monitor.participants.length === 0 ? (
-                  <EmptyState title="暂无房间参与者" description="指导语开始后会记录参与者。" />
+                  <EmptyState compact title="暂无房间参与者" />
                 ) : (
                   <div className="admin-table-wrap">
                     <table className="admin-table">
@@ -1646,103 +1677,113 @@ export function RoomDetailPage() {
               </section>
 
               <section className="admin-card">
-                <h2 className="admin-section-title">房间操作</h2>
-                <div className="admin-form-row">
-                  <div>
-                    <Field label="强制归档原因" htmlFor="archive-reason">
-                      <select
-                        id="archive-reason"
-                        className="admin-select"
-                        value={archiveReason}
-                        disabled={!canForceArchive}
-                        onChange={(event) => setArchiveReasonChoice(event.target.value)}
+                <CardHeader title="房间操作" />
+                <div className="admin-action-list">
+                  <div className="admin-action-row">
+                    <div className="admin-action-main">
+                      <div className="admin-action-title">强制归档</div>
+                      <div className="admin-action-detail">
+                        {canForceArchive
+                          ? "选择结束原因后归档，操作不可撤销。"
+                          : "房间已归档，不能再次归档。"}
+                      </div>
+                      {canForceArchive ? (
+                        <Field
+                          label="结束原因"
+                          htmlFor="archive-reason"
+                          className="admin-action-field"
+                        >
+                          <select
+                            id="archive-reason"
+                            className="admin-select"
+                            value={archiveReason}
+                            onChange={(event) => setArchiveReasonChoice(event.target.value)}
+                          >
+                            {archiveOptions.map((reason) => (
+                              <option key={reason} value={reason}>
+                                {ARCHIVE_REASON_LABELS[reason]}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                      ) : null}
+                    </div>
+                    <div className="admin-action-controls">
+                      {detail.archiveReasonCorrectionOptions.length > 0 ? (
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn-secondary"
+                          onClick={openArchiveCorrection}
+                          disabled={actionBusy !== null}
+                          data-testid="room-correct-archive-reason"
+                        >
+                          <Archive size={15} />
+                          更正结束原因
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn-danger"
+                        onClick={() => void forceArchive()}
+                        disabled={actionBusy !== null || !canForceArchive}
                       >
-                        {archiveOptions.map((reason) => (
-                          <option key={reason} value={reason}>
-                            {ARCHIVE_REASON_LABELS[reason]}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-danger"
-                      onClick={() => void forceArchive()}
-                      disabled={actionBusy !== null || !canForceArchive}
-                    >
-                      <Archive size={15} />
-                      强制归档
-                    </button>
-                    {!canForceArchive ? (
-                      <p className="admin-hint">房间已归档，不能再次归档。</p>
-                    ) : null}
-                    {detail.archiveReasonCorrectionOptions.length > 0 ? (
+                        <Archive size={15} />
+                        强制归档
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="admin-action-row">
+                    <div className="admin-action-main">
+                      <div className="admin-action-title">等待窗口</div>
+                      <div className="admin-action-detail">
+                        当前 {formatDuration(room.waitWindowSeconds)}
+                      </div>
+                    </div>
+                    <div className="admin-action-controls">
                       <button
                         type="button"
                         className="admin-btn admin-btn-secondary"
-                        onClick={openArchiveCorrection}
-                        disabled={actionBusy !== null}
-                        data-testid="room-correct-archive-reason"
+                        onClick={() => {
+                          setExtendMinutes("5");
+                          setExtendError(null);
+                          setExtendOpen(true);
+                        }}
+                        disabled={room.status !== "waiting" || actionBusy !== null}
                       >
-                        <Archive size={15} />
-                        更正结束原因
+                        <TimerReset size={15} />
+                        延长等待窗口
                       </button>
-                    ) : null}
+                    </div>
                   </div>
-                  <div>
-                    <Field label="等待窗口" htmlFor="extend-wait">
-                      <input
-                        id="extend-wait"
-                        className="admin-input"
-                        value={`当前 ${formatDuration(room.waitWindowSeconds)}`}
-                        readOnly
-                        disabled
-                      />
-                    </Field>
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-secondary"
-                      onClick={() => {
-                        setExtendMinutes("5");
-                        setExtendError(null);
-                        setExtendOpen(true);
-                      }}
-                      disabled={room.status !== "waiting" || actionBusy !== null}
-                    >
-                      <TimerReset size={15} />
-                      延长等待窗口
-                    </button>
-                  </div>
-                  <div>
-                    <Field label="问卷链接" htmlFor="resend-questionnaire">
-                      <input
-                        id="resend-questionnaire"
-                        className="admin-input"
-                        value={
-                          room.status === "questionnaire"
-                            ? "问卷阶段"
-                            : room.archiveReason === "technical_abort"
-                              ? "技术中止待问卷"
-                              : "当前不在问卷阶段"
-                        }
-                        readOnly
-                        disabled
-                      />
-                    </Field>
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-secondary"
-                      onClick={() => void resendQuestionnaire()}
-                      disabled={actionBusy !== null || !canResendQuestionnaire}
-                    >
-                      <Send size={15} />
-                      重发问卷链接
-                    </button>
+
+                  <div className="admin-action-row">
+                    <div className="admin-action-main">
+                      <div className="admin-action-title">问卷链接</div>
+                      <div className="admin-action-detail">
+                        {room.status === "questionnaire"
+                          ? "问卷阶段"
+                          : room.archiveReason === "technical_abort"
+                            ? "技术中止待问卷"
+                            : "当前不在问卷阶段"}
+                      </div>
+                    </div>
+                    <div className="admin-action-controls">
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn-secondary"
+                        onClick={() => void resendQuestionnaire()}
+                        disabled={actionBusy !== null || !canResendQuestionnaire}
+                      >
+                        <Send size={15} />
+                        重发问卷链接
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {questionnaireLinks.length > 0 ? (
                   <div className="admin-import-report">
-                    <h3>问卷链接</h3>
+                    <SectionHeader title="问卷链接" />
                     {questionnaireLinks.map((link) => (
                       <div key={link.participantId} style={{ marginBottom: "10px" }}>
                         <div className="admin-hint">
@@ -1766,12 +1807,10 @@ export function RoomDetailPage() {
               </section>
 
               <section className="admin-card">
-                <h2 className="admin-section-title">Timer 与事件</h2>
+                <CardHeader title="Timer 与事件" />
                 <div className="admin-grid admin-grid-2">
                   <div>
-                    <h3 className="admin-section-title" style={{ fontSize: "1rem" }}>
-                      Timers
-                    </h3>
+                    <SectionHeader title="Timers" />
                     {monitor.timers.length === 0 ? (
                       <p className="admin-hint">暂无计时器。</p>
                     ) : (
@@ -1800,9 +1839,7 @@ export function RoomDetailPage() {
                     )}
                   </div>
                   <div>
-                    <h3 className="admin-section-title" style={{ fontSize: "1rem" }}>
-                      最近事件
-                    </h3>
+                    <SectionHeader title="最近事件" />
                     {monitor.events.length === 0 ? (
                       <p className="admin-hint">暂无事件。</p>
                     ) : (
@@ -1832,7 +1869,7 @@ export function RoomDetailPage() {
               </section>
 
               <section className="admin-card">
-                <h2 className="admin-section-title">Trial 记录</h2>
+                <CardHeader title="Trial 记录" />
                 {monitor.trials.length === 0 ? (
                   <p className="admin-hint">暂无 Trial 记录。</p>
                 ) : (
@@ -1870,9 +1907,14 @@ export function RoomDetailPage() {
       ) : null}
 
       {tab === "data" ? (
-        <div className="admin-stack">
+        <div
+          className="admin-stack"
+          role="tabpanel"
+          id="room-panel-data"
+          aria-labelledby="room-tab-data"
+        >
           <section className="admin-card">
-            <h2 className="admin-section-title">数据导出</h2>
+            <CardHeader title="数据导出" />
             <div className="admin-btn-row">
               <button
                 type="button"
@@ -1894,43 +1936,41 @@ export function RoomDetailPage() {
               </button>
             </div>
             <p className="admin-hint" style={{ marginTop: "12px", marginBottom: 0 }}>
-              分析 ZIP 使用假名分析编号，不包含姓名和手机号。完整 JSON 包含参与者与原始事件。
+              分析 ZIP 使用假名分析编号，不包含姓名和手机号。
             </p>
           </section>
 
           <section className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                参与者数据状态
-              </h2>
-              <div className="admin-btn-row">
-                <button
-                  type="button"
-                  className="admin-btn admin-btn-secondary admin-btn-sm"
-                  onClick={() => void resendQuestionnaire()}
-                  disabled={actionBusy !== null || !canResendQuestionnaire}
-                >
-                  <Send size={14} />
-                  获取问卷链接
-                </button>
-                {detail.jatosAdminUrl ? (
-                  <a
+            <CardHeader
+              title="参与者数据状态"
+              meta={detail.jatosStudyCode ? <span>JATOS study code: {detail.jatosStudyCode}</span> : undefined}
+              actions={
+                <>
+                  <button
+                    type="button"
                     className="admin-btn admin-btn-secondary admin-btn-sm"
-                    href={detail.jatosAdminUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                    onClick={() => void resendQuestionnaire()}
+                    disabled={actionBusy !== null || !canResendQuestionnaire}
                   >
-                    <ExternalLink size={14} />
-                    打开 JATOS 后台
-                  </a>
-                ) : null}
-              </div>
-            </div>
-            {detail.jatosStudyCode ? (
-              <p className="admin-hint">JATOS study code: {detail.jatosStudyCode}</p>
-            ) : null}
+                    <Send size={14} />
+                    获取问卷链接
+                  </button>
+                  {detail.jatosAdminUrl ? (
+                    <a
+                      className="admin-btn admin-btn-secondary admin-btn-sm"
+                      href={detail.jatosAdminUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <ExternalLink size={14} />
+                      打开 JATOS 后台
+                    </a>
+                  ) : null}
+                </>
+              }
+            />
             {detail.participants.length === 0 ? (
-              <EmptyState title="暂无参与者" description="进入指导语后会记录参与者。" />
+              <EmptyState compact title="暂无参与者" />
             ) : (
               <div className="admin-table-wrap">
                 <table className="admin-table">
@@ -1951,7 +1991,7 @@ export function RoomDetailPage() {
                         <td className="admin-mono">{participant.analysisCode}</td>
                         <td>
                           {participant.name}
-                          <div className="admin-hint">{participant.phoneMasked}</div>
+                          <div className="admin-cell-sub">{participant.phoneMasked}</div>
                         </td>
                         <td>{participant.instructionCompletedAt ? "已完成" : "未完成"}</td>
                         <td>
@@ -1988,9 +2028,12 @@ export function RoomDetailPage() {
           </section>
 
           <section className="admin-card">
-            <h2 className="admin-section-title">从 JATOS 补齐问卷结果</h2>
+            <CardHeader
+              title="从 JATOS 补齐问卷结果"
+              meta={<span>按结果 ID 幂等保存</span>}
+            />
             <p className="admin-hint">
-              当平台没有收到 JATOS 提交时，可使用 JATOS 后台的结果 ID 和答案 JSON 补齐平台副本。该操作按结果 ID 幂等保存。
+              使用 JATOS 后台的结果 ID 和答案 JSON 补齐平台副本。
             </p>
             <form onSubmit={submitJatos}>
               <div className="admin-form-row">
@@ -2069,14 +2112,16 @@ export function RoomDetailPage() {
       ) : null}
 
       {tab === "payments" ? (
-        <div className="admin-stack">
+        <div
+          className="admin-stack"
+          role="tabpanel"
+          id="room-panel-payments"
+          aria-labelledby="room-tab-payments"
+        >
           <section className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                房间付款
-              </h2>
-              <div className="admin-submit-row">
-                <span className="admin-hint">金额为整数分转换后的两位小数</span>
+            <CardHeader
+              title="房间付款"
+              actions={
                 <button
                   type="button"
                   className="admin-btn admin-btn-secondary"
@@ -2086,11 +2131,12 @@ export function RoomDetailPage() {
                   <Wallet size={15} />
                   手工创建付款
                 </button>
-              </div>
-            </div>
+              }
+            />
             {detail.payments.length === 0 ? (
               <EmptyState
                 icon={Wallet}
+                compact
                 title="暂无付款记录"
                 description="完成问卷后生成完成报酬；技术中止到场者提交后测问卷后生成到场费。"
               />
@@ -2102,11 +2148,11 @@ export function RoomDetailPage() {
                       <th>分析编号</th>
                       <th>参与者</th>
                       <th>来源</th>
-                      <th>基础费</th>
-                      <th>绩效费</th>
-                      <th>到场费</th>
-                      <th>覆盖金额</th>
-                      <th>合计</th>
+                      <th className="admin-num">基础费</th>
+                      <th className="admin-num">绩效费</th>
+                      <th className="admin-num">到场费</th>
+                      <th className="admin-num">覆盖金额</th>
+                      <th className="admin-num">合计</th>
                       <th>状态</th>
                       <th>备注</th>
                       <th>操作</th>
@@ -2117,20 +2163,16 @@ export function RoomDetailPage() {
                       <tr key={payment.id ?? index}>
                         <td className="admin-mono">{payment.analysisCode ?? "—"}</td>
                         <td>{payment.name ?? "—"}</td>
-                        <td>
-                          {PAYMENT_SOURCE_LABELS[payment.source ?? "computed"] ??
-                            payment.source ??
-                            "自动"}
-                        </td>
-                        <td>{formatMoney(payment.basePayCents)}</td>
-                        <td>{formatMoney(payment.performancePayCents)}</td>
-                        <td>{formatMoney(payment.showupPayCents)}</td>
-                        <td>{formatMoney(payment.overrideAmountCents)}</td>
-                        <td className="admin-total">{formatMoney(payment.totalCents)}</td>
+                        <td>{paymentSourceLabel(payment.source)}</td>
+                        <td className="admin-amount">{formatMoney(payment.basePayCents)}</td>
+                        <td className="admin-amount">{formatMoney(payment.performancePayCents)}</td>
+                        <td className="admin-amount">{formatMoney(payment.showupPayCents)}</td>
+                        <td className="admin-amount">{formatMoney(payment.overrideAmountCents)}</td>
+                        <td className="admin-amount admin-total">{formatMoney(payment.totalCents)}</td>
                         <td>
                           <PaymentStatusChip status={payment.status} />
                         </td>
-                        <td className="admin-hint">{payment.note ?? "—"}</td>
+                        <td className="admin-cell-sub">{payment.note ?? "—"}</td>
                         <td className="admin-actions-cell">
                           <button
                             type="button"

@@ -14,11 +14,13 @@
   --participant-disabled-text: #8e8e93;
 
   --admin-bg: #ffffff;
+  --admin-canvas: #f6f7f9;
   --admin-surface: #f8f8f8;
   --admin-text: #212529;
   --admin-muted: #6c757d;
   --admin-border: #dee2e6;
-  --admin-accent: #007bff;
+  --admin-accent: #0069d9;
+  --admin-accent-soft: #eaf2ff;
   --admin-success: #28a745;
   --admin-warning: #ffc107;
   --admin-error: #dc3545;

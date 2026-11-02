@@ -97,6 +97,17 @@ export function paymentStatusTone(status: PaymentStatus): ChipTone {
   return status === "paid" ? "success" : "warning";
 }
 
+export const PAYMENT_SOURCE_LABELS: Record<string, string> = {
+  computed: "自动",
+  manual_showup: "手工到场费",
+  manual_completion: "手工完成补偿",
+  manual_compensation: "手工补偿",
+};
+
+export function paymentSourceLabel(source: string | null | undefined): string {
+  return PAYMENT_SOURCE_LABELS[source ?? "computed"] ?? source ?? "自动";
+}
+
 export const VERSION_STATUS_LABELS: Record<VersionStatus, string> = {
   draft: "草稿",
   published: "已发布",

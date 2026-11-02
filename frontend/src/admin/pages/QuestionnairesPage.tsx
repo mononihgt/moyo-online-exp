@@ -21,6 +21,7 @@ import { formatDateTime } from "../../shared/format";
 import { adminApi, errorMessage } from "../api";
 import type { QuestionnaireListResponse } from "../types";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
   Field,
@@ -28,6 +29,7 @@ import {
   JsonDetails,
   LoadingBlock,
   PageHeader,
+  SectionHeader,
   StatusChip,
   VersionStatusChip,
   useUi,
@@ -804,7 +806,6 @@ export function QuestionnairesPage() {
     <div>
       <PageHeader
         title="问卷"
-        subtitle="按页面组织题目，支持单选、多选、李克特量表、文本、单行填空、数字与三种受保护身份字段。发布后的版本只读。"
         actions={
           <button
             type="button"
@@ -836,7 +837,7 @@ export function QuestionnairesPage() {
       ) : (
         <div className="admin-layout-columns">
           <aside className="admin-card admin-sticky-side">
-            <h2 className="admin-section-title">版本列表</h2>
+            <h2 className="admin-sr-only">版本列表</h2>
             <div className="admin-version-list">
               {versions.map((version) => (
                 <button
@@ -867,7 +868,7 @@ export function QuestionnairesPage() {
                 </button>
               ))}
               {isNew ? (
-                <div className="admin-version-item active" style={{ cursor: "default" }}>
+                <div className="admin-version-item active admin-version-item--static admin-version-item--new">
                   <div className="admin-version-item-head">
                     <span>新草稿</span>
                     <StatusChip>未保存</StatusChip>
@@ -879,17 +880,15 @@ export function QuestionnairesPage() {
           </aside>
 
           <section className="admin-card">
-            <div className="admin-questionnaire-editor-head">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  {editorTitle}
-                </h2>
-                <div className="admin-chip-list">
+            <CardHeader
+              title={editorTitle}
+              meta={
+                <>
                   {selected ? <VersionStatusChip status={selected.status} /> : null}
                   {selected?.publishedAt ? (
-                    <span className="admin-hint">发布于 {formatDateTime(selected.publishedAt)}</span>
+                    <span>发布于 {formatDateTime(selected.publishedAt)}</span>
                   ) : null}
-                  <span className="admin-hint">
+                  <span>
                     {pageCount} 页 · {questionCount} 题
                   </span>
                   <span
@@ -899,15 +898,10 @@ export function QuestionnairesPage() {
                   >
                     受保护字段 {protectedCovered}/3
                   </span>
-                </div>
-              </div>
-              <div className="admin-btn-row">
-                {readOnly ? (
-                  <span className="admin-hint">
-                    <Lock size={13} style={{ verticalAlign: "-2px", marginRight: "4px" }} />
-                    已发布版本只读
-                  </span>
-                ) : (
+                </>
+              }
+              actions={
+                readOnly ? undefined : (
                   <>
                     <button
                       type="button"
@@ -931,9 +925,9 @@ export function QuestionnairesPage() {
                       {publishing ? "发布中" : "发布"}
                     </button>
                   </>
-                )}
-              </div>
-            </div>
+                )
+              }
+            />
 
             {validationErrors.length > 0 ? (
               <InlineNotice tone="error">
@@ -962,39 +956,18 @@ export function QuestionnairesPage() {
               <div className="admin-stack">
                 <div className="admin-readonly-banner">
                   <Lock size={14} />
-                  该版本已发布或归档，配置只读。如需调整，请新建草稿并发布新版本。
+                  已发布版本只读。新建草稿并发布新版本后可继续修改。
                 </div>
-                <dl className="admin-detail-list">
-                  <div>
-                    <dt>版本名称</dt>
-                    <dd>{selected?.name}</dd>
-                  </div>
-                  <div>
-                    <dt>问卷标题</dt>
-                    <dd>{selected?.schema.title}</dd>
-                  </div>
-                  <div>
-                    <dt>页面 / 题目</dt>
-                    <dd>
-                      {selected?.schema.pages.length} 页 /{" "}
-                      {selected?.schema.pages.reduce(
-                        (total, page) => total + page.questions.length,
-                        0,
-                      )}{" "}
-                      题
-                    </dd>
-                  </div>
-                </dl>
                 <QuestionnairePreview draft={draft} />
                 {selected ? (
                   <JsonDetails value={selected.schema} label="查看问卷 schema JSON" />
                 ) : null}
               </div>
             ) : (
-              <div className="admin-split-editor">
+              <div className="admin-split-editor admin-split-editor--stack">
                 <div>
-                  <div className="admin-form-row">
-                    <Field label="版本名称" htmlFor="questionnaire-name">
+                  <div className="admin-form-grid">
+                    <Field className="admin-col-6" label="版本名称" htmlFor="questionnaire-name">
                       <input
                         id="questionnaire-name"
                         className="admin-input"
@@ -1004,7 +977,7 @@ export function QuestionnairesPage() {
                         data-testid="questionnaire-name"
                       />
                     </Field>
-                    <Field label="问卷标题" htmlFor="questionnaire-title">
+                    <Field className="admin-col-6" label="问卷标题" htmlFor="questionnaire-title">
                       <input
                         id="questionnaire-title"
                         className="admin-input"
@@ -1013,19 +986,19 @@ export function QuestionnairesPage() {
                         data-testid="questionnaire-title"
                       />
                     </Field>
+                    <Field className="admin-col-12" label="问卷说明" htmlFor="questionnaire-description">
+                      <textarea
+                        id="questionnaire-description"
+                        className="admin-textarea"
+                        value={draft.description}
+                        onChange={(event) =>
+                          setDraft({ ...draft, description: event.target.value })
+                        }
+                        style={{ minHeight: "72px" }}
+                        data-testid="questionnaire-description"
+                      />
+                    </Field>
                   </div>
-                  <Field label="问卷说明" htmlFor="questionnaire-description">
-                    <textarea
-                      id="questionnaire-description"
-                      className="admin-textarea"
-                      value={draft.description}
-                      onChange={(event) =>
-                        setDraft({ ...draft, description: event.target.value })
-                      }
-                      style={{ minHeight: "72px" }}
-                      data-testid="questionnaire-description"
-                    />
-                  </Field>
 
                   {draft.pages.map((page, pageIndex) => (
                     <div className="admin-page-editor-row" key={`page-${pageIndex}`}>
@@ -1209,14 +1182,11 @@ export function QuestionnairesPage() {
                                 <span>
                                   {isProtectedType(question.type) ? (
                                     <>
-                                      <Lock
-                                        size={12}
-                                        style={{ verticalAlign: "-2px", marginRight: "4px" }}
-                                      />
-                                      受保护字段始终必填
+                                      <Lock size={12} className="admin-inline-icon" />
+                                      始终必填
                                     </>
                                   ) : (
-                                    "参与者必须回答"
+                                    "必须回答"
                                   )}
                                 </span>
                               </label>
@@ -1262,8 +1232,9 @@ export function QuestionnairesPage() {
                           ) : null}
 
                           {question.type === "short_text" ? (
-                            <div className="admin-form-row">
+                            <div className="admin-form-grid">
                               <Field
+                                className="admin-col-6"
                                 label="最大字数（可选）"
                                 htmlFor={`questionnaire-question-max-length-${pageIndex}-${questionIndex}`}
                                 hint="留空表示不限制。"
@@ -1473,12 +1444,14 @@ export function QuestionnairesPage() {
                 </div>
 
                 <div className="admin-sticky-side">
-                  <div className="admin-editor-toolbar">
-                    <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
-                      <Eye size={15} style={{ verticalAlign: "-2px", marginRight: "4px" }} />
-                      实时预览
-                    </h3>
-                  </div>
+                  <SectionHeader
+                    title={
+                      <>
+                        <Eye size={15} className="admin-inline-icon" />
+                        实时预览
+                      </>
+                    }
+                  />
                   <QuestionnairePreview draft={draft} />
                   {draftJSON.errors.length === 0 ? (
                     <div style={{ marginTop: "16px" }}>

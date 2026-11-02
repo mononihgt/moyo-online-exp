@@ -1,42 +1,8 @@
-.admin-payment-range,
-.admin-bulk-range {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 16px;
-  margin-bottom: 16px;
-  border: 1px solid var(--admin-border);
-  border-radius: var(--radius-admin-md);
-  background: #ffffff;
-}
-
-.admin-payment-range .admin-field,
-.admin-bulk-range .admin-field {
-  flex: 0 0 180px;
-  width: 180px;
-  margin-bottom: 0;
-}
-
-.admin-payment-range .admin-input,
-.admin-bulk-range .admin-input {
-  width: 100%;
-}
-
-.admin-payment-range-note,
-.admin-bulk-range-note {
-  display: flex;
-  flex: 1 1 280px;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 220px;
-  padding-bottom: 2px;
-}
-
 .admin-bulk-range-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding-bottom: 1px;
 }
 
 .admin-bulk-summary {
@@ -101,12 +67,6 @@
 }
 
 @media (max-width: 720px) {
-  .admin-payment-range .admin-field,
-  .admin-bulk-range .admin-field {
-    flex: 1 1 100%;
-    width: 100%;
-  }
-
   .admin-bulk-summary {
     gap: 16px;
   }

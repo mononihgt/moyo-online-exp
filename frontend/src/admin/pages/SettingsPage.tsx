@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { KeyRound, RefreshCw, Save } from "lucide-react";
 import { formatDateTime } from "../../shared/format";
 import type { AdminSettings } from "../../shared/types";
 import { adminApi, errorMessage } from "../api";
 import {
+  CardHeader,
   ErrorNotice,
   Field,
   InlineNotice,
@@ -116,7 +117,7 @@ export function SettingsPage() {
     <div>
       <PageHeader
         title="设置"
-        subtitle="配置 JATOS 集成、联系方式和时区。JATOS token 只从服务端环境变量读取，界面不显示明文。"
+        meta={dirty ? <StatusChip tone="warning">未保存</StatusChip> : undefined}
         actions={
           <button
             type="button"
@@ -137,17 +138,16 @@ export function SettingsPage() {
         <LoadingBlock rows={6} label="正在加载设置" />
       ) : (
         <div className="admin-stack">
-          {dirty ? <InlineNotice tone="warning">有未保存的设置修改。</InlineNotice> : null}
           {saveError ? <InlineNotice tone="error">{saveError}</InlineNotice> : null}
 
           <section className="admin-card">
-            <h2 className="admin-section-title">JATOS 集成</h2>
-            <div className="admin-form-row">
+            <CardHeader title="JATOS 集成" />
+            <div className="admin-form-grid">
               <Field
+                className="admin-col-12"
                 label="JATOS 地址"
                 htmlFor="settings-jatos-url"
                 error={formErrors.jatosBaseUrl}
-                hint="例如 https://jatos.example.com。修改地址后需要同步更新环境变量并重启服务实例，CORS 与问卷组件平台地址在启动或构建时确定。"
               >
                 <input
                   id="settings-jatos-url"
@@ -158,7 +158,7 @@ export function SettingsPage() {
                   data-testid="settings-jatos-url"
                 />
               </Field>
-              <Field label="Study Code" htmlFor="settings-jatos-study-code">
+              <Field className="admin-col-6" label="Study Code" htmlFor="settings-jatos-study-code">
                 <input
                   id="settings-jatos-study-code"
                   className="admin-input"
@@ -169,13 +169,11 @@ export function SettingsPage() {
                   data-testid="settings-jatos-study-code"
                 />
               </Field>
-            </div>
-            <div className="admin-form-row">
               <Field
+                className="admin-col-6"
                 label="JATOS study ID"
                 htmlFor="settings-jatos-study-id"
                 error={formErrors.jatosStudyId}
-                hint="部署脚本输出的 studyId 或 studyUuid。自动同步使用该 study 的问卷结果。"
               >
                 <input
                   id="settings-jatos-study-id"
@@ -188,37 +186,39 @@ export function SettingsPage() {
                 />
               </Field>
             </div>
-            <div className="admin-settings-status" style={{ marginTop: "4px" }}>
-              <KeyRound size={16} aria-hidden="true" />
-              <span>JATOS API Token</span>
-              <span data-testid="settings-token-status">
-                {settings?.hasJatosToken ? (
-                  <StatusChip tone="success">已配置</StatusChip>
-                ) : (
-                  <StatusChip tone="warning">未配置</StatusChip>
-                )}
-              </span>
-            </div>
-            <div className="admin-settings-status" style={{ marginTop: "4px" }}>
-              <RefreshCw size={16} aria-hidden="true" />
-              <span>自动同步</span>
-              <span data-testid="settings-sync-status">
-                {settings?.jatosSync.configured ? (
-                  settings.jatosSync.status === "error" ? (
-                    <StatusChip tone="error">异常</StatusChip>
-                  ) : settings.jatosSync.status === "ok" ? (
-                    settings.jatosSync.lastError ? (
-                      <StatusChip tone="warning">有错误</StatusChip>
+            <div className="admin-settings-status-list">
+              <div className="admin-settings-status">
+                <KeyRound size={16} aria-hidden="true" />
+                <span>JATOS API Token</span>
+                <span data-testid="settings-token-status">
+                  {settings?.hasJatosToken ? (
+                    <StatusChip tone="success">已配置</StatusChip>
+                  ) : (
+                    <StatusChip tone="warning">未配置</StatusChip>
+                  )}
+                </span>
+              </div>
+              <div className="admin-settings-status">
+                <RefreshCw size={16} aria-hidden="true" />
+                <span>自动同步</span>
+                <span data-testid="settings-sync-status">
+                  {settings?.jatosSync.configured ? (
+                    settings.jatosSync.status === "error" ? (
+                      <StatusChip tone="error">异常</StatusChip>
+                    ) : settings.jatosSync.status === "ok" ? (
+                      settings.jatosSync.lastError ? (
+                        <StatusChip tone="warning">有错误</StatusChip>
+                      ) : (
+                        <StatusChip tone="success">正常</StatusChip>
+                      )
                     ) : (
-                      <StatusChip tone="success">正常</StatusChip>
+                      <StatusChip tone="neutral">等待运行</StatusChip>
                     )
                   ) : (
-                    <StatusChip tone="neutral">等待运行</StatusChip>
-                  )
-                ) : (
-                  <StatusChip tone="warning">未启用</StatusChip>
-                )}
-              </span>
+                    <StatusChip tone="warning">未启用</StatusChip>
+                  )}
+                </span>
+              </div>
             </div>
             <p className="admin-hint" data-testid="settings-sync-last-run">
               {settings?.jatosSync.lastRunAt
@@ -236,17 +236,19 @@ export function SettingsPage() {
               <InlineNotice tone="warning">{settings.jatosSync.lastError}</InlineNotice>
             ) : null}
             <p className="admin-hint">
-              Token 仅在服务端通过环境变量配置，不会返回或显示明文。修改 token 需要重启服务实例。
+              Token 仅在服务端通过环境变量配置，修改后需要重启服务。
             </p>
+            <details className="admin-disclosure">
+              <summary>部署说明</summary>
+              <div className="admin-disclosure-body">
+                修改 JATOS 地址后需要同步更新环境变量并重启服务；CORS 与问卷组件平台地址在启动或构建时确定。
+              </div>
+            </details>
           </section>
 
           <section className="admin-card">
-            <h2 className="admin-section-title">联系信息与时间</h2>
-            <Field
-              label="联系信息"
-              htmlFor="settings-contact"
-              hint="显示给参与者的联系方式，可包含邮箱、电话或办公地点。"
-            >
+            <CardHeader title="联系信息与时间" />
+            <Field label="联系信息" htmlFor="settings-contact">
               <textarea
                 id="settings-contact"
                 className="admin-textarea"
@@ -256,43 +258,35 @@ export function SettingsPage() {
                 data-testid="settings-contact-info"
               />
             </Field>
-            <div className="admin-form-row">
+            <div className="admin-form-grid">
               <Field
+                className="admin-col-6"
                 label="时区"
                 htmlFor="settings-timezone"
                 error={formErrors.timezone}
-                hint="平台固定使用 Asia/Shanghai，所有展示和付款截止按该时区计算。"
               >
                 <input
                   id="settings-timezone"
-                  className="admin-input"
+                  className="admin-input admin-input--readonly"
                   value="Asia/Shanghai"
                   readOnly
                   data-testid="settings-timezone"
                 />
               </Field>
               <Field
+                className="admin-col-6"
                 label="公开站点地址"
                 htmlFor="settings-public-base-url"
-                hint="来自服务端 PUBLIC_BASE_URL，只读。"
               >
                 <input
                   id="settings-public-base-url"
-                  className="admin-input"
+                  className="admin-input admin-input--readonly"
                   value={settings?.publicBaseUrl ?? ""}
                   readOnly
-                  style={{ backgroundColor: "var(--admin-surface)" }}
                 />
               </Field>
             </div>
           </section>
-
-          <div className="admin-card">
-            <div className="admin-settings-status">
-              <ShieldCheck size={18} aria-hidden="true" />
-              <span>所有设置修改都会写入审计日志。</span>
-            </div>
-          </div>
         </div>
       )}
     </div>

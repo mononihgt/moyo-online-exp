@@ -15,12 +15,14 @@ import type {
 } from "../types";
 import { MarkdownPreview } from "../MarkdownPreview";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
   Field,
   InlineNotice,
   LoadingBlock,
   PageHeader,
+  SectionHeader,
   StatusChip,
   VersionStatusChip,
   formatBytes,
@@ -375,7 +377,7 @@ export function InstructionsPage() {
     <div>
       <PageHeader
         title="指导语"
-        subtitle="指导语绑定已发布地图组，名称由组前缀与 A/B 角色自动生成。正文支持 Markdown，可插入已上传的图片资产，GIF 动图会保留动画。"
+        meta={dirty ? <StatusChip tone="warning">未保存</StatusChip> : undefined}
         actions={
           <button
             type="button"
@@ -407,12 +409,12 @@ export function InstructionsPage() {
       ) : (
         <div className="admin-layout-columns">
           <aside className="admin-card admin-sticky-side">
-            <h2 className="admin-section-title">版本列表</h2>
+            <h2 className="admin-sr-only">版本列表</h2>
             {renderVersionGroup(1, roleOne)}
             {renderVersionGroup(2, roleTwo)}
             {versions.length === 0 ? <p className="admin-hint">暂无历史版本。</p> : null}
             {isNew ? (
-              <div className="admin-version-item active" style={{ marginTop: "8px", cursor: "default" }}>
+              <div className="admin-version-item active admin-version-item--static admin-version-item--new">
                 <div className="admin-version-item-head">
                   <span>新草稿</span>
                   <StatusChip>未保存</StatusChip>
@@ -425,37 +427,28 @@ export function InstructionsPage() {
           </aside>
 
           <section className="admin-card">
-            <div className="admin-questionnaire-editor-head">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  {isNew
-                    ? "新建指导语"
-                    : selected
-                      ? `${selected.name} · 第 ${selected.version} 版`
-                      : "指导语"}
-                </h2>
-                {selected ? (
-                  <div className="admin-chip-list">
+            <CardHeader
+              title={
+                isNew
+                  ? "新建指导语"
+                  : selected
+                    ? `${selected.name} · 第 ${selected.version} 版`
+                    : "指导语"
+              }
+              meta={
+                selected ? (
+                  <>
                     <VersionStatusChip status={selected.status} />
-                    <span className="admin-hint">{selected.name}</span>
-                    <span className="admin-hint">
-                      玩家 {selected.role === 1 ? "A" : "B"}
-                    </span>
+                    <span>{selected.name}</span>
+                    <span>玩家 {selected.role === 1 ? "A" : "B"}</span>
                     {selected.publishedAt ? (
-                      <span className="admin-hint">
-                        发布于 {formatDateTime(selected.publishedAt)}
-                      </span>
+                      <span>发布于 {formatDateTime(selected.publishedAt)}</span>
                     ) : null}
-                  </div>
-                ) : null}
-              </div>
-              <div className="admin-btn-row">
-                {readOnly ? (
-                  <span className="admin-hint">
-                    <Lock size={13} style={{ verticalAlign: "-2px", marginRight: "4px" }} />
-                    已发布版本只读
-                  </span>
-                ) : (
+                  </>
+                ) : undefined
+              }
+              actions={
+                readOnly ? undefined : (
                   <>
                     <button
                       type="button"
@@ -478,15 +471,16 @@ export function InstructionsPage() {
                       {publishing ? "发布中" : "发布"}
                     </button>
                   </>
-                )}
-              </div>
-            </div>
+                )
+              }
+            />
 
             {readOnly ? (
               <>
-                <InlineNotice tone="info">
-                  已发布的指导语不可修改。如需调整内容，请新建草稿并发布新版本。
-                </InlineNotice>
+                <div className="admin-readonly-banner">
+                  <Lock size={14} />
+                  已发布版本只读。新建草稿并发布新版本后可继续修改。
+                </div>
                 <dl className="admin-detail-list">
                   <div>
                     <dt>名称</dt>
@@ -522,11 +516,11 @@ export function InstructionsPage() {
               >
                 {isNew ? (
                   <>
-                    <div className="admin-form-row">
+                    <div className="admin-form-grid">
                       <Field
+                        className="admin-col-6"
                         label="地图组"
                         htmlFor="instruction-map-group"
-                        hint="只列出已发布的地图组版本。"
                         error={
                           publishedGroups.length === 0
                             ? "还没有已发布的地图组，请先在地图组页发布版本。"
@@ -553,7 +547,7 @@ export function InstructionsPage() {
                           ))}
                         </select>
                       </Field>
-                      <Field label="角色" htmlFor="instruction-role" hint="角色决定自动生成 A 或 B 名称。">
+                      <Field className="admin-col-3" label="角色" htmlFor="instruction-role">
                         <select
                           id="instruction-role"
                           className="admin-select"
@@ -571,9 +565,9 @@ export function InstructionsPage() {
                         </select>
                       </Field>
                       <Field
+                        className="admin-col-3"
                         label="最短阅读时间（秒）"
                         htmlFor="instruction-min-seconds"
-                        hint="参与者在计满该时长后才能继续。默认 120 秒。"
                       >
                         <input
                           id="instruction-min-seconds"
@@ -609,9 +603,6 @@ export function InstructionsPage() {
                           <span className="admin-hint">选择地图组后显示派生名称。</span>
                         )}
                       </div>
-                      <div className="admin-hint">
-                        名称由服务端生成：地图组组前缀加角色后缀，不能自由填写。
-                      </div>
                     </div>
                   </>
                 ) : (
@@ -645,8 +636,6 @@ export function InstructionsPage() {
                     </Field>
                   </div>
                 )}
-
-                {dirty ? <InlineNotice tone="warning">有未保存的修改。</InlineNotice> : null}
 
                 <div className="admin-split-editor">
                   <div>
@@ -699,60 +688,60 @@ export function InstructionsPage() {
               </form>
             )}
 
-            <section className="admin-form-section">
-              <div className="admin-editor-toolbar" style={{ marginBottom: "12px" }}>
-                <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
-                  图片资产
-                </h3>
-                <span className="admin-hint">上传或选择图片后插入到光标位置，支持 PNG、JPEG、WebP 与 GIF。</span>
-              </div>
-              {mediaError ? <InlineNotice tone="error">{mediaError}</InlineNotice> : null}
-              <div className="admin-media-strip">
-                <button
-                  type="button"
-                  className="admin-media-upload"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={readOnly || uploading}
-                >
-                  <ImagePlus size={22} />
-                  <span>{uploading ? "上传中" : "上传图片"}</span>
-                </button>
-                {media.slice(0, 24).map((asset) => (
-                  <div key={asset.id} className="admin-media-card">
-                    <img src={asset.url} alt={asset.filename} />
-                    <div className="admin-media-card-info">
-                      <div className="admin-media-card-name" title={asset.filename}>
-                        {asset.filename}
+            {!readOnly || media.length > 0 ? (
+              <section className="admin-form-section">
+                <SectionHeader
+                  title="图片资产"
+                  meta={!readOnly ? <span>支持 PNG、JPEG、WebP 与 GIF</span> : undefined}
+                />
+                {mediaError ? <InlineNotice tone="error">{mediaError}</InlineNotice> : null}
+                <div className="admin-media-strip">
+                  {!readOnly ? (
+                    <button
+                      type="button"
+                      className="admin-media-upload"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      <ImagePlus size={22} />
+                      <span>{uploading ? "上传中" : "上传图片"}</span>
+                    </button>
+                  ) : null}
+                  {media.slice(0, 24).map((asset) => (
+                    <div key={asset.id} className="admin-media-card">
+                      <img src={asset.url} alt={asset.filename} />
+                      <div className="admin-media-card-info">
+                        <div className="admin-media-card-name" title={asset.filename}>
+                          {asset.filename}
+                        </div>
+                        <div className="admin-hint">
+                          {asset.width}×{asset.height} · {formatBytes(asset.sizeBytes)}
+                        </div>
+                        <div className="admin-hint admin-mono" style={{ wordBreak: "break-all" }}>
+                          {asset.id}
+                        </div>
+                        <div
+                          className="admin-hint admin-mono admin-url-cell"
+                          title={asset.sha256}
+                        >
+                          {asset.sha256}
+                        </div>
+                        {!readOnly ? (
+                          <button
+                            type="button"
+                            className="admin-btn admin-btn-secondary admin-btn-sm"
+                            onClick={() => insertAsset(asset)}
+                            data-testid={`instruction-asset-${asset.id}`}
+                          >
+                            插入引用
+                          </button>
+                        ) : null}
                       </div>
-                      <div className="admin-hint">
-                        {asset.width}×{asset.height} · {formatBytes(asset.sizeBytes)}
-                      </div>
-                      <div className="admin-hint admin-mono" style={{ wordBreak: "break-all" }}>
-                        {asset.id}
-                      </div>
-                      <div
-                        className="admin-hint admin-mono admin-url-cell"
-                        title={asset.sha256}
-                      >
-                        {asset.sha256}
-                      </div>
-                      <button
-                        type="button"
-                        className="admin-btn admin-btn-secondary admin-btn-sm"
-                        onClick={() => insertAsset(asset)}
-                        disabled={readOnly}
-                        data-testid={`instruction-asset-${asset.id}`}
-                      >
-                        插入引用
-                      </button>
                     </div>
-                  </div>
-                ))}
-                {media.length === 0 && !mediaError ? (
-                  <div className="admin-hint">暂无图片资产。上传 PNG、JPEG、WebP 或 GIF 后可以插入到指导语。</div>
-                ) : null}
-              </div>
-            </section>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </section>
         </div>
       )}

@@ -397,7 +397,6 @@ export function RoomsPage() {
     <div>
       <PageHeader
         title="房间"
-        subtitle="按分区创建、开放和归档实验房间。列表状态为实时数据库状态。"
         actions={
           section === "draft" ? (
             <div className="admin-btn-row">
@@ -429,13 +428,12 @@ export function RoomsPage() {
       {optionsError ? <InlineNotice tone="warning">版本选项加载失败：{optionsError}</InlineNotice> : null}
       {error ? <ErrorNotice message={error} onRetry={() => void load()} /> : null}
 
-      <div className="admin-toolbar">
+      <div className="admin-filter-bar">
         <select
-          className="admin-select"
+          className="admin-select admin-filter-md"
           value={section}
           onChange={(event) => changeSection(event.target.value as RoomSection)}
           aria-label="按分区筛选房间"
-          style={{ maxWidth: "240px" }}
           data-testid="room-section-filter"
         >
           {SECTION_OPTIONS.map((entry) => (
@@ -444,9 +442,7 @@ export function RoomsPage() {
             </option>
           ))}
         </select>
-        <span className="admin-hint">
-          {sectionMeta.description} 共 {counts[section]} 个房间
-        </span>
+        <span className="admin-toolbar-meta">共 {counts[section]} 个房间</span>
       </div>
 
       {loading ? (
@@ -466,16 +462,16 @@ export function RoomsPage() {
         />
       ) : (
         <div className="admin-table-wrap">
-          <table className="admin-table">
+          <table className="admin-table admin-table--wide">
             <thead>
               <tr>
                 <th>内部名称</th>
                 <th>开始时间</th>
+                <th>状态</th>
+                <th className="admin-num">预约</th>
                 <th>地图组</th>
                 <th>指导语</th>
                 <th>问卷</th>
-                <th>预约</th>
-                <th>状态</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -485,42 +481,59 @@ export function RoomsPage() {
                 return (
                   <tr key={room.id}>
                     <td>
-                      <Link className="admin-row-link" to={`/admin/rooms/${room.id}`}>
+                      <Link
+                        className="admin-row-link admin-cell-truncate"
+                        to={`/admin/rooms/${room.id}`}
+                        title={room.internalLabel}
+                      >
                         {room.internalLabel}
                       </Link>
                     </td>
-                    <td>{formatDateTime(room.startsAt)}</td>
+                    <td className="admin-nowrap">{formatDateTime(room.startsAt)}</td>
                     <td>
-                      <div>
+                      <div className="admin-cell-stack">
+                        <RoomStatusChip status={room.status} />
+                        {room.archiveReason ? (
+                          <span className="admin-cell-sub">
+                            {ARCHIVE_REASON_LABELS[room.archiveReason] ?? room.archiveReason}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="admin-num">
+                      {room.bookedCount}/{room.capacity}
+                    </td>
+                    <td>
+                      <div
+                        className="admin-cell-truncate"
+                        title={`${room.mapGroup.name} v${room.mapGroup.version}`}
+                      >
                         {room.mapGroup.name} v{room.mapGroup.version}
                       </div>
-                      <div className="admin-hint">
+                      <div className="admin-cell-sub">
                         {room.mapGroup.rows} × {room.mapGroup.cols} ·{" "}
                         {room.mapGroup.mode === "both" ? "Both" : "A/B"}
                       </div>
                     </td>
                     <td>
-                      <div>
+                      <div
+                        className="admin-cell-truncate"
+                        title={`P1: ${room.instructions.player1.name} v${room.instructions.player1.version}`}
+                      >
                         P1: {room.instructions.player1.name} v{room.instructions.player1.version}
                       </div>
-                      <div className="admin-hint">
+                      <div
+                        className="admin-cell-sub admin-cell-truncate"
+                        title={`P2: ${room.instructions.player2.name} v${room.instructions.player2.version}`}
+                      >
                         P2: {room.instructions.player2.name} v{room.instructions.player2.version}
                       </div>
                     </td>
                     <td>
-                      <div>{room.questionnaire.name}</div>
-                      <div className="admin-hint">v{room.questionnaire.version}</div>
-                    </td>
-                    <td>
-                      {room.bookedCount}/{room.capacity}
-                    </td>
-                    <td>
-                      <RoomStatusChip status={room.status} />
-                      {room.archiveReason ? (
-                        <div className="admin-hint" style={{ marginTop: "2px" }}>
-                          {ARCHIVE_REASON_LABELS[room.archiveReason] ?? room.archiveReason}
-                        </div>
-                      ) : null}
+                      <div className="admin-cell-truncate" title={room.questionnaire.name}>
+                        {room.questionnaire.name}
+                      </div>
+                      <div className="admin-cell-sub">v{room.questionnaire.version}</div>
                     </td>
                     <td className="admin-actions-cell">
                       <Link className="admin-btn admin-btn-ghost admin-btn-sm" to={`/admin/rooms/${room.id}`}>

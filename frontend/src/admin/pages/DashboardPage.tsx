@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  AlertTriangle,
   Archive,
   CalendarClock,
-  ClipboardList,
   Plus,
   Users,
   Wallet,
@@ -12,6 +10,7 @@ import {
 import { adminApi, errorMessage } from "../api";
 import type { DashboardData } from "../types";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
   LoadingBlock,
@@ -53,7 +52,6 @@ export function DashboardPage() {
     <div>
       <PageHeader
         title="仪表盘"
-        subtitle="查看房间、问卷与付款的当前状态。"
         actions={
           <div className="admin-quick-links">
             <Link className="admin-btn admin-btn-primary" to="/admin/rooms?create=1">
@@ -82,49 +80,39 @@ export function DashboardPage() {
             <div className="admin-stat">
               <div className="admin-stat-label">即将开始</div>
               <div className="admin-stat-value">{data.upcomingCount}</div>
-              <div className="admin-hint">可报名与已满且未开始的房间</div>
             </div>
             <div className="admin-stat">
               <div className="admin-stat-label">进行中</div>
               <div className="admin-stat-value">
                 {countOf(counts, "waiting", "instructions", "playing")}
               </div>
-              <div className="admin-hint">等待、指导语与对局阶段</div>
             </div>
             <div className="admin-stat">
               <div className="admin-stat-label">待处理问卷</div>
               <div className="admin-stat-value">{data.pendingQuestionnaireRooms}</div>
-              <div className="admin-hint">问卷阶段的房间数</div>
             </div>
             <div className="admin-stat">
               <div className="admin-stat-label">待付款</div>
               <div className="admin-stat-value">{data.pendingPayments}</div>
-              <div className="admin-hint">尚未标记已支付的记录</div>
             </div>
           </div>
 
           <div className="admin-card admin-card-flat">
-            <div className="admin-stat-row">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  技术中止待问卷
-                </h2>
-                <p className="admin-hint" style={{ margin: 0 }}>
-                  技术中止到场者提交后测问卷后生成到场费；提交前后都不能预约新的房间。
-                </p>
-              </div>
-              <StatusChip tone="warning">
-                {data.pendingShowupQuestionnaireCount} 个房间
-              </StatusChip>
-            </div>
+            <CardHeader
+              title="技术中止待问卷"
+              meta={
+                <>
+                  <StatusChip tone="warning">
+                    {data.pendingShowupQuestionnaireCount} 个房间
+                  </StatusChip>
+                  <span>到场者提交问卷后生成到场费</span>
+                </>
+              }
+            />
             {data.pendingShowupQuestionnaireRooms.length === 0 ? (
-              <EmptyState
-                icon={ClipboardList}
-                title="暂无技术中止待问卷"
-                description="技术中止归档后需要填写后测问卷领取到场费的房间会显示在这里。"
-              />
+              <p className="admin-empty-line">暂无技术中止待问卷</p>
             ) : (
-              <div className="admin-table-wrap" style={{ marginTop: "12px" }}>
+              <div className="admin-table-wrap">
                 <table className="admin-table">
                   <thead>
                     <tr>
@@ -156,38 +144,43 @@ export function DashboardPage() {
           </div>
 
           <div className="admin-card admin-card-flat">
-            <div className="admin-stat-row">
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                房间状态分布
-              </h2>
-              <div className="admin-chip-list">
-                <StatusChip>草稿 {counts.draft ?? 0}</StatusChip>
-                <StatusChip tone="info">可报名 {counts.open ?? 0}</StatusChip>
-                <StatusChip tone="warning">已满 {counts.full ?? 0}</StatusChip>
-                <StatusChip tone="warning">等待 {counts.waiting ?? 0}</StatusChip>
-                <StatusChip tone="info">指导语 {counts.instructions ?? 0}</StatusChip>
-                <StatusChip tone="info">对局 {counts.playing ?? 0}</StatusChip>
-                <StatusChip tone="warning">问卷 {counts.questionnaire ?? 0}</StatusChip>
-                <StatusChip>归档 {counts.archived ?? 0}</StatusChip>
-              </div>
-            </div>
+            <CardHeader
+              title="房间状态"
+              meta={
+                <div className="admin-chip-list">
+                  <StatusChip>草稿 {counts.draft ?? 0}</StatusChip>
+                  <StatusChip tone="info">可报名 {counts.open ?? 0}</StatusChip>
+                  <StatusChip tone="warning">已满 {counts.full ?? 0}</StatusChip>
+                  <StatusChip tone="warning">等待 {counts.waiting ?? 0}</StatusChip>
+                  <StatusChip tone="info">指导语 {counts.instructions ?? 0}</StatusChip>
+                  <StatusChip tone="info">对局 {counts.playing ?? 0}</StatusChip>
+                  <StatusChip tone="warning">问卷 {counts.questionnaire ?? 0}</StatusChip>
+                  <StatusChip>归档 {counts.archived ?? 0}</StatusChip>
+                </div>
+              }
+              actions={
+                <Link className="admin-btn admin-btn-secondary admin-btn-sm" to="/admin/rooms?section=archived">
+                  <Archive size={14} />
+                  查看归档
+                </Link>
+              }
+            />
           </div>
 
           <div className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                <CalendarClock size={18} style={{ verticalAlign: "-3px", marginRight: "6px" }} />
-                即将开始
-              </h2>
-              <Link to="/admin/rooms" className="admin-btn admin-btn-secondary admin-btn-sm">
-                全部房间
-              </Link>
-            </div>
+            <CardHeader
+              title="即将开始"
+              actions={
+                <Link to="/admin/rooms" className="admin-btn admin-btn-secondary admin-btn-sm">
+                  全部房间
+                </Link>
+              }
+            />
             {data.upcomingRooms.length === 0 ? (
               <EmptyState
                 icon={CalendarClock}
+                compact
                 title="暂无即将开始的房间"
-                description="创建并发布 Room 后，可报名房间会显示在这里。"
                 action={
                   <Link className="admin-btn admin-btn-primary" to="/admin/rooms?create=1">
                     创建 Room
@@ -235,19 +228,12 @@ export function DashboardPage() {
           </div>
 
           <div className="admin-card">
-            <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-              <h2 className="admin-section-title" style={{ marginBottom: 0 }}>
-                <AlertTriangle size={18} style={{ verticalAlign: "-3px", marginRight: "6px" }} />
-                需要关注
-              </h2>
-              <span className="admin-hint">等待、指导语、对局与问卷阶段的房间</span>
-            </div>
+            <CardHeader
+              title="需要关注"
+              meta={<span>等待、指导语、对局与问卷阶段</span>}
+            />
             {data.attentionRooms.length === 0 ? (
-              <EmptyState
-                icon={ClipboardList}
-                title="暂无需要关注的房间"
-                description="处于等待、指导语、对局或问卷阶段的房间会显示在这里。"
-              />
+              <p className="admin-empty-line">暂无需要关注的房间</p>
             ) : (
               <div className="admin-table-wrap">
                 <table className="admin-table">
@@ -286,27 +272,6 @@ export function DashboardPage() {
             )}
           </div>
 
-          <div className="admin-card admin-card-flat">
-            <div className="admin-stat-row">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  归档房间
-                </h2>
-                <p className="admin-hint" style={{ margin: 0 }}>
-                  归档后免费保留运行数据，可随时在数据页导出。
-                </p>
-              </div>
-              <div className="admin-inline-actions">
-                <StatusChip>
-                  <Archive size={13} style={{ marginRight: "4px" }} />
-                  {counts.archived ?? 0} 个已归档
-                </StatusChip>
-                <Link className="admin-btn admin-btn-secondary admin-btn-sm" to="/admin/rooms?section=archived">
-                  查看归档
-                </Link>
-              </div>
-            </div>
-          </div>
         </div>
       ) : null}
     </div>

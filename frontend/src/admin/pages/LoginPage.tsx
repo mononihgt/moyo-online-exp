@@ -40,12 +40,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (admin: AdminIdentity) => 
         <div className="admin-brand-mark">
           <ShieldCheck size={20} />
         </div>
-        <h1 className="admin-page-title" style={{ fontSize: "1.5rem", marginBottom: "8px" }}>
-          实验平台管理端
-        </h1>
-        <p className="admin-page-subtitle" style={{ marginBottom: "24px" }}>
-          使用主试账号登录，管理被试、房间与数据。
-        </p>
+        <h1 className="admin-login-title">实验平台管理端</h1>
         <div className="admin-field">
           <label className="admin-label" htmlFor="admin-username">
             用户名
@@ -74,7 +69,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (admin: AdminIdentity) => 
           />
         </div>
         {error ? (
-          <div className="admin-error" role="alert" style={{ marginBottom: "12px" }}>
+          <div className="admin-error admin-login-error" role="alert">
             {error}
           </div>
         ) : null}

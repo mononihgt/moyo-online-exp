@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import {
   Field,
+  InlineNotice,
   LoadingBlock,
   fromShanghaiInput,
   toShanghaiInput,
@@ -243,186 +244,239 @@ export function RoomConfigFields({
     });
   }
 
+  const missingResources: string[] = [];
+  if (options.mapGroups.length === 0) missingResources.push("地图组");
+  if (options.instructions.length === 0) missingResources.push("指导语");
+  if (options.questionnaires.length === 0) missingResources.push("问卷");
+
   return (
-    <div>
-      <div className="admin-form-row">
-        <Field label="内部名称" htmlFor="room-internal-label" error={errors.internalLabel}>
-          <input
-            id="room-internal-label"
-            className="admin-input"
-            value={form.internalLabel}
-            onChange={(event) => set("internalLabel", event.target.value)}
-            disabled={disabled}
-            placeholder="例如：10 月 20 日 第一场"
-            data-testid="room-form-label"
-          />
-        </Field>
-        <Field
-          label="开始时间（Asia/Shanghai）"
-          htmlFor="room-starts-at"
-          error={errors.startsAt}
-          hint={
-            lockStartsAt
-              ? "非草稿房间不可修改开始时间。"
-              : "开始时间之后不能修改房间配置。"
-          }
-        >
-          <input
-            id="room-starts-at"
-            className="admin-input"
-            type="datetime-local"
-            value={form.startsAt}
-            onChange={(event) => set("startsAt", event.target.value)}
-            disabled={disabled || lockStartsAt}
-            data-testid="room-form-starts-at"
-          />
-        </Field>
-      </div>
-      <div className="admin-form-row">
-        <Field
-          label="地图组"
-          htmlFor="room-map-group"
-          error={errors.mapGroupVersionId}
-          hint={selectedGroup ? `容量固定为 2；地图组尺寸 ${selectedGroup.rows} × ${selectedGroup.cols}` : undefined}
-        >
-          <select
-            id="room-map-group"
-            className="admin-select"
-            value={form.mapGroupVersionId}
-            onChange={(event) => changeMapGroup(event.target.value)}
-            disabled={disabled}
-            data-testid="room-form-map-group"
+    <div className="admin-form-sections">
+      <section className="admin-form-section">
+        <h3 className="admin-group-title">基本信息</h3>
+        <div className="admin-form-grid">
+          <Field
+            className="admin-col-6"
+            label="内部名称"
+            htmlFor="room-internal-label"
+            error={errors.internalLabel}
           >
-            <option value="">请选择</option>
-            {options.mapGroups.map((group) => (
-              <option key={group.versionId} value={group.versionId}>
-                {group.name} v{group.version}（{group.mode === "both" ? "Both" : "A/B"}）
-                {archivedSuffix(group.status)}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <div className="admin-field">
-          <span className="admin-label">付款参数（继承自地图组）</span>
-          {selectedGroup ? (
-            <div className="admin-hint" style={{ lineHeight: 1.7 }}>
-              基础费 {formatMoney(selectedGroup.payment.basePayCents)} · 绩效单价{" "}
-              {formatMoney(selectedGroup.payment.performanceRateCents)} / 士兵 · 绩效保底{" "}
-              {formatMoney(selectedGroup.payment.performanceFloorCents)} · 绩效上限{" "}
-              {formatMoney(selectedGroup.payment.performanceCapCents)} · 到场费{" "}
-              {formatMoney(selectedGroup.payment.showupPayCents)}
-            </div>
-          ) : (
-            <div className="admin-hint">选择地图组后显示继承的付款参数。</div>
-          )}
+            <input
+              id="room-internal-label"
+              className="admin-input"
+              value={form.internalLabel}
+              onChange={(event) => set("internalLabel", event.target.value)}
+              disabled={disabled}
+              placeholder="例如：10 月 20 日 第一场"
+              data-testid="room-form-label"
+            />
+          </Field>
+          <Field
+            className="admin-col-6"
+            label="开始时间（Asia/Shanghai）"
+            htmlFor="room-starts-at"
+            error={errors.startsAt}
+            hint={lockStartsAt ? undefined : "开始时间之后不能修改房间配置。"}
+          >
+            <input
+              id="room-starts-at"
+              className="admin-input"
+              type="datetime-local"
+              value={form.startsAt}
+              onChange={(event) => set("startsAt", event.target.value)}
+              disabled={disabled || lockStartsAt}
+              data-testid="room-form-starts-at"
+            />
+          </Field>
         </div>
-      </div>
-      <div className="admin-form-row admin-form-row-3">
-        <Field
-          label="玩家 1 指导语"
-          htmlFor="room-instruction-p1"
-          error={errors.instructionVersionP1Id}
-          hint={selectedGroup && p1Options.length === 0 ? "该地图组前缀下暂无可用指导语。" : undefined}
-        >
-          <select
-            id="room-instruction-p1"
-            className="admin-select"
-            value={form.instructionVersionP1Id}
-            onChange={(event) => set("instructionVersionP1Id", event.target.value)}
-            disabled={disabled || !selectedGroup}
-            data-testid="room-form-instruction-p1"
+      </section>
+
+      <section className="admin-form-section">
+        <h3 className="admin-group-title">材料</h3>
+        <div className="admin-form-grid">
+          <Field
+            className="admin-col-6"
+            label="地图组"
+            htmlFor="room-map-group"
+            error={errors.mapGroupVersionId}
           >
-            <option value="">请选择</option>
-            {p1Options.map((instruction) => (
-              <option key={instruction.versionId} value={instruction.versionId}>
-                {instruction.name} v{instruction.version}
-                {archivedSuffix(instruction.status)}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field
-          label="玩家 2 指导语"
-          htmlFor="room-instruction-p2"
-          error={errors.instructionVersionP2Id}
-          hint={selectedGroup && p2Options.length === 0 ? "该地图组前缀下暂无可用指导语。" : undefined}
-        >
-          <select
-            id="room-instruction-p2"
-            className="admin-select"
-            value={form.instructionVersionP2Id}
-            onChange={(event) => set("instructionVersionP2Id", event.target.value)}
-            disabled={disabled || !selectedGroup}
-            data-testid="room-form-instruction-p2"
+            <select
+              id="room-map-group"
+              className="admin-select"
+              value={form.mapGroupVersionId}
+              onChange={(event) => changeMapGroup(event.target.value)}
+              disabled={disabled}
+              data-testid="room-form-map-group"
+            >
+              <option value="">请选择</option>
+              {options.mapGroups.map((group) => (
+                <option key={group.versionId} value={group.versionId}>
+                  {group.name} v{group.version}（{group.mode === "both" ? "Both" : "A/B"}）
+                  {archivedSuffix(group.status)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            className="admin-col-6"
+            label="问卷版本"
+            htmlFor="room-questionnaire"
+            error={errors.questionnaireVersionId}
           >
-            <option value="">请选择</option>
-            {p2Options.map((instruction) => (
-              <option key={instruction.versionId} value={instruction.versionId}>
-                {instruction.name} v{instruction.version}
-                {archivedSuffix(instruction.status)}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="问卷版本" htmlFor="room-questionnaire" error={errors.questionnaireVersionId}>
-          <select
-            id="room-questionnaire"
-            className="admin-select"
-            value={form.questionnaireVersionId}
-            onChange={(event) => set("questionnaireVersionId", event.target.value)}
-            disabled={disabled}
-            data-testid="room-form-questionnaire"
+            <select
+              id="room-questionnaire"
+              className="admin-select"
+              value={form.questionnaireVersionId}
+              onChange={(event) => set("questionnaireVersionId", event.target.value)}
+              disabled={disabled}
+              data-testid="room-form-questionnaire"
+            >
+              <option value="">请选择</option>
+              {options.questionnaires.map((questionnaire) => (
+                <option key={questionnaire.versionId} value={questionnaire.versionId}>
+                  {questionnaire.name} v{questionnaire.version}
+                  {archivedSuffix(questionnaire.status)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            className="admin-col-6"
+            label="玩家 1 指导语"
+            htmlFor="room-instruction-p1"
+            error={errors.instructionVersionP1Id}
+            hint={selectedGroup && p1Options.length === 0 ? "该地图组前缀下暂无可用指导语。" : undefined}
           >
-            <option value="">请选择</option>
-            {options.questionnaires.map((questionnaire) => (
-              <option key={questionnaire.versionId} value={questionnaire.versionId}>
-                {questionnaire.name} v{questionnaire.version}
-                {archivedSuffix(questionnaire.status)}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <div className="admin-form-row">
-        <Field label="等待窗口（分钟）" htmlFor="room-wait" error={errors.waitMinutes}>
-          <input
-            id="room-wait"
-            className="admin-input"
-            type="number"
-            min="1"
-            step="1"
-            value={form.waitMinutes}
-            onChange={(event) => set("waitMinutes", event.target.value)}
-            disabled={disabled}
-            data-testid="room-form-wait"
-          />
-        </Field>
-        <Field label="重连窗口（分钟）" htmlFor="room-reconnect" error={errors.reconnectMinutes}>
-          <input
-            id="room-reconnect"
-            className="admin-input"
-            type="number"
-            min="1"
-            step="1"
-            value={form.reconnectMinutes}
-            onChange={(event) => set("reconnectMinutes", event.target.value)}
-            disabled={disabled}
-            data-testid="room-form-reconnect"
-          />
-        </Field>
-      </div>
-      {options.mapGroups.length === 0 ? (
-        <p className="admin-hint">暂无可用地图组。请先在地图组页面创建并发布版本。</p>
+            <select
+              id="room-instruction-p1"
+              className="admin-select"
+              value={form.instructionVersionP1Id}
+              onChange={(event) => set("instructionVersionP1Id", event.target.value)}
+              disabled={disabled || !selectedGroup}
+              data-testid="room-form-instruction-p1"
+            >
+              <option value="">请选择</option>
+              {p1Options.map((instruction) => (
+                <option key={instruction.versionId} value={instruction.versionId}>
+                  {instruction.name} v{instruction.version}
+                  {archivedSuffix(instruction.status)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            className="admin-col-6"
+            label="玩家 2 指导语"
+            htmlFor="room-instruction-p2"
+            error={errors.instructionVersionP2Id}
+            hint={selectedGroup && p2Options.length === 0 ? "该地图组前缀下暂无可用指导语。" : undefined}
+          >
+            <select
+              id="room-instruction-p2"
+              className="admin-select"
+              value={form.instructionVersionP2Id}
+              onChange={(event) => set("instructionVersionP2Id", event.target.value)}
+              disabled={disabled || !selectedGroup}
+              data-testid="room-form-instruction-p2"
+            >
+              <option value="">请选择</option>
+              {p2Options.map((instruction) => (
+                <option key={instruction.versionId} value={instruction.versionId}>
+                  {instruction.name} v{instruction.version}
+                  {archivedSuffix(instruction.status)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        {selectedGroup ? (
+          <div className="admin-derived-summary" aria-label="继承自地图组的参数">
+            <div className="admin-derived-item">
+              <span>容量</span>
+              <strong>2</strong>
+            </div>
+            <div className="admin-derived-item">
+              <span>地图尺寸</span>
+              <strong>
+                {selectedGroup.rows} × {selectedGroup.cols}
+              </strong>
+            </div>
+            <div className="admin-derived-item">
+              <span>基础费</span>
+              <strong>{formatMoney(selectedGroup.payment.basePayCents)}</strong>
+            </div>
+            <div className="admin-derived-item">
+              <span>绩效单价</span>
+              <strong>
+                {formatMoney(selectedGroup.payment.performanceRateCents)} / 士兵
+              </strong>
+            </div>
+            <div className="admin-derived-item">
+              <span>绩效保底</span>
+              <strong>{formatMoney(selectedGroup.payment.performanceFloorCents)}</strong>
+            </div>
+            <div className="admin-derived-item">
+              <span>绩效上限</span>
+              <strong>{formatMoney(selectedGroup.payment.performanceCapCents)}</strong>
+            </div>
+            <div className="admin-derived-item">
+              <span>到场费</span>
+              <strong>{formatMoney(selectedGroup.payment.showupPayCents)}</strong>
+            </div>
+          </div>
+        ) : (
+          <p className="admin-hint admin-derived-placeholder">
+            选择地图组后显示继承的容量、尺寸和付款参数。
+          </p>
+        )}
+      </section>
+
+      <section className="admin-form-section">
+        <h3 className="admin-group-title">窗口</h3>
+        <div className="admin-form-grid">
+          <Field
+            className="admin-col-6"
+            label="等待窗口（分钟）"
+            htmlFor="room-wait"
+            error={errors.waitMinutes}
+          >
+            <input
+              id="room-wait"
+              className="admin-input"
+              type="number"
+              min="1"
+              step="1"
+              value={form.waitMinutes}
+              onChange={(event) => set("waitMinutes", event.target.value)}
+              disabled={disabled}
+              data-testid="room-form-wait"
+            />
+          </Field>
+          <Field
+            className="admin-col-6"
+            label="重连窗口（分钟）"
+            htmlFor="room-reconnect"
+            error={errors.reconnectMinutes}
+          >
+            <input
+              id="room-reconnect"
+              className="admin-input"
+              type="number"
+              min="1"
+              step="1"
+              value={form.reconnectMinutes}
+              onChange={(event) => set("reconnectMinutes", event.target.value)}
+              disabled={disabled}
+              data-testid="room-form-reconnect"
+            />
+          </Field>
+        </div>
+      </section>
+
+      {missingResources.length > 0 ? (
+        <InlineNotice tone="warning">
+          缺少已发布的{missingResources.join("、")}版本，请先在对应页面创建并发布。
+        </InlineNotice>
       ) : null}
-      {options.instructions.length === 0 ? (
-        <p className="admin-hint">暂无可用指导语。请先在指导语页面创建并发布版本。</p>
-      ) : null}
-      {options.questionnaires.length === 0 ? (
-        <p className="admin-hint">暂无可用问卷。请先在问卷页面创建并发布版本。</p>
-      ) : null}
-      <p className="admin-hint" style={{ margin: 0 }}>
-        付款参数与容量继承自所选地图组。开始时间按 Asia/Shanghai 解释。
-      </p>
     </div>
   );
 }

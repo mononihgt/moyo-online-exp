@@ -9,6 +9,7 @@ import type {
   TroopProfileResponse,
 } from "../types";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
   Field,
@@ -16,6 +17,7 @@ import {
   LoadingBlock,
   Modal,
   PageHeader,
+  SectionHeader,
   StatusChip,
   VersionStatusChip,
   useUi,
@@ -343,7 +345,6 @@ export function TroopProfilesPage() {
     <div>
       <PageHeader
         title="兵力方案"
-        subtitle="维护练习与正式对局的 A/B 兵力。每行数值同时作为出生格初始兵力与每格每回合收益。发布后的版本不可修改。"
         actions={
           <button
             type="button"
@@ -375,7 +376,7 @@ export function TroopProfilesPage() {
       ) : (
         <div className="admin-layout-columns">
           <aside className="admin-card admin-sticky-side">
-            <h2 className="admin-section-title">方案与版本</h2>
+            <h2 className="admin-sr-only">方案与版本</h2>
             <div className="admin-version-list">
               {profiles.map((profile) => (
                 <div key={profile.id} className="admin-profile-group">
@@ -410,7 +411,7 @@ export function TroopProfilesPage() {
                 </div>
               ))}
               {isNew ? (
-                <div className="admin-version-item active" style={{ cursor: "default" }}>
+                <div className="admin-version-item active admin-version-item--static admin-version-item--new">
                   <div className="admin-version-item-head">
                     <span>新草稿</span>
                     <StatusChip>未保存</StatusChip>
@@ -422,50 +423,41 @@ export function TroopProfilesPage() {
           </aside>
 
           <section className="admin-card">
-            <div className="admin-questionnaire-editor-head">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  {editorTitle}
-                </h2>
-                <div className="admin-chip-list">
+            <CardHeader
+              title={editorTitle}
+              meta={
+                <>
                   {selectedVersion ? (
                     <VersionStatusChip status={selectedVersion.status} />
                   ) : (
                     <StatusChip>未保存</StatusChip>
                   )}
                   {builtIn ? <StatusChip tone="info">内置方案</StatusChip> : null}
-                  {readOnly ? <span className="admin-hint">只读</span> : null}
-                </div>
-              </div>
-              <div className="admin-btn-row">
-                {readOnly ? (
-                  <>
-                    <span className="admin-hint">
-                      <Lock size={13} style={{ verticalAlign: "-2px", marginRight: "4px" }} />
-                      已发布版本只读
-                    </span>
-                    {builtIn ? (
-                      <button
-                        type="button"
-                        className="admin-btn admin-btn-secondary"
-                        onClick={() => selectedVersion && openCopy(selectedVersion)}
-                        data-testid="troop-profile-copy"
-                      >
-                        <Copy size={15} />
-                        复制为自定义方案
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="admin-btn admin-btn-secondary"
-                        onClick={() => selectedVersion && startNextVersion(selectedVersion)}
-                        data-testid="troop-profile-new-version"
-                      >
-                        <Plus size={15} />
-                        新建下一版本
-                      </button>
-                    )}
-                  </>
+                </>
+              }
+              actions={
+                readOnly ? (
+                  builtIn ? (
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-secondary"
+                      onClick={() => selectedVersion && openCopy(selectedVersion)}
+                      data-testid="troop-profile-copy"
+                    >
+                      <Copy size={15} />
+                      复制为自定义方案
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn-secondary"
+                      onClick={() => selectedVersion && startNextVersion(selectedVersion)}
+                      data-testid="troop-profile-new-version"
+                    >
+                      <Plus size={15} />
+                      新建下一版本
+                    </button>
+                  )
                 ) : (
                   <>
                     <button
@@ -489,9 +481,9 @@ export function TroopProfilesPage() {
                       {publishing ? "发布中" : "发布"}
                     </button>
                   </>
-                )}
-              </div>
-            </div>
+                )
+              }
+            />
 
             {validationErrors.length > 0 ? (
               <InlineNotice tone="error">
@@ -506,19 +498,20 @@ export function TroopProfilesPage() {
             {readOnly ? (
               <div className="admin-readonly-banner">
                 <Lock size={14} />
-                该版本已发布或归档，所有配置只读。复制后可在新草稿中继续修改。
+                已发布版本只读。复制或新建下一版本后可继续修改。
               </div>
             ) : null}
 
             <div className="admin-form-section">
-              <h3 className="admin-section-title">方案信息</h3>
-              <div className="admin-form-row">
+              <h3 className="admin-group-title">方案信息</h3>
+              <div className="admin-form-grid">
                 <Field
+                  className="admin-col-6"
                   label="方案名称"
                   htmlFor="troop-profile-name"
                   hint={
                     isNew
-                      ? "保存时若名称已存在，将在该方案下生成下一版本。"
+                      ? "名称已存在时会在该方案下生成下一版本。"
                       : "方案名称在创建后不可修改。"
                   }
                 >
@@ -532,10 +525,7 @@ export function TroopProfilesPage() {
                     data-testid="troop-profile-name"
                   />
                 </Field>
-                <Field
-                  label="对局结构"
-                  hint="练习对局固定为 1 局，正式对局数等于正式行数。"
-                >
+                <Field className="admin-col-6" label="对局结构">
                   <div className="admin-profile-summary">
                     <span className="admin-chip">练习 1 局</span>
                     <span className="admin-chip">正式 {formalTrials} 局</span>
@@ -546,23 +536,19 @@ export function TroopProfilesPage() {
             </div>
 
             <div className="admin-form-section">
-              <div className="admin-condition-toolbar">
-                <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
-                  A/B 兵力行
-                </h3>
-                <span className="admin-hint">
-                  A/B 数值同时用于出生格初始兵力与每格每回合收益。
-                </span>
-              </div>
+              <SectionHeader
+                title="A/B 兵力行"
+                meta={<span>同时作为出生格初始兵力与每格每回合收益</span>}
+              />
               <div className="admin-table-wrap">
-                <table className="admin-table admin-compact-table">
+                <table className="admin-table admin-compact-table admin-troop-table">
                   <thead>
                     <tr>
                       <th style={{ width: "88px" }}>行</th>
                       <th>阶段</th>
                       <th>玩家 A 兵力</th>
                       <th>玩家 B 兵力</th>
-                      <th style={{ width: "88px" }}>操作</th>
+                      {!readOnly ? <th>操作</th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -580,51 +566,59 @@ export function TroopProfilesPage() {
                           )}
                         </td>
                         <td>
-                          <input
-                            className="admin-input"
-                            type="number"
-                            min="1"
-                            step="1"
-                            value={row.soldiersA}
-                            onChange={(event) =>
-                              updateRow(index, "soldiersA", event.target.value)
-                            }
-                            disabled={readOnly}
-                            aria-label={`${rowLabel(index)}玩家 A 兵力`}
-                            data-testid={`troop-profile-row-${index}-a`}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            className="admin-input"
-                            type="number"
-                            min="1"
-                            step="1"
-                            value={row.soldiersB}
-                            onChange={(event) =>
-                              updateRow(index, "soldiersB", event.target.value)
-                            }
-                            disabled={readOnly}
-                            aria-label={`${rowLabel(index)}玩家 B 兵力`}
-                            data-testid={`troop-profile-row-${index}-b`}
-                          />
-                        </td>
-                        <td>
-                          {index === 0 ? (
-                            <span className="admin-hint">不可删除</span>
+                          {readOnly ? (
+                            <span>{row.soldiersA}</span>
                           ) : (
-                            <button
-                              type="button"
-                              className="admin-btn admin-btn-ghost admin-btn-sm"
-                              onClick={() => removeFormalRow(index)}
-                              disabled={readOnly || rows.length <= 2}
-                              aria-label={`删除正式第 ${index} 行`}
-                              data-testid={`troop-profile-remove-row-${index}`}
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <input
+                              className="admin-input admin-num-input"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={row.soldiersA}
+                              onChange={(event) =>
+                                updateRow(index, "soldiersA", event.target.value)
+                              }
+                              aria-label={`${rowLabel(index)}玩家 A 兵力`}
+                              data-testid={`troop-profile-row-${index}-a`}
+                            />
                           )}
                         </td>
+                        <td>
+                          {readOnly ? (
+                            <span>{row.soldiersB}</span>
+                          ) : (
+                            <input
+                              className="admin-input admin-num-input"
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={row.soldiersB}
+                              onChange={(event) =>
+                                updateRow(index, "soldiersB", event.target.value)
+                              }
+                              aria-label={`${rowLabel(index)}玩家 B 兵力`}
+                              data-testid={`troop-profile-row-${index}-b`}
+                            />
+                          )}
+                        </td>
+                        {!readOnly ? (
+                          <td>
+                            {index === 0 ? (
+                              <span className="admin-cell-sub">不可删除</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="admin-btn admin-btn-ghost admin-btn-sm"
+                                onClick={() => removeFormalRow(index)}
+                                disabled={rows.length <= 2}
+                                aria-label={`删除正式第 ${index} 行`}
+                                data-testid={`troop-profile-remove-row-${index}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>
@@ -643,9 +637,6 @@ export function TroopProfilesPage() {
                   </button>
                 </div>
               ) : null}
-              <p className="admin-hint">
-                第 0 行固定为练习。正式行按顺序用于地图组，正式对局数必须与地图组配置一致。A/B 数值必须是正整数。
-              </p>
             </div>
           </section>
         </div>

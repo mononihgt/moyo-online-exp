@@ -28,12 +28,14 @@ import type {
   TroopProfileListResponse,
 } from "../types";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
   Field,
   InlineNotice,
   LoadingBlock,
   PageHeader,
+  SectionHeader,
   StatusChip,
   VersionStatusChip,
   centsFromYuan,
@@ -1129,7 +1131,6 @@ export function MapGroupsPage() {
     <div>
       <PageHeader
         title="地图组"
-        subtitle="配置地图视觉、出生格、回合参数与费用。地图组固定绑定一个已发布的兵力配置方案，正式对局数必须与方案正式行数一致。"
         actions={
           <button
             type="button"
@@ -1166,7 +1167,7 @@ export function MapGroupsPage() {
       ) : (
         <div className="admin-layout-columns admin-layout-columns-wide">
           <aside className="admin-card admin-sticky-side">
-            <h2 className="admin-section-title">版本列表</h2>
+            <h2 className="admin-sr-only">版本列表</h2>
             <div className="admin-version-list">
               {versionGroups.map((group) => (
                 <div key={group.name} className="admin-profile-group">
@@ -1188,22 +1189,22 @@ export function MapGroupsPage() {
                         <VersionStatusChip status={version.status} />
                       </div>
                       <div className="admin-version-item-meta">
-                        {MAP_GROUP_MODE_LABELS[version.mode]} · {version.rows}×
-                        {version.cols}
+                        {MAP_GROUP_MODE_LABELS[version.mode]} · {version.rows}×{version.cols} · 正式{" "}
+                        {version.formalTrials} 局
                       </div>
-                      <div className="admin-version-item-meta">
-                        正式 {version.formalTrials} 局 · {version.profile.name} v
-                        {version.profile.version}
-                      </div>
-                      <div className="admin-version-item-meta">
-                        发布：{formatDateTime(version.publishedAt)}
+                      <div
+                        className="admin-version-item-meta"
+                        title={`${version.profile.name} v${version.profile.version} · 发布：${formatDateTime(version.publishedAt)}`}
+                      >
+                        {version.profile.name} v{version.profile.version} ·{" "}
+                        {formatDateTime(version.publishedAt)}
                       </div>
                     </button>
                   ))}
                 </div>
               ))}
               {isNew ? (
-                <div className="admin-version-item active" style={{ cursor: "default" }}>
+                <div className="admin-version-item active admin-version-item--static">
                   <div className="admin-version-item-head">
                     <span>新草稿</span>
                     <StatusChip>未保存</StatusChip>
@@ -1215,38 +1216,29 @@ export function MapGroupsPage() {
           </aside>
 
           <section className="admin-card">
-            <div className="admin-questionnaire-editor-head">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  {editorTitle}
-                </h2>
-                <div className="admin-chip-list">
+            <CardHeader
+              title={editorTitle}
+              meta={
+                <>
                   {selectedVersion ? (
                     <VersionStatusChip status={selectedVersion.status} />
                   ) : (
                     <StatusChip>未保存</StatusChip>
                   )}
                   <StatusChip tone="info">{MAP_GROUP_MODE_LABELS[form.mode]}</StatusChip>
-                  {readOnly ? <span className="admin-hint">只读</span> : null}
-                </div>
-              </div>
-              <div className="admin-btn-row">
-                {readOnly ? (
-                  <>
-                    <span className="admin-hint">
-                      <Lock size={13} style={{ verticalAlign: "-2px", marginRight: "4px" }} />
-                      已发布版本只读
-                    </span>
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-secondary"
-                      onClick={startNextVersion}
-                      data-testid="map-group-new-version"
-                    >
-                      <Plus size={15} />
-                      基于此版本新建草稿
-                    </button>
-                  </>
+                </>
+              }
+              actions={
+                readOnly ? (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn-secondary"
+                    onClick={startNextVersion}
+                    data-testid="map-group-new-version"
+                  >
+                    <Plus size={15} />
+                    基于此版本新建草稿
+                  </button>
                 ) : (
                   <>
                     <button
@@ -1270,9 +1262,9 @@ export function MapGroupsPage() {
                       {publishing ? "发布中" : "发布"}
                     </button>
                   </>
-                )}
-              </div>
-            </div>
+                )
+              }
+            />
 
             {validationErrors.length > 0 ? (
               <InlineNotice tone="error">
@@ -1287,7 +1279,7 @@ export function MapGroupsPage() {
             {readOnly ? (
               <div className="admin-readonly-banner">
                 <Lock size={14} />
-                该版本已发布或归档，所有配置只读。可基于此版本新建草稿后继续修改。
+                已发布版本只读。基于此版本新建草稿后可继续修改。
               </div>
             ) : null}
             {profileOptions.length === 0 ? (
@@ -1297,13 +1289,9 @@ export function MapGroupsPage() {
             ) : null}
 
             <div className="admin-form-section">
-              <h3 className="admin-section-title">基本信息</h3>
-              <div className="admin-form-row">
-                <Field
-                  label="地图模式"
-                  htmlFor="map-group-mode"
-                  hint="Both 单图：双方看到同一张地图。A/B 双图：双方各看一张。"
-                >
+              <h3 className="admin-group-title">基本信息</h3>
+              <div className="admin-form-grid">
+                <Field className="admin-col-6" label="地图模式" htmlFor="map-group-mode">
                   <select
                     id="map-group-mode"
                     className="admin-select"
@@ -1314,19 +1302,19 @@ export function MapGroupsPage() {
                     disabled={readOnly}
                     data-testid="map-group-mode"
                   >
-                    <option value="both">Both 单图</option>
-                    <option value="ab">A/B 双图</option>
+                    <option value="both">Both · 双方同图</option>
+                    <option value="ab">A/B · 双方各看一张</option>
                   </select>
                 </Field>
                 <Field
+                  className="admin-col-3"
                   label="行数"
                   htmlFor="map-group-rows"
-                  hint="至少 2 行"
                   error={parsedRows === null ? "请输入大于等于 2 的整数" : null}
                 >
                   <input
                     id="map-group-rows"
-                    className={`admin-input${parsedRows === null ? " admin-field-error" : ""}`}
+                    className="admin-input"
                     type="number"
                     min="2"
                     step="1"
@@ -1337,9 +1325,9 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  className="admin-col-3"
                   label="列数"
                   htmlFor="map-group-cols"
-                  hint="行列总格数不超过 100"
                   error={
                     parsedCols === null
                       ? "请输入大于等于 2 的整数"
@@ -1350,7 +1338,7 @@ export function MapGroupsPage() {
                 >
                   <input
                     id="map-group-cols"
-                    className={`admin-input${parsedCols === null ? " admin-field-error" : ""}`}
+                    className="admin-input"
                     type="number"
                     min="2"
                     step="1"
@@ -1360,17 +1348,15 @@ export function MapGroupsPage() {
                     data-testid="map-group-cols"
                   />
                 </Field>
-              </div>
-              <div className="admin-form-row">
                 <Field
+                  className="admin-col-6"
                   label="内容描述"
                   htmlFor="map-group-description"
-                  hint="四段名称的第一段，不能包含连字符。"
                   error={descriptionError}
                 >
                   <input
                     id="map-group-description"
-                    className={`admin-input${descriptionError ? " admin-field-error" : ""}`}
+                    className="admin-input"
                     value={form.description}
                     onChange={(event) => patchForm({ description: event.target.value })}
                     disabled={readOnly}
@@ -1379,14 +1365,14 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  className="admin-col-6"
                   label="因素水平"
                   htmlFor="map-group-factor-level"
-                  hint="四段名称的第三段，不能包含连字符。"
                   error={factorLevelError}
                 >
                   <input
                     id="map-group-factor-level"
-                    className={`admin-input${factorLevelError ? " admin-field-error" : ""}`}
+                    className="admin-input"
                     value={form.factorLevel}
                     onChange={(event) => patchForm({ factorLevel: event.target.value })}
                     disabled={readOnly}
@@ -1406,16 +1392,65 @@ export function MapGroupsPage() {
                   ))}
                 </div>
                 <div className="admin-hint">
-                  名称格式为 内容描述-尺寸-因素水平-玩家后缀，四段均不能包含连字符。
-                  {dimensionsError ? ` ${dimensionsError}。` : ""}
-                  指导语名称将使用组前缀：{namePrefix}
+                  指导语名称前缀：{namePrefix} ·{" "}
+                  {totalFromInput !== null
+                    ? `${parsedRows}×${parsedCols} · ${totalFromInput} 格`
+                    : "待填写尺寸"}
+                  {dimensionsError ? `。${dimensionsError}` : ""}
                 </div>
               </div>
-              <div className="admin-form-section">
-                <div className="admin-condition-toolbar">
-                  <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
-                    分析因素
-                  </h3>
+              <div className="admin-form-grid">
+                <Field
+                  className="admin-col-6"
+                  label="兵力配置方案"
+                  htmlFor="map-group-profile"
+                  hint="仅有已发布版本；正式对局数取自方案正式行数。"
+                >
+                  <select
+                    id="map-group-profile"
+                    className="admin-select"
+                    value={form.troopProfileVersionId}
+                    onChange={(event) => changeProfile(event.target.value)}
+                    disabled={readOnly}
+                    data-testid="map-group-profile"
+                  >
+                    {form.troopProfileVersionId === "" ? (
+                      <option value="">请选择已发布的兵力配置方案</option>
+                    ) : null}
+                    {profileOptions.map((entry) => (
+                      <option key={entry.version.id} value={entry.version.id}>
+                        {entry.profile.builtIn ? "内置 · " : ""}
+                        {entry.profile.name} · 第 {entry.version.version} 版
+                        {entry.version.status === "published" ? "" : "（已归档）"}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field
+                  className="admin-col-6"
+                  label="对局结构"
+                  error={
+                    formalTrialsMismatch
+                      ? `地图组正式对局数与兵力配置不一致（方案为 ${profileFormalTrials} 局）`
+                      : null
+                  }
+                >
+                  <div className="admin-profile-summary">
+                    <span className="admin-chip">练习 1 局</span>
+                    <span className="admin-chip">正式 {form.formalTrials} 局</span>
+                    <span className="admin-hint">
+                      方案共 {selectedProfileRows.length} 行（含练习行）
+                    </span>
+                  </div>
+                </Field>
+              </div>
+            </div>
+
+            <div className="admin-form-section">
+              <SectionHeader
+                title="分析因素"
+                meta={<span>可选，仅写入导出数据</span>}
+                actions={
                   <button
                     type="button"
                     className="admin-btn admin-btn-secondary admin-btn-sm"
@@ -1426,13 +1461,12 @@ export function MapGroupsPage() {
                     <Plus size={14} />
                     添加因素
                   </button>
-                </div>
-                <p className="admin-hint">
-                  可选的结构化条件，会随地图组版本写入导出数据。名称和取值都不能为空，名称不能重复。
-                </p>
-                {form.factors.length === 0 ? (
-                  <p className="admin-hint">未添加分析因素。图表分析和分组可以使用地图组版本或名称。</p>
-                ) : (
+                }
+              />
+              {form.factors.length === 0 ? (
+                <p className="admin-hint">未添加分析因素。</p>
+              ) : (
+                <>
                   <div className="admin-factor-list">
                     {form.factors.map((row, index) => (
                       <div className="admin-form-row" key={index}>
@@ -1475,84 +1509,37 @@ export function MapGroupsPage() {
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-              <div className="admin-form-row">
-                <Field
-                  label="兵力配置方案"
-                  htmlFor="map-group-profile"
-                  hint="仅可选择已发布版本；正式对局数自动取自方案正式行数。"
-                >
-                  <select
-                    id="map-group-profile"
-                    className="admin-select"
-                    value={form.troopProfileVersionId}
-                    onChange={(event) => changeProfile(event.target.value)}
-                    disabled={readOnly}
-                    data-testid="map-group-profile"
-                  >
-                    {form.troopProfileVersionId === "" ? (
-                      <option value="">请选择已发布的兵力配置方案</option>
-                    ) : null}
-                    {profileOptions.map((entry) => (
-                      <option key={entry.version.id} value={entry.version.id}>
-                        {entry.profile.builtIn ? "内置 · " : ""}
-                        {entry.profile.name} · 第 {entry.version.version} 版
-                        {entry.version.status === "published" ? "" : "（已归档）"}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field
-                  label="对局结构"
-                  hint={
-                    formalTrialsMismatch
-                      ? "地图组正式对局数与所选方案不一致。"
-                      : "正式对局数等于方案正式行数。"
-                  }
-                  error={
-                    formalTrialsMismatch
-                      ? `地图组正式对局数与兵力配置不一致（方案为 ${profileFormalTrials} 局）`
-                      : null
-                  }
-                >
-                  <div className="admin-profile-summary">
-                    <span className="admin-chip">练习 1 局</span>
-                    <span className="admin-chip">正式 {form.formalTrials} 局</span>
-                    <span className="admin-hint">
-                      方案共 {selectedProfileRows.length} 行（含练习行）
-                    </span>
-                  </div>
-                </Field>
-              </div>
+                  <p className="admin-hint">名称和取值不能为空，名称不能重复。</p>
+                </>
+              )}
             </div>
 
             <div className="admin-form-section">
-              <div className="admin-condition-toolbar">
-                <h3 className="admin-section-title" style={{ marginBottom: 0 }}>
-                  地图编辑与预览
-                </h3>
-                <div className="admin-kind-changer">
-                  {mapSlots.map((slot) => (
-                    <button
-                      type="button"
-                      key={slot}
-                      className={`admin-btn admin-btn-secondary admin-btn-sm admin-kind-button${
-                        form.activeSlot === slot ? " active" : ""
-                      }`}
-                      onClick={() => switchSlot(slot)}
-                      data-testid={`map-group-slot-${slot}`}
-                    >
-                      {MAP_SLOT_LABELS[slot]} 地图
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <SectionHeader
+                title="地图编辑与预览"
+                meta={<span>点击选中，Ctrl/Command 或 Shift 多选</span>}
+                actions={
+                  <div className="admin-kind-changer">
+                    {mapSlots.map((slot) => (
+                      <button
+                        type="button"
+                        key={slot}
+                        className={`admin-btn admin-btn-secondary admin-btn-sm admin-kind-button${
+                          form.activeSlot === slot ? " active" : ""
+                        }`}
+                        onClick={() => switchSlot(slot)}
+                        data-testid={`map-group-slot-${slot}`}
+                      >
+                        {MAP_SLOT_LABELS[slot]} 地图
+                      </button>
+                    ))}
+                  </div>
+                }
+              />
               <p className="admin-hint">
-                点击格子选中，按住 Ctrl/Command 或 Shift 点击可多选。选中后可统一上传
-                PNG/JPG 图片、设置背景颜色、清除图片或恢复白色。未设置图片和颜色的格子显示为白色。
-                格子编号、选中格与出生格使用覆盖层显示，不改变画布像素。
-                地标格只写入分析元数据，用于后续计算地标边界和相对位置，不改变棋盘显示。
+                {readOnly
+                  ? "点击格子可查看编号与选中状态。"
+                  : "选中后可上传 PNG/JPG、设置背景颜色、清除图片或标记地标。"}
               </p>
               <div className="admin-map-toolbar">
                 <span className="admin-label" style={{ marginBottom: 0 }}>
@@ -1578,6 +1565,7 @@ export function MapGroupsPage() {
                 >
                   清空选择
                 </button>
+                {!readOnly ? <span className="admin-map-toolbar-divider" aria-hidden="true" /> : null}
                 {!readOnly ? (
                   <>
                     <input
@@ -1637,6 +1625,7 @@ export function MapGroupsPage() {
                     >
                       恢复白色
                     </button>
+                    <span className="admin-map-toolbar-divider" aria-hidden="true" />
                     <button
                       type="button"
                       className="admin-btn admin-btn-secondary admin-btn-sm"
@@ -1765,11 +1754,7 @@ export function MapGroupsPage() {
                   </div>
                 </div>
                 <div className="admin-map-badge-rail">
-                  <Field
-                    label="预览配置行"
-                    htmlFor="map-group-preview-row"
-                    hint="默认显示正式第 1 局。"
-                  >
+                  <Field label="预览配置行" htmlFor="map-group-preview-row">
                     <select
                       id="map-group-preview-row"
                       className="admin-select"
@@ -1805,9 +1790,9 @@ export function MapGroupsPage() {
             </div>
 
             <div className="admin-form-section">
-              <h3 className="admin-section-title">对局参数</h3>
-              <div className="admin-condition-meta-grid">
-                <Field label="练习回合上限" htmlFor="map-group-practice-cap">
+              <h3 className="admin-group-title">对局参数</h3>
+              <div className="admin-form-grid">
+                <Field className="admin-col-4" label="练习回合上限" htmlFor="map-group-practice-cap">
                   <input
                     id="map-group-practice-cap"
                     className="admin-input"
@@ -1820,7 +1805,7 @@ export function MapGroupsPage() {
                     data-testid="map-group-practice-turn-cap"
                   />
                 </Field>
-                <Field label="练习回合倒计时（秒）" htmlFor="map-group-practice-seconds">
+                <Field className="admin-col-4" label="练习回合倒计时（秒）" htmlFor="map-group-practice-seconds">
                   <input
                     id="map-group-practice-seconds"
                     className="admin-input"
@@ -1835,7 +1820,7 @@ export function MapGroupsPage() {
                     data-testid="map-group-practice-turn-seconds"
                   />
                 </Field>
-                <Field label="正式回合上限" htmlFor="map-group-formal-cap">
+                <Field className="admin-col-4" label="正式回合上限" htmlFor="map-group-formal-cap">
                   <input
                     id="map-group-formal-cap"
                     className="admin-input"
@@ -1848,7 +1833,7 @@ export function MapGroupsPage() {
                     data-testid="map-group-formal-turn-cap"
                   />
                 </Field>
-                <Field label="正式回合倒计时（秒）" htmlFor="map-group-formal-seconds">
+                <Field className="admin-col-4" label="正式回合倒计时（秒）" htmlFor="map-group-formal-seconds">
                   <input
                     id="map-group-formal-seconds"
                     className="admin-input"
@@ -1863,7 +1848,7 @@ export function MapGroupsPage() {
                     data-testid="map-group-formal-turn-seconds"
                   />
                 </Field>
-                <Field label="局间休息（秒）" htmlFor="map-group-rest">
+                <Field className="admin-col-4" label="局间休息（秒）" htmlFor="map-group-rest">
                   <input
                     id="map-group-rest"
                     className="admin-input"
@@ -1876,7 +1861,7 @@ export function MapGroupsPage() {
                     data-testid="map-group-rest-seconds"
                   />
                 </Field>
-                <Field label="正式对局顺序">
+                <Field className="admin-col-4" label="正式对局顺序">
                   <label className="admin-check-item">
                     <input
                       type="checkbox"
@@ -1894,17 +1879,12 @@ export function MapGroupsPage() {
             </div>
 
             <div className="admin-form-section">
-              <h3 className="admin-section-title">费用参数</h3>
+              <h3 className="admin-group-title">费用参数</h3>
               <p className="admin-hint">
-                以元为单位输入，平台按分存储。默认参数下完成报酬为 45 到 65 元；
-                绩效按士兵数量计算后截断到保底与上限之间。
+                完成报酬为基础费加绩效费，绩效费截断在保底与上限之间。金额以元输入，按分存储。
               </p>
-              <div className="admin-condition-meta-grid">
-                <Field
-                  label="基础被试费（元）"
-                  htmlFor="map-group-base-pay"
-                  hint="默认 10.00"
-                >
+              <div className="admin-form-grid">
+                <Field className="admin-col-4" label="基础被试费（元）" htmlFor="map-group-base-pay">
                   <input
                     id="map-group-base-pay"
                     className="admin-input"
@@ -1918,9 +1898,9 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  className="admin-col-4"
                   label="绩效单价（元 / 士兵）"
                   htmlFor="map-group-performance-rate"
-                  hint="默认 0.01，即每士兵 1 分"
                 >
                   <input
                     id="map-group-performance-rate"
@@ -1937,9 +1917,9 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  className="admin-col-4"
                   label="绩效保底（元）"
                   htmlFor="map-group-performance-floor"
-                  hint="默认 35.00"
                 >
                   <input
                     id="map-group-performance-floor"
@@ -1956,9 +1936,9 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  className="admin-col-6"
                   label="绩效上限（元）"
                   htmlFor="map-group-performance-cap"
-                  hint="默认 55.00"
                 >
                   <input
                     id="map-group-performance-cap"
@@ -1975,9 +1955,9 @@ export function MapGroupsPage() {
                   />
                 </Field>
                 <Field
+                  className="admin-col-6"
                   label="到场费（元）"
                   htmlFor="map-group-showup-pay"
-                  hint="默认 10.00"
                 >
                   <input
                     id="map-group-showup-pay"

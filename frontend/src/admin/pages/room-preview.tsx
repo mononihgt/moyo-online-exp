@@ -103,7 +103,7 @@ export function RoomMapPreview({
           )}
         </div>
         <span className="admin-hint">
-          {mapGroup.rows} × {mapGroup.cols} · {mapGroup.mode === "both" ? "Both 模式" : "A/B 模式"}
+          {mapGroup.rows} × {mapGroup.cols}
         </span>
       </div>
 
@@ -147,9 +147,7 @@ export function RoomMapPreview({
           <strong>{map.name}</strong>
           <span className="admin-hint"> · {map.sizeToken}</span>
         </div>
-        <div className="admin-hint">{map.description}</div>
         <div className="admin-hint">因素水平：{map.factorLevel}</div>
-        <div className="admin-hint">A/B 标记为出生格。预览仅显示地图背景与网格。</div>
       </div>
     </div>
   );

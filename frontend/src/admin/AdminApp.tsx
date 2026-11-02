@@ -3,6 +3,7 @@ import "../admin/admin-extra.css";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  Link,
   Navigate,
   NavLink,
   Route,
@@ -70,18 +71,14 @@ const NAV_ITEMS: NavItem[] = [
   { key: "settings", label: "设置", to: "/admin/settings", icon: Settings },
 ];
 
-function pageTitle(pathname: string): { title: string; crumb: string } {
-  if (pathname === "/admin" || pathname === "/admin/") {
-    return { title: "仪表盘", crumb: "总览" };
+function topbarCrumb(pathname: string): { label: string; to?: string }[] | null {
+  if (pathname === "/admin/payments/bulk") {
+    return [{ label: "付款", to: "/admin/payments" }, { label: "批量付款" }];
   }
   if (pathname.startsWith("/admin/rooms/")) {
-    return { title: "房间详情", crumb: "房间" };
+    return [{ label: "房间", to: "/admin/rooms" }, { label: "房间详情" }];
   }
-  const item = NAV_ITEMS.find(
-    (entry) => entry.to !== "/admin" && pathname.startsWith(entry.to),
-  );
-  if (item) return { title: item.label, crumb: "管理" };
-  return { title: "管理端", crumb: "管理" };
+  return null;
 }
 
 function AdminLayout({
@@ -95,7 +92,7 @@ function AdminLayout({
 }) {
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const current = pageTitle(location.pathname);
+  const crumb = topbarCrumb(location.pathname);
 
   useEffect(() => {
     setDrawerOpen(false);
@@ -110,7 +107,6 @@ function AdminLayout({
               <ShieldCheck size={20} aria-hidden="true" />
               <span>实验平台</span>
             </div>
-            <span className="admin-brand-sub">管理端</span>
           </div>
           <nav className="admin-nav">
             {NAV_ITEMS.map((item) => {
@@ -129,10 +125,6 @@ function AdminLayout({
               );
             })}
           </nav>
-          <div className="admin-sidebar-footer">
-            <span className="admin-hint">管理员</span>
-            <strong>{admin.username}</strong>
-          </div>
         </aside>
         <div
           className={`admin-sidebar-backdrop${drawerOpen ? " open" : ""}`}
@@ -150,10 +142,19 @@ function AdminLayout({
               >
                 {drawerOpen ? <X size={20} /> : <Menu size={20} />}
               </button>
-              <div className="admin-topbar-title">
-                <span className="admin-topbar-crumb">管理端 / {current.crumb}</span>
-                <span>{current.title}</span>
-              </div>
+              {crumb ? (
+                <nav className="admin-topbar-crumb" aria-label="面包屑">
+                  {crumb.map((entry) =>
+                    entry.to ? (
+                      <Link key={entry.label} to={entry.to}>
+                        {entry.label}
+                      </Link>
+                    ) : (
+                      <span key={entry.label}>{entry.label}</span>
+                    ),
+                  )}
+                </nav>
+              ) : null}
             </div>
             <div className="admin-topbar-menu">
               <span>{admin.username}</span>
@@ -172,8 +173,8 @@ function AdminLayout({
 
 function SessionLoading() {
   return (
-    <div className="admin-root" style={{ display: "grid", placeItems: "center", minHeight: "100dvh" }}>
-      <div style={{ width: "min(420px, 90vw)" }}>
+    <div className="admin-root admin-session-page">
+      <div className="admin-session-card">
         <LoadingBlock rows={3} label="正在验证登录状态" />
       </div>
     </div>
@@ -182,10 +183,10 @@ function SessionLoading() {
 
 function SessionError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="admin-root" style={{ display: "grid", placeItems: "center", minHeight: "100dvh" }}>
-      <div style={{ width: "min(480px, 90vw)" }}>
+    <div className="admin-root admin-session-page">
+      <div className="admin-session-card">
         <div className="admin-card">
-          <h1 className="admin-section-title">无法确认登录状态</h1>
+          <h1 className="admin-page-title">无法确认登录状态</h1>
           <ErrorNotice message={message} onRetry={onRetry} />
         </div>
       </div>

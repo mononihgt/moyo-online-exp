@@ -18,6 +18,7 @@ import {
   useUi,
   yuanFromCents,
 } from "../ui";
+import { paymentSourceLabel } from "../labels";
 import "../admin-payments.css";
 
 type StatusFilter = "" | PaymentStatus;
@@ -276,7 +277,6 @@ export function PaymentsPage() {
     <div>
       <PageHeader
         title="付款"
-        subtitle="核对参与者付款金额，覆盖金额必须填写备注。支付名单导出口径为问卷完成、待支付且非技术中止；报销清单导出口径为问卷完成、已支付且非技术中止。"
         actions={
           <>
             <button
@@ -297,7 +297,7 @@ export function PaymentsPage() {
               data-testid="payment-export-list"
             >
               <Download size={16} />
-              {exporting === "payment" ? "导出中" : "支付名单"}
+              {exporting === "payment" ? "导出中" : "导出支付名单"}
             </button>
             <button
               type="button"
@@ -307,14 +307,14 @@ export function PaymentsPage() {
               data-testid="payment-export-reimbursement"
             >
               <Download size={16} />
-              {exporting === "reimbursement" ? "导出中" : "报销清单"}
+              {exporting === "reimbursement" ? "导出中" : "导出报销清单"}
             </button>
           </>
         }
       />
 
-      <div className="admin-payment-range">
-        <Field label="开始日期" htmlFor="payment-range-from">
+      <div className="admin-filter-bar">
+        <Field label="开始日期" htmlFor="payment-range-from" className="admin-filter-sm">
           <input
             id="payment-range-from"
             className="admin-input"
@@ -324,7 +324,7 @@ export function PaymentsPage() {
             data-testid="payment-range-from"
           />
         </Field>
-        <Field label="结束日期" htmlFor="payment-range-to">
+        <Field label="结束日期" htmlFor="payment-range-to" className="admin-filter-sm">
           <input
             id="payment-range-to"
             className="admin-input"
@@ -334,34 +334,27 @@ export function PaymentsPage() {
             data-testid="payment-range-to"
           />
         </Field>
-        <div className="admin-payment-range-note">
-          <span className="admin-hint">
-            日期按北京时间自然日计算，包含首尾两天。导出与批量付款会写入审计日志。
-          </span>
-          {dateRangeError ? <span className="admin-error">{dateRangeError}</span> : null}
-        </div>
-      </div>
-
-      {error && listEnabled ? (
-        <ErrorNotice message={error} onRetry={() => void load()} />
-      ) : null}
-
-      <div className="admin-toolbar">
-        <select
-          className="admin-select"
-          value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-          aria-label="按付款状态筛选"
-          style={{ maxWidth: "180px" }}
-          data-testid="payment-status-filter"
+        <Field
+          label="状态"
+          htmlFor="payment-status-filter"
+          className="admin-filter-sm"
+          hideLabel
         >
-          <option value="" disabled>
-            选择状态
-          </option>
-          <option value="pending">待支付</option>
-          <option value="paid">已支付</option>
-        </select>
-        <div className="admin-input-with-icon">
+          <select
+            id="payment-status-filter"
+            className="admin-select"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+            data-testid="payment-status-filter"
+          >
+            <option value="" disabled>
+              选择状态
+            </option>
+            <option value="pending">待支付</option>
+            <option value="paid">已支付</option>
+          </select>
+        </Field>
+        <div className="admin-input-with-icon admin-filter-grow">
           <Search size={15} aria-hidden="true" />
           <input
             id="payment-search"
@@ -374,33 +367,38 @@ export function PaymentsPage() {
             data-testid="payment-search"
           />
         </div>
-        <span className="admin-hint">
-          {!statusFilter
-            ? "选择状态后显示日期区间内的付款记录。"
-            : dateRangeError
-              ? "请先修正日期范围。"
-              : loading
-                ? "正在加载付款记录…"
-                : `当前列表 ${visiblePayments.length} 条，待支付 ${pendingSummary.count} 条 · ${formatMoney(
-                    pendingSummary.amount,
-                  )}`}
-        </span>
+        <div className="admin-filter-note">
+          <span className="admin-hint">
+            {!statusFilter
+              ? "选择状态后显示日期区间内的付款记录。"
+              : dateRangeError
+                ? "请先修正日期范围。"
+                : loading
+                  ? "正在加载付款记录…"
+                  : `当前列表 ${visiblePayments.length} 条，待支付 ${pendingSummary.count} 条 · ${formatMoney(
+                      pendingSummary.amount,
+                    )}`}
+          </span>
+          <span className="admin-hint">北京时间，含首尾两天。</span>
+          {dateRangeError ? <span className="admin-error">{dateRangeError}</span> : null}
+        </div>
       </div>
+
+      {error && listEnabled ? (
+        <ErrorNotice message={error} onRetry={() => void load()} />
+      ) : null}
 
       {!listEnabled ? null : loading ? (
         <LoadingBlock rows={7} label="正在加载付款记录" />
       ) : payments.length === 0 ? (
         <EmptyState
           icon={Wallet}
+          compact
           title="暂无付款记录"
-          description="当前状态在所选日期区间内没有付款记录。"
+          description="当前状态在所选日期区间内没有记录。"
         />
       ) : visiblePayments.length === 0 ? (
-        <EmptyState
-          icon={Search}
-          title="没有匹配的付款记录"
-          description="修改搜索关键词后重试。"
-        />
+        <EmptyState icon={Search} compact title="没有匹配的付款记录" />
       ) : (
         <>
           <div className="admin-table-wrap">
@@ -411,12 +409,9 @@ export function PaymentsPage() {
                   <th>房间</th>
                   <th>分析代码</th>
                   <th>明细</th>
-                  <th>覆盖</th>
-                  <th>合计</th>
+                  <th className="admin-num">金额</th>
                   <th>状态</th>
-                  <th>计算时间</th>
-                  <th>支付截止</th>
-                  <th>支付时间</th>
+                  <th>时间</th>
                   <th>备注</th>
                   <th>操作</th>
                 </tr>
@@ -428,50 +423,65 @@ export function PaymentsPage() {
                     data-testid={payment.id ? `payment-row-${payment.id}` : undefined}
                   >
                     <td>
-                      <div>{payment.name}</div>
-                      <div className="admin-hint">{payment.phoneMasked}</div>
-                      {(payment.source ?? "computed") !== "computed" ? (
-                        <div className="admin-hint">
-                          {payment.source === "manual_showup"
-                            ? "手工到场费"
-                            : payment.source === "manual_completion"
-                              ? "手工完成补偿"
-                              : "手工补偿"}
-                        </div>
-                      ) : null}
+                      <div className="admin-cell-stack">
+                        <span>{payment.name}</span>
+                        <span className="admin-cell-sub">{payment.phoneMasked}</span>
+                        {(payment.source ?? "computed") !== "computed" ? (
+                          <span className="admin-cell-sub">
+                            {paymentSourceLabel(payment.source)}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td>
-                      <div>{payment.roomStartsAt ? formatDateTime(payment.roomStartsAt) : "—"}</div>
-                      {payment.roomId ? (
-                        <div className="admin-hint admin-mono">{payment.roomId}</div>
-                      ) : null}
+                      <div className="admin-cell-stack">
+                        <span>
+                          {payment.roomStartsAt ? formatDateTime(payment.roomStartsAt) : "—"}
+                        </span>
+                        {payment.roomId ? (
+                          <span className="admin-cell-sub admin-mono">{payment.roomId}</span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="admin-mono">{payment.analysisCode ?? "—"}</td>
                     <td>
-                      <div className="admin-hint">
-                        基础 {formatMoney(payment.basePayCents)}
-                      </div>
-                      <div className="admin-hint">
-                        绩效 {formatMoney(payment.performancePayCents)}
-                      </div>
-                      <div className="admin-hint">
-                        到场 {formatMoney(payment.showupPayCents)}
+                      <div className="admin-cell-stack admin-amount">
+                        <span className="admin-cell-sub">基础 {formatMoney(payment.basePayCents)}</span>
+                        <span className="admin-cell-sub">
+                          绩效 {formatMoney(payment.performancePayCents)}
+                        </span>
+                        <span className="admin-cell-sub">
+                          到场 {formatMoney(payment.showupPayCents)}
+                        </span>
                       </div>
                     </td>
-                    <td>
-                      {payment.overrideAmountCents === null ? (
-                        <span className="admin-hint">—</span>
-                      ) : (
-                        formatMoney(payment.overrideAmountCents)
-                      )}
+                    <td className="admin-amount">
+                      <div className="admin-cell-stack">
+                        <span className="admin-cell-sub">
+                          覆盖{" "}
+                          {payment.overrideAmountCents === null
+                            ? "—"
+                            : formatMoney(payment.overrideAmountCents)}
+                        </span>
+                        <span className="admin-total">{formatMoney(payment.totalCents)}</span>
+                      </div>
                     </td>
-                    <td className="admin-total">{formatMoney(payment.totalCents)}</td>
                     <td>
                       <PaymentStatusChip status={payment.status} />
                     </td>
-                    <td>{formatDateTime(payment.computedAt)}</td>
-                    <td>{formatDateTime(payment.deadlineAt)}</td>
-                    <td>{payment.paidAt ? formatDateTime(payment.paidAt) : "—"}</td>
+                    <td>
+                      <div className="admin-cell-stack">
+                        <span className="admin-cell-sub">
+                          计算 {formatDateTime(payment.computedAt)}
+                        </span>
+                        <span className="admin-cell-sub">
+                          截止 {formatDateTime(payment.deadlineAt)}
+                        </span>
+                        <span className="admin-cell-sub">
+                          支付 {payment.paidAt ? formatDateTime(payment.paidAt) : "—"}
+                        </span>
+                      </div>
+                    </td>
                     <td className="admin-url-cell">{payment.note || "—"}</td>
                     <td className="admin-actions-cell">
                       <button
@@ -510,9 +520,6 @@ export function PaymentsPage() {
               </tbody>
             </table>
           </div>
-          <p className="admin-hint">
-            金额覆盖会直接决定合计金额；清除覆盖后按基础、绩效和到场费重新计算。更新状态会保留现有覆盖金额与备注。
-          </p>
         </>
       )}
 

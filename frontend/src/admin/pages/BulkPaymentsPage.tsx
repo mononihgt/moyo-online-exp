@@ -5,7 +5,7 @@ import type { BulkPaymentRecord } from "../../shared/types";
 import { formatDateTime, formatMoney, formatShanghaiDate } from "../../shared/format";
 import { adminApi, errorMessage } from "../api";
 import type { BulkMarkPaidResponse, BulkPaymentsResponse } from "../types";
-import { ARCHIVE_REASON_LABELS } from "../labels";
+import { ARCHIVE_REASON_LABELS, paymentSourceLabel } from "../labels";
 import {
   EmptyState,
   ErrorNotice,
@@ -190,7 +190,6 @@ export function BulkPaymentsPage() {
     <div>
       <PageHeader
         title="批量付款"
-        subtitle="按房间开始日期查看区间内全部付款记录，默认勾选待支付记录。技术中止到场费与已支付记录同样展示。"
         actions={
           <>
             <Link className="admin-btn admin-btn-secondary" to={backTo}>
@@ -219,8 +218,8 @@ export function BulkPaymentsPage() {
         该页面包含完整被试手机号，访问与操作会写入审计日志。请勿在公共环境中展示或截图。
       </InlineNotice>
 
-      <div className="admin-bulk-range">
-        <Field label="开始日期" htmlFor="bulk-range-from">
+      <div className="admin-filter-bar">
+        <Field label="开始日期" htmlFor="bulk-range-from" className="admin-filter-sm">
           <input
             id="bulk-range-from"
             className="admin-input"
@@ -230,7 +229,7 @@ export function BulkPaymentsPage() {
             data-testid="bulk-range-from"
           />
         </Field>
-        <Field label="结束日期" htmlFor="bulk-range-to">
+        <Field label="结束日期" htmlFor="bulk-range-to" className="admin-filter-sm">
           <input
             id="bulk-range-to"
             className="admin-input"
@@ -252,10 +251,9 @@ export function BulkPaymentsPage() {
             刷新
           </button>
         </div>
-        <div className="admin-bulk-range-note">
+        <div className="admin-filter-note">
           <span className="admin-hint">
-            日期按北京时间自然日计算，包含首尾两天。
-            {rangeDirty ? " 日期已修改，点击刷新应用。" : ""}
+            北京时间，含首尾两天。{rangeDirty ? "日期已修改，点击刷新应用。" : ""}
           </span>
           {draftRangeError ? <span className="admin-error">{draftRangeError}</span> : null}
         </div>
@@ -316,6 +314,7 @@ export function BulkPaymentsPage() {
       ) : error ? null : payments.length === 0 ? (
         <EmptyState
           icon={Wallet}
+          compact
           title="该日期区间没有付款记录"
           description="调整日期范围后点击刷新。"
         />
@@ -348,7 +347,7 @@ export function BulkPaymentsPage() {
                   <th>来源</th>
                   <th>支付宝手机号</th>
                   <th>参与日期</th>
-                  <th>金额</th>
+                  <th className="admin-num">金额</th>
                   <th>状态</th>
                   <th>支付时间</th>
                 </tr>
@@ -372,30 +371,24 @@ export function BulkPaymentsPage() {
                         />
                       </td>
                       <td>{payment.name}</td>
-                      <td>
-                        {(payment.source ?? "computed") === "computed"
-                          ? "自动"
-                          : payment.source === "manual_showup"
-                            ? "手工到场费"
-                            : payment.source === "manual_completion"
-                              ? "手工完成补偿"
-                              : "手工补偿"}
-                      </td>
+                      <td>{paymentSourceLabel(payment.source)}</td>
                       <td className="admin-mono admin-bulk-phone">
                         {payment.alipayPhone ?? payment.phone}
                         {payment.alipayPhone === null ? (
-                          <div className="admin-hint">未录入支付宝手机号，显示登录手机号</div>
+                          <div className="admin-cell-sub">未录入支付宝手机号，显示登录手机号</div>
                         ) : null}
                       </td>
                       <td>
-                        <div>{formatDateTime(payment.roomStartsAt)}</div>
-                        <div className="admin-hint">
-                          {payment.archiveReason
-                            ? ARCHIVE_REASON_LABELS[payment.archiveReason]
-                            : "—"}
+                        <div className="admin-cell-stack">
+                          <span>{formatDateTime(payment.roomStartsAt)}</span>
+                          <span className="admin-cell-sub">
+                            {payment.archiveReason
+                              ? ARCHIVE_REASON_LABELS[payment.archiveReason]
+                              : "—"}
+                          </span>
                         </div>
                       </td>
-                      <td className="admin-total">{formatMoney(payment.totalCents)}</td>
+                      <td className="admin-amount admin-total">{formatMoney(payment.totalCents)}</td>
                       <td>
                         <PaymentStatusChip status={payment.status} />
                       </td>
@@ -407,7 +400,7 @@ export function BulkPaymentsPage() {
             </table>
           </div>
           <p className="admin-hint">
-            已支付记录的复选框不可用；批量操作只提交勾选的待支付记录，服务端会跳过并统计已支付记录。
+            已支付记录不可勾选；批量操作只提交勾选的待支付记录。
           </p>
         </>
       )}

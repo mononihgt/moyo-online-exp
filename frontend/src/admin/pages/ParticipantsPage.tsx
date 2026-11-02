@@ -6,6 +6,7 @@ import { formatDateTime } from "../../shared/format";
 import { adminApi, errorMessage, fileUploadForm } from "../api";
 import type { CompletedImportReport, ParticipantListResponse } from "../types";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
   Field,
@@ -303,18 +304,13 @@ export function ParticipantsPage() {
 
   return (
     <div>
-      <PageHeader
-        title="被试名单"
-        subtitle="查看已注册参与者、维护状态，并上传历史已完成名单。"
-      />
+      <PageHeader title="被试名单" />
 
-      <div className="admin-grid">
+      <div className="admin-stack">
         <section className="admin-card" aria-labelledby="completed-import-title">
-          <h2 className="admin-section-title" id="completed-import-title">
-            导入历史已完成名单
-          </h2>
+          <CardHeader title={<span id="completed-import-title">导入历史已完成名单</span>} />
           <p className="admin-hint">
-            接受 CSV 或 XLSX。文件需要包含姓名和手机号列，可选备注列。手机号不存在时新建参与者并标记为已完成；姓名与已有记录不一致时列为未匹配。
+            接受 CSV 或 XLSX，需包含姓名和手机号列。手机号不存在时新建并标记已完成；姓名不一致时列为未匹配。
           </p>
           <div
             className={`admin-file-drop${completedDragging ? " is-dragover" : ""}`}
@@ -350,7 +346,6 @@ export function ParticipantsPage() {
                 <UserCheck size={16} />
                 {completedUploading ? "导入中" : "上传并导入"}
               </button>
-              <span className="admin-hint">{completedFile ? completedFile.name : "尚未选择文件"}</span>
             </div>
           </div>
           {completedError ? <div className="admin-error" role="alert">{completedError}</div> : null}
@@ -388,15 +383,12 @@ export function ParticipantsPage() {
             </div>
           ) : null}
         </section>
-      </div>
 
-      <section className="admin-card" aria-labelledby="participant-list-title" style={{ marginTop: "20px" }}>
-        <div className="admin-stat-row" style={{ marginBottom: "16px" }}>
-          <h2 className="admin-section-title" id="participant-list-title" style={{ marginBottom: 0 }}>
-            参与者列表
-          </h2>
-          <span className="admin-hint">共 {total} 人</span>
-        </div>
+      <section className="admin-card" aria-labelledby="participant-list-title">
+        <CardHeader
+          title={<span id="participant-list-title">参与者列表</span>}
+          meta={<span>共 {total} 人</span>}
+        />
         <form className="admin-toolbar" onSubmit={handleSearch}>
           <input
             className="admin-input admin-search"
@@ -420,14 +412,13 @@ export function ParticipantsPage() {
             合并账号
           </button>
           <select
-            className="admin-select"
+            className="admin-select admin-filter-sm"
             value={statusFilter}
             onChange={(event) => {
               setStatusFilter(event.target.value);
               setOffset(0);
             }}
             aria-label="按状态筛选"
-            style={{ maxWidth: "180px" }}
             data-testid="participants-status-filter"
           >
             <option value="">全部状态</option>
@@ -459,8 +450,9 @@ export function ParticipantsPage() {
         ) : participants.length === 0 ? (
           <EmptyState
             icon={Users}
+            compact
             title="暂无匹配的参与者"
-            description="参与者首次登录后会自动出现在这里。也可以调整搜索条件。"
+            description="参与者首次登录后会自动出现；也可以调整搜索条件。"
           />
         ) : (
           <>
@@ -480,12 +472,12 @@ export function ParticipantsPage() {
                   {participants.map((participant) => (
                     <tr key={participant.id}>
                       <td>
-                        <div>{participant.name}</div>
-                        {participant.notes ? (
-                          <div className="admin-hint" style={{ marginTop: "2px" }}>
-                            {participant.notes}
-                          </div>
-                        ) : null}
+                        <div className="admin-cell-stack">
+                          <span>{participant.name}</span>
+                          {participant.notes ? (
+                            <span className="admin-cell-sub">{participant.notes}</span>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="admin-mono">{participant.phoneMasked}</td>
                       <td>
@@ -495,7 +487,7 @@ export function ParticipantsPage() {
                       <td>{formatDateTime(participant.createdAt)}</td>
                       <td className="admin-actions-cell">
                         {participant.status === "merged" ? (
-                          <span className="admin-hint">
+                          <span className="admin-cell-sub">
                             已合并到{" "}
                             {participant.mergedIntoName ??
                               participant.mergedIntoId ??
@@ -536,6 +528,7 @@ export function ParticipantsPage() {
           </>
         )}
       </section>
+      </div>
 
       {editing ? (
         <Modal title="编辑被试" onClose={() => setEditing(null)}>

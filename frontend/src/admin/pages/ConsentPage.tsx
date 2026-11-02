@@ -5,9 +5,9 @@ import { adminApi, errorMessage } from "../api";
 import type { ConsentVersionAdmin, ConsentVersionListResponse } from "../types";
 import { MarkdownPreview } from "../MarkdownPreview";
 import {
+  CardHeader,
   EmptyState,
   ErrorNotice,
-  InlineNotice,
   LoadingBlock,
   PageHeader,
   StatusChip,
@@ -177,7 +177,7 @@ export function ConsentPage() {
     <div>
       <PageHeader
         title="知情同意"
-        subtitle="编辑并发布参与者登录后阅读的知情同意书。"
+        meta={dirty ? <StatusChip tone="warning">未保存</StatusChip> : undefined}
         actions={
           <button
             type="button"
@@ -208,7 +208,7 @@ export function ConsentPage() {
       ) : (
         <div className="admin-layout-columns">
           <aside className="admin-card admin-sticky-side">
-            <h2 className="admin-section-title">版本列表</h2>
+            <h2 className="admin-sr-only">版本列表</h2>
             {versions.length === 0 ? (
               <p className="admin-hint">暂无历史版本。</p>
             ) : (
@@ -235,7 +235,7 @@ export function ConsentPage() {
               </div>
             )}
             {selection === "new" ? (
-              <div className="admin-version-item active" style={{ marginTop: "8px", cursor: "default" }}>
+              <div className="admin-version-item active admin-version-item--static admin-version-item--new">
                 <div className="admin-version-item-head">
                   <span>新草稿</span>
                   <StatusChip>未保存</StatusChip>
@@ -246,31 +246,26 @@ export function ConsentPage() {
           </aside>
 
           <section className="admin-card">
-            <div className="admin-questionnaire-editor-head">
-              <div>
-                <h2 className="admin-section-title" style={{ marginBottom: "4px" }}>
-                  {isNew
-                    ? "新建知情同意书"
-                    : selected
-                      ? `第 ${selected.version} 版`
-                      : "知情同意书"}
-                </h2>
-                {selected ? (
-                  <div className="admin-chip-list">
+            <CardHeader
+              title={
+                isNew
+                  ? "新建知情同意书"
+                  : selected
+                    ? `第 ${selected.version} 版`
+                    : "知情同意书"
+              }
+              meta={
+                selected ? (
+                  <>
                     <VersionStatusChip status={selected.status} />
                     {selected.publishedAt ? (
-                      <span className="admin-hint">发布于 {formatDateTime(selected.publishedAt)}</span>
+                      <span>发布于 {formatDateTime(selected.publishedAt)}</span>
                     ) : null}
-                  </div>
-                ) : null}
-              </div>
-              <div className="admin-btn-row">
-                {readOnly ? (
-                  <span className="admin-hint">
-                    <Lock size={13} style={{ verticalAlign: "-2px", marginRight: "4px" }} />
-                    已发布版本只读
-                  </span>
-                ) : (
+                  </>
+                ) : undefined
+              }
+              actions={
+                readOnly ? undefined : (
                   <>
                     <button
                       type="button"
@@ -293,27 +288,22 @@ export function ConsentPage() {
                       {publishing ? "发布中" : "发布"}
                     </button>
                   </>
-                )}
-              </div>
-            </div>
+                )
+              }
+            />
 
             {readOnly ? (
               <>
-                <InlineNotice tone="info">
-                  已发布的同意书不可修改。如需调整内容，请新建草稿并发布新版本。
-                </InlineNotice>
-                <div className="admin-preview" style={{ border: "1px solid var(--admin-border)" }}>
+                <div className="admin-readonly-banner">
+                  <Lock size={14} />
+                  已发布版本只读。新建草稿并发布新版本后可继续修改。
+                </div>
+                <div className="admin-preview">
                   <MarkdownPreview markdown={markdown} />
                 </div>
               </>
             ) : (
               <>
-                {dirty ? <InlineNotice tone="warning">有未保存的修改。</InlineNotice> : null}
-                {isNew ? (
-                  <InlineNotice tone="info">
-                    这是尚未保存的新草稿。保存后可以继续编辑或发布。
-                  </InlineNotice>
-                ) : null}
                 <div className="admin-split-editor">
                   <div>
                     <div className="admin-editor-toolbar">
