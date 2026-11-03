@@ -153,7 +153,7 @@ export function TurnView({
         ? "确认选择"
         : dirty
           ? "确认修改"
-          : "修改当前回合操作";
+          : "若要修改，请直接操作地图";
   const handleBoardLayout = useCallback((layout: GameBoardLayout) => {
     const placement = trialInfoPlacement(layout, inHudRef.current);
     inHudRef.current = placement.inHud;

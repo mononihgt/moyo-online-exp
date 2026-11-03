@@ -796,7 +796,7 @@ test("练习回合棋盘使用灰色网格、描边棋子与红色交火边框",
 
   await pageOne.getByTestId("confirm-selection").click();
   await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
-    "修改当前回合操作",
+    "若要修改，请直接操作地图",
   );
   await expect(pageOne.getByTestId("confirm-selection")).toBeDisabled();
   const waitingColors = await canvasColors(pageOne);
@@ -951,7 +951,7 @@ test("提交后可在搭档提交前修改选择", async ({
 
   await Promise.all([selectTopRight(pageOne), selectTopRight(pageTwo)]);
   await buttonOne.click();
-  await expect(buttonOne).toHaveText("修改当前回合操作");
+  await expect(buttonOne).toHaveText("若要修改，请直接操作地图");
   await expect(buttonOne).toBeDisabled();
   await expect(buttonOne).toHaveCSS("background-color", "rgb(229, 229, 234)");
   await expect(buttonTwo).toHaveText("确认选择");
@@ -963,12 +963,12 @@ test("提交后可在搭档提交前修改选择", async ({
   await expect(buttonOne).toBeEnabled();
   await expect(buttonOne).toHaveCSS("background-color", "rgb(0, 122, 255)");
   await buttonOne.click();
-  await expect(buttonOne).toHaveText("修改当前回合操作");
+  await expect(buttonOne).toHaveText("若要修改，请直接操作地图");
   await expect(buttonOne).toBeDisabled();
 
   await pageOne.reload();
   await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
-    "修改当前回合操作",
+    "若要修改，请直接操作地图",
     { timeout: 30000 },
   );
   await expect(pageOne.getByTestId("confirm-selection")).toBeDisabled();
@@ -978,7 +978,7 @@ test("提交后可在搭档提交前修改选择", async ({
   await expect(pageOne.getByTestId("confirm-selection")).toHaveText("确认修改");
   await pageOne.keyboard.press("Space");
   await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
-    "修改当前回合操作",
+    "若要修改，请直接操作地图",
   );
   await expect(pageOne.getByTestId("confirm-selection")).toBeDisabled();
 
@@ -1072,7 +1072,7 @@ test("试次结束的交火回合后进入休息并显示完整休息倒计时",
   await Promise.all([selectTopRight(pageOne), selectTopRight(pageTwo)]);
   await pageOne.getByTestId("confirm-selection").click();
   await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
-    "修改当前回合操作",
+    "若要修改，请直接操作地图",
   );
   await pageTwo.getByTestId("confirm-selection").click();
 
@@ -1126,7 +1126,7 @@ test("减少动态效果时交火边框保持静态红色", async ({
   await Promise.all([selectTopRight(pageOne), selectTopRight(pageTwo)]);
   await pageOne.getByTestId("confirm-selection").click();
   await expect(pageOne.getByTestId("confirm-selection")).toHaveText(
-    "修改当前回合操作",
+    "若要修改，请直接操作地图",
   );
   await pageTwo.getByTestId("confirm-selection").click();
 
